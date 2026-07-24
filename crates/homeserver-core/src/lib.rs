@@ -37,29 +37,43 @@ pub struct HealthSnapshot {
 
 impl HealthSnapshot {
     pub fn running(server_name: impl Into<String>, database: impl Into<String>) -> Self {
-        Self {
-            version: env!("CARGO_PKG_VERSION").to_owned(),
-            server_name: server_name.into(),
-            state: ServiceState::Running,
-            api_available: true,
-            api_url: api_base_url(),
-            database: database.into(),
-            cloud: "not_paired".to_owned(),
-            pending_sync: 0,
-            last_backup: None,
-            model: None,
-            last_updated_utc: Utc::now(),
-        }
+        Self::new(
+            server_name,
+            ServiceState::Running,
+            true,
+            database,
+        )
+    }
+
+    pub fn needs_attention(
+        server_name: impl Into<String>,
+        database: impl Into<String>,
+    ) -> Self {
+        Self::new(
+            server_name,
+            ServiceState::NeedsAttention,
+            true,
+            database,
+        )
     }
 
     pub fn offline(reason: impl Into<String>) -> Self {
+        Self::new(PRODUCT_NAME, ServiceState::Offline, false, reason)
+    }
+
+    fn new(
+        server_name: impl Into<String>,
+        state: ServiceState,
+        api_available: bool,
+        database: impl Into<String>,
+    ) -> Self {
         Self {
             version: env!("CARGO_PKG_VERSION").to_owned(),
-            server_name: PRODUCT_NAME.to_owned(),
-            state: ServiceState::Offline,
-            api_available: false,
+            server_name: server_name.into(),
+            state,
+            api_available,
             api_url: api_base_url(),
-            database: reason.into(),
+            database: database.into(),
             cloud: "not_paired".to_owned(),
             pending_sync: 0,
             last_backup: None,
@@ -83,5 +97,13 @@ mod tests {
         let snapshot = HealthSnapshot::offline("unavailable");
         assert_eq!(snapshot.state, ServiceState::Offline);
         assert!(!snapshot.api_available);
+    }
+
+    #[test]
+    fn needs_attention_keeps_api_available_for_diagnostics() {
+        let snapshot = HealthSnapshot::needs_attention(PRODUCT_NAME, "integrity_check_failed");
+        assert_eq!(snapshot.state, ServiceState::NeedsAttention);
+        assert!(snapshot.api_available);
+        assert_eq!(snapshot.database, "integrity_check_failed");
     }
 }
