@@ -1,64 +1,20 @@
 mod app;
+mod cloud;
 mod config;
 mod database;
 mod http;
+mod secrets;
+mod state;
+mod sync;
 
 use anyhow::{anyhow, bail, Context, Result};
 use config::AppConfig;
-use microgifter_homeserver_core::{HealthSnapshot, SERVICE_NAME};
-use rusqlite::Connection;
-use std::sync::Mutex;
+use microgifter_homeserver_core::SERVICE_NAME;
+pub use state::AppState;
 use tokio::sync::watch;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
-
-pub struct AppState {
-    config: AppConfig,
-    connection: Mutex<Connection>,
-}
-
-impl AppState {
-    fn new(config: AppConfig, connection: Connection) -> Self {
-        Self {
-            config,
-            connection: Mutex::new(connection),
-        }
-    }
-
-    fn snapshot(&self) -> HealthSnapshot {
-        let connection = match self.connection.lock() {
-            Ok(connection) => connection,
-            Err(error) => {
-                error!(?error, "HomeServer database lock was poisoned");
-                return HealthSnapshot::needs_attention(
-                    &self.config.server_name,
-                    "database_lock_failed",
-                );
-            }
-        };
-
-        if let Err(error) = database::health_check(&connection) {
-            error!(?error, "HomeServer database health check failed");
-            return HealthSnapshot::needs_attention(
-                &self.config.server_name,
-                "integrity_check_failed",
-            );
-        }
-
-        let mut snapshot = HealthSnapshot::running(&self.config.server_name, "ready");
-        snapshot.pending_sync = match database::pending_sync_count(&connection) {
-            Ok(count) => count,
-            Err(error) => {
-                warn!(?error, "unable to read pending synchronization count");
-                snapshot.state = microgifter_homeserver_core::ServiceState::NeedsAttention;
-                snapshot.database = "queue_status_failed".to_owned();
-                0
-            }
-        };
-        snapshot
-    }
-}
 
 fn configure_logging(config: &AppConfig, service_mode: bool) -> Option<WorkerGuard> {
     let filter = EnvFilter::try_from_default_env()
