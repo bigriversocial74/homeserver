@@ -83,11 +83,11 @@ impl AppState {
     }
 
     pub fn cloud_snapshot(&self) -> Result<CloudConnectionSnapshot> {
-        Ok(database::cloud_connection(&self.connection()?)?.snapshot)
+        Ok(database::cloud_connection(&*self.connection()?)?.snapshot)
     }
 
     pub async fn pair_cloud(&self, request: PairCloudRequest) -> Result<CloudConnectionSnapshot> {
-        let installation_id = database::installation_id(&self.connection()?)?;
+        let installation_id = database::installation_id(&*self.connection()?)?;
         let outcome = self
             .cloud
             .pair(
@@ -100,7 +100,7 @@ impl AppState {
 
         secrets::save(&installation_id, &outcome.secrets)?;
         if let Err(error) = database::save_cloud_connection(
-            &self.connection()?,
+            &*self.connection()?,
             &outcome.cloud_base_url,
             &outcome.device_id,
             &outcome.public_key_base64,
@@ -110,24 +110,24 @@ impl AppState {
             return Err(error).context("unable to persist HomeServer cloud pairing state");
         }
 
-        let record = database::cloud_connection(&self.connection()?)?;
+        let record = database::cloud_connection(&*self.connection()?)?;
         if let Err(error) = self.cloud.status(&record, &outcome.secrets).await {
             database::mark_cloud_error(
-                &self.connection()?,
+                &*self.connection()?,
                 &public_cloud_error(&error),
                 cloud::authentication_failed(&error),
             )?;
             return Err(error).context("pairing completed but signed cloud verification failed");
         }
-        database::mark_cloud_success(&self.connection()?)?;
+        database::mark_cloud_success(&*self.connection()?)?;
         self.enqueue_heartbeat()?;
         self.cloud_snapshot()
     }
 
     pub fn disconnect_cloud(&self) -> Result<CloudConnectionSnapshot> {
-        let installation_id = database::installation_id(&self.connection()?)?;
+        let installation_id = database::installation_id(&*self.connection()?)?;
         secrets::delete(&installation_id)?;
-        database::clear_cloud_connection(&self.connection()?)?;
+        database::clear_cloud_connection(&*self.connection()?)?;
         Ok(CloudConnectionSnapshot::default())
     }
 
@@ -141,7 +141,7 @@ impl AppState {
             .unwrap_or_else(|| format!("homeserver:{}", Uuid::new_v4().simple()));
         validate_idempotency_key(&idempotency_key)?;
         database::enqueue_sync(
-            &self.connection()?,
+            &*self.connection()?,
             &idempotency_key,
             &operation_type,
             &request.payload,
@@ -196,7 +196,7 @@ impl AppState {
             Ok(secrets) => secrets,
             Err(error) => {
                 database::mark_cloud_error(
-                    &self.connection()?,
+                    &*self.connection()?,
                     "credential_vault_unavailable",
                     false,
                 )?;
@@ -206,10 +206,10 @@ impl AppState {
 
         if operations.is_empty() {
             match self.cloud.status(&record, &secrets).await {
-                Ok(()) => database::mark_cloud_success(&self.connection()?)?,
+                Ok(()) => database::mark_cloud_success(&*self.connection()?)?,
                 Err(error) => {
                     database::mark_cloud_error(
-                        &self.connection()?,
+                        &*self.connection()?,
                         &public_cloud_error(&error),
                         cloud::authentication_failed(&error),
                     )?;
@@ -221,7 +221,7 @@ impl AppState {
                 accepted: 0,
                 rejected: 0,
                 review: 0,
-                pending: database::pending_sync_count(&self.connection()?)?,
+                pending: database::pending_sync_count(&*self.connection()?)?,
             });
         }
 
