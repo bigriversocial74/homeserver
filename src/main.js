@@ -200,8 +200,12 @@ async function withBusy(action, successMessage) {
   notice = null;
   render();
   try {
-    await action();
-    notice = successMessage ? { kind: "success", message: successMessage } : null;
+    const actionNotice = await action();
+    if (successMessage) {
+      notice = { kind: "success", message: successMessage };
+    } else if (actionNotice) {
+      notice = actionNotice;
+    }
   } catch (error) {
     notice = { kind: "warning", message: String(error) };
   } finally {
@@ -224,7 +228,7 @@ async function pairCloud(event) {
 async function syncNow() {
   await withBusy(async () => {
     const result = await invoke("homeserver_sync_now");
-    notice = {
+    return {
       kind: "success",
       message: `Sync processed ${result.processed} operation(s): ${result.accepted} accepted, ${result.rejected} rejected, ${result.review} awaiting review.`,
     };
