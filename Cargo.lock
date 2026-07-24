@@ -2352,6 +2352,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tower-http",
  "tracing",
  "tracing-appender",
