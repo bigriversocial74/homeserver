@@ -1,9 +1,12 @@
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 #[cfg(not(windows))]
 use directories::ProjectDirs;
 use std::path::PathBuf;
+use url::Url;
 
 const DEFAULT_SERVER_NAME: &str = "Microgifter HomeServer";
+const DEFAULT_UPDATE_MANIFEST_URL: &str =
+    "https://updates.microgifter.com/homeserver/stable/manifest.json";
 const MAX_SERVER_NAME_CHARS: usize = 128;
 
 #[derive(Debug, Clone)]
@@ -16,6 +19,11 @@ pub struct AppConfig {
     pub restore_dir: PathBuf,
     pub staging_dir: PathBuf,
     pub imports_dir: PathBuf,
+    pub updates_dir: PathBuf,
+    pub update_staging_dir: PathBuf,
+    pub update_rollback_dir: PathBuf,
+    pub update_installed_dir: PathBuf,
+    pub update_manifest_url: String,
     pub server_name: String,
 }
 
@@ -44,6 +52,10 @@ impl AppConfig {
         let restore_dir = data_dir.join("restore");
         let staging_dir = data_dir.join("staging");
         let imports_dir = staging_dir.join("recovery-imports");
+        let updates_dir = data_dir.join("updates");
+        let update_staging_dir = updates_dir.join("staging");
+        let update_rollback_dir = updates_dir.join("rollback");
+        let update_installed_dir = updates_dir.join("installed");
         for directory in [
             &data_dir,
             &logs_dir,
@@ -52,6 +64,10 @@ impl AppConfig {
             &restore_dir,
             &staging_dir,
             &imports_dir,
+            &updates_dir,
+            &update_staging_dir,
+            &update_rollback_dir,
+            &update_installed_dir,
         ] {
             std::fs::create_dir_all(directory)
                 .with_context(|| format!("unable to create {}", directory.display()))?;
@@ -60,6 +76,9 @@ impl AppConfig {
         let raw_server_name =
             std::env::var("MG_HOMESERVER_NAME").unwrap_or_else(|_| DEFAULT_SERVER_NAME.to_owned());
         let server_name = sanitize_server_name(&raw_server_name);
+        let update_manifest_url = std::env::var("MG_HOMESERVER_UPDATE_MANIFEST_URL")
+            .unwrap_or_else(|_| DEFAULT_UPDATE_MANIFEST_URL.to_owned());
+        validate_update_manifest_url(&update_manifest_url)?;
 
         Ok(Self {
             database_path: data_dir.join("homeserver.sqlite3"),
@@ -70,6 +89,11 @@ impl AppConfig {
             restore_dir,
             staging_dir,
             imports_dir,
+            updates_dir,
+            update_staging_dir,
+            update_rollback_dir,
+            update_installed_dir,
+            update_manifest_url,
             server_name,
         })
     }
@@ -88,6 +112,14 @@ impl AppConfig {
             uuid::Uuid::new_v4().simple()
         ))
     }
+
+    pub fn update_plan_path(&self) -> PathBuf {
+        self.update_staging_dir.join("pending-update.json")
+    }
+
+    pub fn update_result_path(&self) -> PathBuf {
+        self.updates_dir.join("last-update-result.json")
+    }
 }
 
 fn sanitize_server_name(value: &str) -> String {
@@ -103,6 +135,14 @@ fn sanitize_server_name(value: &str) -> String {
     } else {
         cleaned.to_owned()
     }
+}
+
+fn validate_update_manifest_url(value: &str) -> Result<()> {
+    let url = Url::parse(value).context("HomeServer update manifest URL is invalid")?;
+    ensure!(url.scheme() == "https", "HomeServer update manifest URL must use HTTPS");
+    ensure!(url.host_str().is_some(), "HomeServer update manifest host is missing");
+    ensure!(url.username().is_empty() && url.password().is_none(), "HomeServer update manifest URL cannot contain credentials");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -126,5 +166,12 @@ mod tests {
             sanitize_server_name(&long_name).chars().count(),
             MAX_SERVER_NAME_CHARS
         );
+    }
+
+    #[test]
+    fn update_manifest_must_use_https() {
+        assert!(validate_update_manifest_url(DEFAULT_UPDATE_MANIFEST_URL).is_ok());
+        assert!(validate_update_manifest_url("http://updates.microgifter.com/manifest.json").is_err());
+        assert!(validate_update_manifest_url("https://user:secret@example.com/manifest.json").is_err());
     }
 }
