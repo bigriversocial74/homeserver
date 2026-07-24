@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - fix/phase-1-production-hardening-20260724
 
 concurrency:
   group: homeserver-quality-${{ github.ref }}
