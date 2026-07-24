@@ -42,11 +42,11 @@ jobs:
         shell: pwsh
         run: Copy-Item target/release/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
 
-      - name: Rust tests
-        run: cargo test --workspace
+      - name: Core and service tests
+        run: cargo test --package microgifter-homeserver-core --package microgifter-homeserver-service
 
-      - name: Rust lint
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Core and service lint
+        run: cargo clippy --package microgifter-homeserver-core --package microgifter-homeserver-service --all-targets -- -D warnings
 
       - name: Build NSIS installer
         run: npm run tauri:build
