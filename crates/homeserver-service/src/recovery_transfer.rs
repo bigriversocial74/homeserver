@@ -85,6 +85,8 @@ pub fn import_recovery_package(
         )
         .optional()?;
 
+    let is_new_record = existing.is_none();
+    let mut imported_new_file = false;
     if let Some((archive_sha256, database_sha256, storage_path)) = existing {
         ensure!(
             archive_sha256.as_deref() == Some(header.archive_sha256.as_str())
@@ -94,6 +96,7 @@ pub fn import_recovery_package(
         let existing_path = PathBuf::from(storage_path);
         if !existing_path.exists() {
             move_replace(temporary_path, &destination)?;
+            imported_new_file = true;
             connection.execute(
                 "UPDATE backup_records SET storage_path=?1,file_name=?2,size_bytes=?3,state='ready',failure_code=NULL,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE backup_id=?4",
                 params![destination.to_string_lossy(), file_name, package_size as i64, header.backup_id],
@@ -103,6 +106,7 @@ pub fn import_recovery_package(
         }
     } else {
         move_replace(temporary_path, &destination)?;
+        imported_new_file = true;
         let insert_result = connection.execute(
             "INSERT INTO backup_records (backup_id,kind,encryption,state,file_name,storage_path,size_bytes,archive_sha256,database_sha256,note,created_at_utc,updated_at_utc) VALUES (?1,'recovery',?2,'ready',?3,?4,?5,?6,?7,'Imported portable recovery package',?8,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
             params![
@@ -137,11 +141,24 @@ pub fn import_recovery_package(
             Ok(result)
         }
         Err(error) => {
-            let _ = database::mark_backup_failed(
-                connection,
-                &header.backup_id,
-                "recovery_import_verification_failed",
-            );
+            if is_new_record {
+                let _ = connection.execute(
+                    "DELETE FROM backup_records WHERE backup_id=?1",
+                    params![header.backup_id],
+                );
+                if imported_new_file {
+                    let _ = fs::remove_file(&destination);
+                }
+            } else {
+                let _ = database::mark_backup_failed(
+                    connection,
+                    &header.backup_id,
+                    "recovery_import_verification_failed",
+                );
+                if imported_new_file {
+                    let _ = fs::remove_file(&destination);
+                }
+            }
             Err(error)
         }
     }
@@ -193,11 +210,19 @@ fn read_header(path: &Path) -> Result<ImportedHeader> {
     let mut input = File::open(path)?;
     let mut prefix = [0_u8; 12];
     input.read_exact(&mut prefix)?;
-    ensure!(&prefix[..8] == PACKAGE_MAGIC, "recovery package magic is invalid");
+    ensure!(
+        &prefix[..8] == PACKAGE_MAGIC,
+        "recovery package magic is invalid"
+    );
     let header_length = u32::from_be_bytes(prefix[8..12].try_into()?) as usize;
     ensure!(
         header_length > 0 && header_length <= MAX_HEADER_BYTES,
         "recovery package header length is invalid"
+    );
+    let package_size = fs::metadata(path)?.len() as usize;
+    ensure!(
+        package_size > 12 + header_length,
+        "recovery package is truncated"
     );
     let mut header = vec![0_u8; header_length];
     input.read_exact(&mut header)?;
