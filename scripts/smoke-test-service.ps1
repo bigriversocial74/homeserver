@@ -4,11 +4,18 @@ param(
 
 $ErrorActionPreference = "Stop"
 $binaryPath = (Resolve-Path $ServiceBinary).Path
-$dataDirectory = Join-Path $env:RUNNER_TEMP ("microgifter-homeserver-service-" + [guid]::NewGuid().ToString("N"))
-$env:MG_HOMESERVER_DATA_DIR = $dataDirectory
+$primaryDataDirectory = Join-Path $env:RUNNER_TEMP ("microgifter-homeserver-primary-" + [guid]::NewGuid().ToString("N"))
+$freshDataDirectory = Join-Path $env:RUNNER_TEMP ("microgifter-homeserver-recovery-" + [guid]::NewGuid().ToString("N"))
+$exportedPackage = Join-Path $env:RUNNER_TEMP ("microgifter-homeserver-export-" + [guid]::NewGuid().ToString("N") + ".mghbackup")
+$env:MG_HOMESERVER_DATA_DIR = $primaryDataDirectory
 $env:MG_HOMESERVER_NAME = "CI HomeServer"
 $process = $null
 $apiBase = "http://127.0.0.1:47831"
+
+function ConvertTo-Base64Url {
+    param([Parameter(Mandatory = $true)][string]$Value)
+    return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Value)).TrimEnd("=").Replace("+", "-").Replace("/", "_")
+}
 
 function Start-HomeServerProcess {
     $script:process = Start-Process -FilePath $binaryPath -ArgumentList "console" -PassThru -WindowStyle Hidden
@@ -111,8 +118,13 @@ try {
         throw "Recovery package verification did not persist"
     }
 
+    Invoke-WebRequest -UseBasicParsing -Uri "$apiBase/v1/backups/$($recovery.backup.backup_id)/package" -OutFile $exportedPackage -TimeoutSec 90
+    if (-not (Test-Path $exportedPackage) -or (Get-Item $exportedPackage).Length -le 12) {
+        throw "Portable recovery package export was not produced"
+    }
+
     $catalog = Invoke-RestMethod -Uri "$apiBase/v1/backups" -TimeoutSec 5
-    if ($catalog.backups.Count -lt 2 -or [int]$catalog.retention_count -ne 14 -or [int]$catalog.interval_hours -ne 24) {
+    if (@($catalog.backups).Count -lt 2 -or [int]$catalog.retention_count -ne 14 -or [int]$catalog.interval_hours -ne 24) {
         throw "Backup catalog or policy is incomplete"
     }
 
@@ -142,18 +154,90 @@ try {
         throw "Applied restore was not recorded in the restored database"
     }
 
-    $databasePath = Join-Path $dataDirectory "homeserver.sqlite3"
-    if (-not (Test-Path $databasePath)) {
-        throw "HomeServer SQLite database was not created"
+    Stop-HomeServerProcess
+    $env:MG_HOMESERVER_DATA_DIR = $freshDataDirectory
+    $env:MG_HOMESERVER_NAME = "CI Recovery HomeServer"
+    Start-HomeServerProcess
+
+    $freshStatus = Invoke-RestMethod -Uri "$apiBase/v1/status" -TimeoutSec 5
+    if ($freshStatus.server_name -ne "CI Recovery HomeServer" -or $freshStatus.database -ne "ready") {
+        throw "Fresh HomeServer installation did not initialize correctly"
+    }
+    $freshCatalog = Invoke-RestMethod -Uri "$apiBase/v1/backups" -TimeoutSec 5
+    if (@($freshCatalog.backups).Count -ne 0) {
+        throw "Fresh HomeServer catalog was not empty before recovery import"
     }
 
-    Write-Host "HomeServer encrypted backup, recovery, verification, staged restore, and rollback-ready smoke test passed."
+    $wrongImportHeaders = @{
+        "x-mg-recovery-passphrase" = ConvertTo-Base64Url "wrong recovery passphrase value"
+    }
+    $wrongImport = Invoke-WebRequest -SkipHttpErrorCheck -Method Post -Uri "$apiBase/v1/backups/import" -Headers $wrongImportHeaders -ContentType "application/vnd.microgifter.homeserver-backup" -InFile $exportedPackage -TimeoutSec 90
+    if ($wrongImport.StatusCode -ne 422) {
+        throw "Expected wrong import passphrase rejection, received HTTP $($wrongImport.StatusCode)"
+    }
+    $freshCatalog = Invoke-RestMethod -Uri "$apiBase/v1/backups" -TimeoutSec 5
+    if (@($freshCatalog.backups).Count -ne 0) {
+        throw "Failed recovery import left a catalog record"
+    }
+    $freshRecoveryDirectory = Join-Path $freshDataDirectory "recovery-packages"
+    if (@(Get-ChildItem $freshRecoveryDirectory -Filter "*.mghbackup" -ErrorAction SilentlyContinue).Count -ne 0) {
+        throw "Failed recovery import left a managed package"
+    }
+
+    $importHeaders = @{
+        "x-mg-recovery-passphrase" = ConvertTo-Base64Url $recoveryPassphrase
+    }
+    $imported = Invoke-RestMethod -Method Post -Uri "$apiBase/v1/backups/import" -Headers $importHeaders -ContentType "application/vnd.microgifter.homeserver-backup" -InFile $exportedPackage -TimeoutSec 90
+    if ($imported.backup.kind -ne "recovery" -or $imported.backup.state -ne "verified") {
+        throw "Portable recovery package was not imported and verified"
+    }
+    if ($imported.backup.backup_id -ne $recovery.backup.backup_id) {
+        throw "Imported recovery package identity changed"
+    }
+
+    $freshRestoreBody = @{
+        backup_id = $imported.backup.backup_id
+        passphrase = $recoveryPassphrase
+        confirmation = "RESTORE"
+    } | ConvertTo-Json -Compress
+    $freshStaged = Invoke-RestMethod -Method Post -Uri "$apiBase/v1/backups/stage-restore" -ContentType "application/json" -Body $freshRestoreBody -TimeoutSec 90
+    if (-not $freshStaged.restart_required -or $freshStaged.backup.state -ne "restore_staged") {
+        throw "Imported recovery package could not be staged on a fresh installation"
+    }
+
+    Stop-HomeServerProcess
+    Start-HomeServerProcess
+    $freshStatus = Invoke-RestMethod -Uri "$apiBase/v1/status" -TimeoutSec 5
+    if ($freshStatus.restore_pending -or $freshStatus.database -ne "ready") {
+        throw "Fresh-install recovery did not apply cleanly"
+    }
+    $freshCatalog = Invoke-RestMethod -Uri "$apiBase/v1/backups" -TimeoutSec 5
+    $freshRestored = $freshCatalog.backups | Where-Object { $_.backup_id -eq $recovery.backup.backup_id } | Select-Object -First 1
+    if (-not $freshRestored -or $freshRestored.state -ne "restored") {
+        throw "Fresh-install recovery was not recorded in the restored database"
+    }
+    $rollbackDatabase = Get-ChildItem (Join-Path $freshDataDirectory "restore") -Filter "rollback-*.sqlite3" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $rollbackDatabase) {
+        throw "Fresh-install recovery did not preserve its pre-restore database for rollback"
+    }
+
+    $databasePath = Join-Path $freshDataDirectory "homeserver.sqlite3"
+    if (-not (Test-Path $databasePath)) {
+        throw "Recovered HomeServer SQLite database was not created"
+    }
+
+    Write-Host "HomeServer encrypted backup, exported recovery, fresh-install import, verification, staged restore, and rollback-ready smoke test passed."
 }
 finally {
     Stop-HomeServerProcess
     Remove-Item Env:MG_HOMESERVER_DATA_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:MG_HOMESERVER_NAME -ErrorAction SilentlyContinue
-    if (Test-Path $dataDirectory) {
-        Remove-Item $dataDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    foreach ($path in @($primaryDataDirectory, $freshDataDirectory)) {
+        if (Test-Path $path) {
+            Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    if (Test-Path $exportedPackage) {
+        Remove-Item $exportedPackage -Force -ErrorAction SilentlyContinue
     }
 }
