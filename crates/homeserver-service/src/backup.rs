@@ -13,7 +13,7 @@ use microgifter_homeserver_core::{
     BackupActionResult, BackupKind, BackupRecord, BackupReferenceRequest, CreateBackupRequest,
 };
 use rand::{rngs::OsRng, RngCore};
-use rusqlite::{backup::Backup, Connection};
+use rusqlite::{backup::Backup, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -24,7 +24,7 @@ use std::{
 };
 use tar::{Archive, Builder, Header};
 use uuid::Uuid;
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 const PACKAGE_MAGIC: &[u8; 8] = b"MGHSBK03";
 const PACKAGE_VERSION: u32 = 3;
@@ -204,7 +204,8 @@ fn create_backup_inner(
         let archive = fs::read(&archive_path)?;
         let archive_sha256 = sha256_bytes(&archive);
         let installation_id = database::installation_id(connection)?;
-        let (mut key, salt) = encryption_key(&installation_id, &kind, passphrase)?;
+        let (key, salt) = encryption_key(&installation_id, &kind, passphrase)?;
+        let key = Zeroizing::new(key);
         let mut nonce_bytes = [0_u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
         let cipher = Aes256Gcm::new_from_slice(&key)
@@ -212,8 +213,6 @@ fn create_backup_inner(
         let ciphertext = cipher
             .encrypt(Nonce::from_slice(&nonce_bytes), archive.as_ref())
             .map_err(|_| anyhow::anyhow!("unable to encrypt HomeServer backup"))?;
-        key.zeroize();
-
         let header = PackageHeader {
             format_version: PACKAGE_VERSION,
             backup_id: backup_id.to_owned(),
@@ -365,6 +364,7 @@ pub fn apply_pending_restore(config: &AppConfig) -> Result<Option<RestoreOutcome
                 &plan.restore_id[..8]
             ));
             let _ = fs::rename(&config.database_path, failed_path);
+            remove_sqlite_sidecars(&config.database_path);
             if let Some(rollback_path) = rollback_path {
                 fs::rename(rollback_path, &config.database_path)?;
             }
@@ -478,16 +478,18 @@ fn device_key_entry(installation_id: &str) -> Result<Entry> {
 }
 
 fn load_or_create_device_key(installation_id: &str) -> Result<[u8; 32]> {
-    match load_device_key(installation_id) {
-        Ok(key) => Ok(key),
-        Err(_) => {
+    let entry = device_key_entry(installation_id)?;
+    match entry.get_password() {
+        Ok(encoded) => decode_device_key(&encoded),
+        Err(keyring::Error::NoEntry) => {
             let mut key = [0_u8; 32];
             OsRng.fill_bytes(&mut key);
-            device_key_entry(installation_id)?
+            entry
                 .set_password(&URL_SAFE_NO_PAD.encode(key))
                 .context("unable to save the HomeServer backup encryption key")?;
             Ok(key)
         }
+        Err(error) => Err(error).context("HomeServer backup encryption key is unavailable"),
     }
 }
 
@@ -495,6 +497,10 @@ fn load_device_key(installation_id: &str) -> Result<[u8; 32]> {
     let encoded = device_key_entry(installation_id)?
         .get_password()
         .context("HomeServer backup encryption key is unavailable")?;
+    decode_device_key(&encoded)
+}
+
+fn decode_device_key(encoded: &str) -> Result<[u8; 32]> {
     let decoded = URL_SAFE_NO_PAD
         .decode(encoded)
         .context("HomeServer backup encryption key is invalid")?;
@@ -567,7 +573,7 @@ fn decrypt_and_extract(
         "backup kind does not match its catalog record"
     );
     let installation_id = database::installation_id(connection)?;
-    let mut key = decryption_key(&installation_id, &header, passphrase)?;
+    let key = Zeroizing::new(decryption_key(&installation_id, &header, passphrase)?);
     let nonce = URL_SAFE_NO_PAD
         .decode(&header.nonce_base64)
         .context("backup nonce is invalid")?;
@@ -579,7 +585,6 @@ fn decrypt_and_extract(
         .map_err(|_| {
             anyhow::anyhow!("backup passphrase, device key, or package integrity is invalid")
         })?;
-    key.zeroize();
     ensure!(
         sha256_bytes(&archive) == header.archive_sha256,
         "backup archive hash does not match"
@@ -686,8 +691,10 @@ fn extract_archive(archive: &[u8], directory: &Path, header: &PackageHeader) -> 
 }
 
 fn verify_sqlite_database(path: &Path) -> Result<()> {
-    let connection = Connection::open(path)?;
-    database::configure_connection(&connection)?;
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
     database::health_check(&connection)
 }
 
