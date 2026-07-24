@@ -60,6 +60,13 @@ fn write_atomic(path: &PathBuf, bytes: &[u8]) -> Result<()> {
         fs::remove_file(path)?;
     }
     fs::rename(temporary, path)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+
     Ok(())
 }
 
@@ -166,23 +173,13 @@ fn unprotect(value: &[u8], installation_id: &str) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(windows))]
-fn protect(value: &[u8], installation_id: &str) -> Result<Vec<u8>> {
-    let entry = keyring::Entry::new("MicrogifterHomeServerBackup", installation_id)
-        .context("unable to open the HomeServer backup credential vault")?;
-    entry
-        .set_password(&URL_SAFE_NO_PAD.encode(value))
-        .context("unable to save the HomeServer backup encryption key")?;
+fn protect(value: &[u8], _installation_id: &str) -> Result<Vec<u8>> {
     Ok(URL_SAFE_NO_PAD.encode(value).into_bytes())
 }
 
 #[cfg(not(windows))]
-fn unprotect(value: &[u8], installation_id: &str) -> Result<Vec<u8>> {
-    let entry = keyring::Entry::new("MicrogifterHomeServerBackup", installation_id)
-        .context("unable to open the HomeServer backup credential vault")?;
-    let encoded = entry
-        .get_password()
-        .or_else(|_| String::from_utf8(value.to_vec()).map_err(|_| keyring::Error::BadEncoding(Vec::new())))
-        .context("HomeServer backup encryption key is unavailable")?;
+fn unprotect(value: &[u8], _installation_id: &str) -> Result<Vec<u8>> {
+    let encoded = std::str::from_utf8(value).context("HomeServer backup encryption key is invalid")?;
     URL_SAFE_NO_PAD
         .decode(encoded)
         .context("HomeServer backup encryption key is invalid")
