@@ -144,7 +144,7 @@ jobs:
       - name: Encrypted backup and restore console smoke test
         shell: pwsh
         run: |
-          ./scripts/smoke-test-service.ps1 *> service-smoke.log
+          & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-service.ps1 *> service-smoke.log
           $smokeCode = $LASTEXITCODE
           if ($smokeCode -ne 0) {
             Get-Content service-smoke.log -Tail 180
