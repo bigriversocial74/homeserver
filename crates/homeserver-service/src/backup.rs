@@ -1,4 +1,4 @@
-use crate::{config::AppConfig, database};
+use crate::{backup_key, config::AppConfig, database};
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
@@ -8,7 +8,6 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
-use keyring::Entry;
 use microgifter_homeserver_core::{
     BackupActionResult, BackupKind, BackupRecord, BackupReferenceRequest, CreateBackupRequest,
 };
@@ -28,7 +27,6 @@ use zeroize::Zeroizing;
 
 const PACKAGE_MAGIC: &[u8; 8] = b"MGHSBK03";
 const PACKAGE_VERSION: u32 = 3;
-const DEVICE_KEY_SERVICE: &str = "MicrogifterHomeServerBackup";
 const MAX_DATABASE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PACKAGE_BYTES: u64 = 320 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
@@ -204,7 +202,7 @@ fn create_backup_inner(
         let archive = fs::read(&archive_path)?;
         let archive_sha256 = sha256_bytes(&archive);
         let installation_id = database::installation_id(connection)?;
-        let (key, salt) = encryption_key(&installation_id, &kind, passphrase)?;
+        let (key, salt) = encryption_key(config, &installation_id, &kind, passphrase)?;
         let key = Zeroizing::new(key);
         let mut nonce_bytes = [0_u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
@@ -425,6 +423,7 @@ fn validate_passphrase(passphrase: Option<&str>) -> Result<()> {
 }
 
 fn encryption_key(
+    config: &AppConfig,
     installation_id: &str,
     kind: &BackupKind,
     passphrase: Option<&str>,
@@ -436,17 +435,18 @@ fn encryption_key(
         let key = derive_passphrase_key(passphrase.unwrap_or_default(), &salt)?;
         Ok((key, Some(salt)))
     } else {
-        Ok((load_or_create_device_key(installation_id)?, None))
+        Ok((backup_key::load_or_create(config, installation_id)?, None))
     }
 }
 
 fn decryption_key(
+    config: &AppConfig,
     installation_id: &str,
     header: &PackageHeader,
     passphrase: Option<&str>,
 ) -> Result<[u8; 32]> {
     match header.encryption.as_str() {
-        "device_key_aes256gcm" => load_device_key(installation_id),
+        "device_key_aes256gcm" => backup_key::load(config, installation_id),
         "passphrase_argon2id_aes256gcm" => {
             validate_passphrase(passphrase)?;
             let salt = header
@@ -473,47 +473,6 @@ fn derive_passphrase_key(passphrase: &str, salt: &[u8; 16]) -> Result<[u8; 32]> 
     argon2
         .hash_password_into(passphrase.as_bytes(), salt, &mut key)
         .map_err(|error| anyhow::anyhow!("unable to derive recovery key: {error}"))?;
-    Ok(key)
-}
-
-fn device_key_entry(installation_id: &str) -> Result<Entry> {
-    Entry::new(DEVICE_KEY_SERVICE, installation_id)
-        .context("unable to open the Windows backup credential vault")
-}
-
-fn load_or_create_device_key(installation_id: &str) -> Result<[u8; 32]> {
-    let entry = device_key_entry(installation_id)?;
-    match entry.get_password() {
-        Ok(encoded) => decode_device_key(&encoded),
-        Err(keyring::Error::NoEntry) => {
-            let mut key = [0_u8; 32];
-            OsRng.fill_bytes(&mut key);
-            entry
-                .set_password(&URL_SAFE_NO_PAD.encode(key))
-                .context("unable to save the HomeServer backup encryption key")?;
-            Ok(key)
-        }
-        Err(error) => Err(error).context("HomeServer backup encryption key is unavailable"),
-    }
-}
-
-fn load_device_key(installation_id: &str) -> Result<[u8; 32]> {
-    let encoded = device_key_entry(installation_id)?
-        .get_password()
-        .context("HomeServer backup encryption key is unavailable")?;
-    decode_device_key(&encoded)
-}
-
-fn decode_device_key(encoded: &str) -> Result<[u8; 32]> {
-    let decoded = URL_SAFE_NO_PAD
-        .decode(encoded)
-        .context("HomeServer backup encryption key is invalid")?;
-    ensure!(
-        decoded.len() == 32,
-        "HomeServer backup encryption key is invalid"
-    );
-    let mut key = [0_u8; 32];
-    key.copy_from_slice(&decoded);
     Ok(key)
 }
 
@@ -580,7 +539,12 @@ fn decrypt_and_extract(
         "backup kind does not match its catalog record"
     );
     let installation_id = database::installation_id(connection)?;
-    let key = Zeroizing::new(decryption_key(&installation_id, &header, passphrase)?);
+    let key = Zeroizing::new(decryption_key(
+        config,
+        &installation_id,
+        &header,
+        passphrase,
+    )?);
     let nonce = URL_SAFE_NO_PAD
         .decode(&header.nonce_base64)
         .context("backup nonce is invalid")?;

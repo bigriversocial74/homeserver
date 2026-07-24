@@ -26,8 +26,8 @@ pub fn load_or_create(config: &AppConfig, installation_id: &str) -> Result<[u8; 
 }
 
 pub fn load(config: &AppConfig, installation_id: &str) -> Result<[u8; BACKUP_KEY_BYTES]> {
-    let protected = fs::read(key_path(config))
-        .context("HomeServer backup encryption key is unavailable")?;
+    let protected =
+        fs::read(key_path(config)).context("HomeServer backup encryption key is unavailable")?;
     ensure!(
         !protected.is_empty() && protected.len() <= MAX_PROTECTED_KEY_BYTES,
         "HomeServer backup encryption key is invalid"
@@ -78,9 +78,7 @@ fn entropy(installation_id: &str) -> [u8; 32] {
 fn protect(value: &[u8], installation_id: &str) -> Result<Vec<u8>> {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::{
-        Security::Cryptography::{
-            CryptProtectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
-        },
+        Security::Cryptography::{CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB},
         System::Memory::LocalFree,
     };
 
@@ -128,7 +126,7 @@ fn unprotect(value: &[u8], installation_id: &str) -> Result<Vec<u8>> {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::{
         Security::Cryptography::{
-            CryptUnprotectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+            CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
         },
         System::Memory::LocalFree,
     };
@@ -179,7 +177,8 @@ fn protect(value: &[u8], _installation_id: &str) -> Result<Vec<u8>> {
 
 #[cfg(not(windows))]
 fn unprotect(value: &[u8], _installation_id: &str) -> Result<Vec<u8>> {
-    let encoded = std::str::from_utf8(value).context("HomeServer backup encryption key is invalid")?;
+    let encoded =
+        std::str::from_utf8(value).context("HomeServer backup encryption key is invalid")?;
     URL_SAFE_NO_PAD
         .decode(encoded)
         .context("HomeServer backup encryption key is invalid")
