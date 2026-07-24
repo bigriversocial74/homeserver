@@ -29,9 +29,12 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "resources": ["resources/microgifter-homeserver-service.exe"],
+    "resources": [
+      "resources/microgifter-homeserver-service.exe",
+      "resources/microgifter-homeserver-updater.exe"
+    ],
     "shortDescription": "Private local Microgifter edge platform",
-    "longDescription": "Microgifter HomeServer provides local services, private data, AI, MCP access, synchronization, backup, recovery, and diagnostics.",
+    "longDescription": "Microgifter HomeServer provides local services, private data, AI, MCP access, synchronization, backup, recovery, signed updates, rollback, and diagnostics.",
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
       "nsis": {
