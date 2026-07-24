@@ -308,3 +308,39 @@ fn api_error(
         }),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_maximum_multibyte_passphrase_header() {
+        let passphrase = "🦀".repeat(256);
+        let encoded = URL_SAFE_NO_PAD.encode(passphrase.as_bytes());
+        assert!(encoded.len() > 1024);
+        assert!(encoded.len() <= MAX_ENCODED_PASSPHRASE_HEADER_BYTES);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            PASSPHRASE_HEADER,
+            HeaderValue::from_str(&encoded).expect("encoded passphrase header should be valid"),
+        );
+
+        let decoded = decode_passphrase(&headers).expect("maximum passphrase should be accepted");
+        assert_eq!(decoded.as_str(), passphrase);
+    }
+
+    #[test]
+    fn rejects_oversized_passphrase_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            PASSPHRASE_HEADER,
+            HeaderValue::from_str(&"A".repeat(MAX_ENCODED_PASSPHRASE_HEADER_BYTES + 1))
+                .expect("oversized test header should still be syntactically valid"),
+        );
+
+        let error = decode_passphrase(&headers).expect_err("oversized header should be rejected");
+        assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(error.1.0.error, "recovery_passphrase_invalid");
+    }
+}
