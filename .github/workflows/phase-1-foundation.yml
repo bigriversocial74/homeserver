@@ -1,0 +1,67 @@
+name: Phase 1 Installable Foundation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Frontend syntax
+        run: npm run check:frontend
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Rust formatting
+        run: cargo fmt --all --check
+
+      - name: Build Windows service
+        run: cargo build --release --package microgifter-homeserver-service
+
+      - name: Stage Windows service for Tauri
+        shell: pwsh
+        run: Copy-Item target/release/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
+
+      - name: Rust tests
+        run: cargo test --workspace
+
+      - name: Rust lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build NSIS installer
+        run: npm run tauri:build
+
+      - name: Normalize installer filename
+        shell: pwsh
+        run: |
+          $bundle = "target/release/bundle/nsis"
+          $installer = Get-ChildItem $bundle -Filter "*-setup.exe" | Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer was not produced" }
+          Copy-Item $installer.FullName "$bundle/Microgifter-HomeServer-Setup.exe" -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Microgifter-HomeServer-Setup
+          path: target/release/bundle/nsis/Microgifter-HomeServer-Setup.exe
+          if-no-files-found: error
+          retention-days: 14
