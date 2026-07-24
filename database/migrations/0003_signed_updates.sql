@@ -1,8 +1,19 @@
+CREATE TABLE IF NOT EXISTS update_runtime (
+    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+    state TEXT NOT NULL CHECK (state IN ('idle','checking','current','available','downloading','staged','applying','succeeded','failed','rolled_back')),
+    last_checked_at_utc TEXT,
+    last_error TEXT,
+    updated_at_utc TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+INSERT OR IGNORE INTO update_runtime (singleton_id, state)
+VALUES (1, 'idle');
+
 CREATE TABLE IF NOT EXISTS update_records (
     update_id TEXT PRIMARY KEY,
     version TEXT NOT NULL,
     channel TEXT NOT NULL CHECK (channel IN ('stable')),
-    state TEXT NOT NULL CHECK (state IN ('checking','current','available','downloading','staged','applying','succeeded','failed','rolled_back')),
+    state TEXT NOT NULL CHECK (state IN ('available','downloading','staged','applying','succeeded','failed','rolled_back')),
     manifest_url TEXT NOT NULL,
     manifest_json TEXT NOT NULL,
     release_notes TEXT NOT NULL DEFAULT '',
