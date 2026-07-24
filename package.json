@@ -6,11 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "prepare:icons": "node scripts/prepare-icons.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
-    "check:frontend": "node --check src/main.js && node --check vite.config.js"
+    "tauri:dev": "npm run prepare:icons && tauri dev",
+    "tauri:build": "npm run prepare:icons && tauri build",
+    "check:frontend": "node --check src/main.js && node --check vite.config.js && node --check scripts/prepare-icons.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0"
