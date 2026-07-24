@@ -1,0 +1,44 @@
+CREATE TABLE IF NOT EXISTS update_records (
+    update_id TEXT PRIMARY KEY,
+    version TEXT NOT NULL,
+    channel TEXT NOT NULL CHECK (channel IN ('stable')),
+    state TEXT NOT NULL CHECK (state IN ('checking','current','available','downloading','staged','applying','succeeded','failed','rolled_back')),
+    manifest_url TEXT NOT NULL,
+    manifest_json TEXT NOT NULL,
+    release_notes TEXT NOT NULL DEFAULT '',
+    installer_url TEXT NOT NULL,
+    installer_file_name TEXT NOT NULL,
+    installer_path TEXT,
+    installer_size_bytes INTEGER NOT NULL CHECK (installer_size_bytes >= 0),
+    installer_sha256 TEXT NOT NULL,
+    authenticode_thumbprint TEXT NOT NULL,
+    checked_at_utc TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    downloaded_at_utc TEXT,
+    applied_at_utc TEXT,
+    failure_code TEXT,
+    rollback_path TEXT,
+    created_at_utc TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at_utc TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_update_records_state_version
+    ON update_records (state, version, updated_at_utc DESC);
+
+CREATE TABLE IF NOT EXISTS update_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    update_id TEXT,
+    event_type TEXT NOT NULL,
+    message TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at_utc TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    FOREIGN KEY (update_id) REFERENCES update_records(update_id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_update_events_update_created
+    ON update_events (update_id, created_at_utc DESC);
+
+INSERT OR IGNORE INTO homeserver_settings (setting_key, setting_value)
+VALUES ('update_channel', 'stable');
+
+INSERT OR IGNORE INTO schema_migrations (migration_key)
+VALUES ('0003_signed_updates');
