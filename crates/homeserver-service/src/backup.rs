@@ -726,6 +726,7 @@ mod tests {
             logs_dir: data_dir.join("logs"),
             backups_dir: data_dir.join("backups"),
             recovery_dir: data_dir.join("recovery-packages"),
+            imports_dir: data_dir.join("imports"),
             restore_dir: data_dir.join("restore"),
             staging_dir: data_dir.join("staging"),
             data_dir,
@@ -735,6 +736,7 @@ mod tests {
             &config.logs_dir,
             &config.backups_dir,
             &config.recovery_dir,
+            &config.imports_dir,
             &config.restore_dir,
             &config.staging_dir,
         ] {
