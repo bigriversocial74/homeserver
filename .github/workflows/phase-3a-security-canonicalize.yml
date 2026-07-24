@@ -23,38 +23,60 @@ jobs:
           components: rustfmt
 
       - name: Apply security corrections
-        shell: python
+        shell: python {0}
         run: |
           from pathlib import Path
 
-          backup_path = Path('crates/homeserver-service/src/backup.rs')
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              if old not in text:
+                  raise SystemExit(f"expected pattern not found: {label}")
+              return text.replace(old, new, 1)
+
+          backup_path = Path("crates/homeserver-service/src/backup.rs")
           text = backup_path.read_text()
-          replacements = [
-              ('use rusqlite::{backup::Backup, Connection};', 'use rusqlite::{backup::Backup, Connection, OpenFlags};'),
-              ('use zeroize::Zeroize;', 'use zeroize::Zeroizing;'),
-              ('''        let (mut key, salt) = encryption_key(&installation_id, &kind, passphrase)?;
-          let mut nonce_bytes = [0_u8; 12];''', '''        let key = Zeroizing::new(encryption_key(&installation_id, &kind, passphrase)?.0);
-          let salt = if kind == BackupKind::Recovery {
-              let mut salt = [0_u8; 16];
-              OsRng.fill_bytes(&mut salt);
-              Some(salt)
-          } else {
-              None
-          };
-          let key = if let Some(salt) = salt.as_ref() {
-              Zeroizing::new(derive_passphrase_key(passphrase.unwrap_or_default(), salt)?)
-          } else {
-              key
-          };
-          let mut nonce_bytes = [0_u8; 12];'''),
-          ('        key.zeroize();\n\n        let header = PackageHeader {', '        let header = PackageHeader {'),
-              ('    let mut key = decryption_key(&installation_id, &header, passphrase)?;', '    let key = Zeroizing::new(decryption_key(&installation_id, &header, passphrase)?);'),
-              ('    key.zeroize();\n    ensure!(', '    ensure!('),
-              ('''            let _ = fs::rename(&config.database_path, failed_path);
-              if let Some(rollback_path) = rollback_path {''', '''            let _ = fs::rename(&config.database_path, failed_path);
-              remove_sqlite_sidecars(&config.database_path);
-              if let Some(rollback_path) = rollback_path {'''),
-              ('''fn load_or_create_device_key(installation_id: &str) -> Result<[u8; 32]> {
+          text = replace_once(
+              text,
+              "use rusqlite::{backup::Backup, Connection};",
+              "use rusqlite::{backup::Backup, Connection, OpenFlags};",
+              "rusqlite imports",
+          )
+          text = replace_once(
+              text,
+              "use zeroize::Zeroize;",
+              "use zeroize::Zeroizing;",
+              "zeroizing import",
+          )
+          text = replace_once(
+              text,
+              "        let (mut key, salt) = encryption_key(&installation_id, &kind, passphrase)?;\n        let mut nonce_bytes = [0_u8; 12];",
+              "        let (key, salt) = encryption_key(&installation_id, &kind, passphrase)?;\n        let key = Zeroizing::new(key);\n        let mut nonce_bytes = [0_u8; 12];",
+              "encryption key guard",
+          )
+          text = replace_once(
+              text,
+              "        key.zeroize();\n\n        let header = PackageHeader {",
+              "        let header = PackageHeader {",
+              "encryption key manual zeroize",
+          )
+          text = replace_once(
+              text,
+              "    let mut key = decryption_key(&installation_id, &header, passphrase)?;",
+              "    let key = Zeroizing::new(decryption_key(&installation_id, &header, passphrase)?);",
+              "decryption key guard",
+          )
+          text = replace_once(
+              text,
+              "    key.zeroize();\n    ensure!(",
+              "    ensure!(",
+              "decryption key manual zeroize",
+          )
+          text = replace_once(
+              text,
+              "            let _ = fs::rename(&config.database_path, failed_path);\n            if let Some(rollback_path) = rollback_path {",
+              "            let _ = fs::rename(&config.database_path, failed_path);\n            remove_sqlite_sidecars(&config.database_path);\n            if let Some(rollback_path) = rollback_path {",
+              "rollback sidecar cleanup",
+          )
+          old_key_functions = '''fn load_or_create_device_key(installation_id: &str) -> Result<[u8; 32]> {
               match load_device_key(installation_id) {
                   Ok(key) => Ok(key),
                   Err(_) => {
@@ -82,7 +104,8 @@ jobs:
               let mut key = [0_u8; 32];
               key.copy_from_slice(&decoded);
               Ok(key)
-          }''', '''fn load_or_create_device_key(installation_id: &str) -> Result<[u8; 32]> {
+          }'''
+          new_key_functions = '''fn load_or_create_device_key(installation_id: &str) -> Result<[u8; 32]> {
               let entry = device_key_entry(installation_id)?;
               match entry.get_password() {
                   Ok(encoded) => decode_device_key(&encoded),
@@ -116,42 +139,46 @@ jobs:
               let mut key = [0_u8; 32];
               key.copy_from_slice(&decoded);
               Ok(key)
-          }'''),
-              ('''fn verify_sqlite_database(path: &Path) -> Result<()> {
+          }'''
+          text = replace_once(text, old_key_functions, new_key_functions, "device key handling")
+          text = replace_once(
+              text,
+              '''fn verify_sqlite_database(path: &Path) -> Result<()> {
               let connection = Connection::open(path)?;
               database::configure_connection(&connection)?;
               database::health_check(&connection)
-          }''', '''fn verify_sqlite_database(path: &Path) -> Result<()> {
+          }''',
+              '''fn verify_sqlite_database(path: &Path) -> Result<()> {
               let connection = Connection::open_with_flags(
                   path,
                   OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
               )?;
               database::health_check(&connection)
-          }'''),
-          ]
-          for old, new in replacements:
-              if old not in text:
-                  raise SystemExit(f'expected backup pattern not found: {old[:80]!r}')
-              text = text.replace(old, new, 1)
+          }''',
+              "read-only restore verification",
+          )
           backup_path.write_text(text)
 
-          main_path = Path('crates/homeserver-service/src/main.rs')
+          main_path = Path("crates/homeserver-service/src/main.rs")
           text = main_path.read_text()
-          old = '''use microgifter_homeserver_core::{
+          text = replace_once(
+              text,
+              '''use microgifter_homeserver_core::{
               BackupActionResult, BackupCatalog, BackupReferenceRequest, BackupState, CreateBackupRequest,
               HealthSnapshot, SERVICE_NAME,
-          };'''
-          new = '''use microgifter_homeserver_core::{
+          };''',
+              '''use microgifter_homeserver_core::{
               BackupActionResult, BackupCatalog, BackupKind, BackupReferenceRequest, BackupState,
               CreateBackupRequest, HealthSnapshot, SERVICE_NAME,
-          };'''
-          if old not in text:
-              raise SystemExit('expected main import pattern not found')
-          text = text.replace(old, new, 1)
-          old = '''    fn create_backup(&self, request: CreateBackupRequest) -> Result<BackupActionResult> {
+          };''',
+              "BackupKind import",
+          )
+          text = replace_once(
+              text,
+              '''    fn create_backup(&self, request: CreateBackupRequest) -> Result<BackupActionResult> {
               backup::create_backup(&self.connection()?, &self.config, request)
-          }'''
-          new = '''    fn create_backup(&self, request: CreateBackupRequest) -> Result<BackupActionResult> {
+          }''',
+              '''    fn create_backup(&self, request: CreateBackupRequest) -> Result<BackupActionResult> {
               match request.kind {
                   BackupKind::Manual | BackupKind::Recovery => {
                       backup::create_backup(&self.connection()?, &self.config, request)
@@ -160,10 +187,10 @@ jobs:
                       bail!("backup kind is reserved for internal HomeServer operations")
                   }
               }
-          }'''
-          if old not in text:
-              raise SystemExit('expected create_backup pattern not found')
-          main_path.write_text(text.replace(old, new, 1))
+          }''',
+              "public backup kind restriction",
+          )
+          main_path.write_text(text)
 
       - name: Canonicalize dependency lock and formatting
         run: |
