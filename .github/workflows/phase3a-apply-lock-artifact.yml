@@ -25,8 +25,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api -H "Accept: application/vnd.github+json" /repos/bigriversocial74/homeserver/actions/artifacts/8609998427/zip --output locks.zip
-          Expand-Archive locks.zip -DestinationPath lock-artifact -Force
+          gh run download 30127932519 --repo bigriversocial74/homeserver --name dependency-lock-diagnostics --dir lock-artifact
           Copy-Item lock-artifact/generated-locks/Cargo.lock Cargo.lock -Force
           Copy-Item lock-artifact/generated-locks/package-lock.json package-lock.json -Force
           git rm .github/workflows/phase3a-apply-lock-artifact.yml
