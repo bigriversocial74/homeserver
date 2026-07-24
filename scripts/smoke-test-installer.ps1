@@ -9,13 +9,15 @@ $installer = (Resolve-Path $InstallerPath).Path
 $dataDirectory = Join-Path $env:ProgramData "Microgifter\HomeServer"
 $markerPath = Join-Path $dataDirectory "ci-preservation-marker.txt"
 $uninstallerPath = $null
+$apiBase = "http://127.0.0.1:47831"
+$backupPath = $null
 
 function Wait-ForHomeServerHealth {
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         try {
             $service = Get-Service -Name $serviceName -ErrorAction Stop
             if ($service.Status -eq "Running") {
-                $health = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:47831/healthz" -TimeoutSec 2
+                $health = Invoke-WebRequest -UseBasicParsing -Uri "$apiBase/healthz" -TimeoutSec 2
                 if ($health.StatusCode -eq 204) {
                     return
                 }
@@ -64,9 +66,9 @@ try {
     }
 
     Wait-ForHomeServerHealth
-    $status = Invoke-RestMethod -Uri "http://127.0.0.1:47831/v1/status" -TimeoutSec 3
-    if ($status.state -ne "running" -or $status.database -ne "ready") {
-        throw "Installed HomeServer reported state '$($status.state)' and database '$($status.database)'"
+    $status = Invoke-RestMethod -Uri "$apiBase/v1/status" -TimeoutSec 3
+    if ($status.state -ne "running" -or $status.database -ne "ready" -or $status.backup -ne "ready") {
+        throw "Installed HomeServer reported state '$($status.state)', database '$($status.database)', and backup '$($status.backup)'"
     }
 
     if (-not (Test-Path (Join-Path $dataDirectory "homeserver.sqlite3"))) {
@@ -76,6 +78,30 @@ try {
     $logFiles = Get-ChildItem (Join-Path $dataDirectory "logs") -Filter "microgifter-homeserver-service.log*" -ErrorAction SilentlyContinue
     if (-not $logFiles) {
         throw "Installed HomeServer did not create a persistent service log"
+    }
+
+    $backupBody = @{
+        kind = "manual"
+        passphrase = $null
+        note = "Installed LocalSystem backup validation"
+    } | ConvertTo-Json -Compress
+    $backup = Invoke-RestMethod -Method Post -Uri "$apiBase/v1/backups/create" -ContentType "application/json" -Body $backupBody -TimeoutSec 90
+    if ($backup.backup.state -ne "ready" -or $backup.backup.encryption -ne "device_key_aes256gcm") {
+        throw "Installed LocalSystem service did not create a device-key encrypted backup"
+    }
+    $backupPath = $backup.backup.storage_path
+    if (-not (Test-Path $backupPath)) {
+        throw "Installed HomeServer backup package was not written"
+    }
+
+    $verifyBody = @{
+        backup_id = $backup.backup.backup_id
+        passphrase = $null
+        confirmation = $null
+    } | ConvertTo-Json -Compress
+    $verified = Invoke-RestMethod -Method Post -Uri "$apiBase/v1/backups/verify" -ContentType "application/json" -Body $verifyBody -TimeoutSec 90
+    if ($verified.backup.state -ne "verified") {
+        throw "Installed LocalSystem service could not decrypt and verify its backup"
     }
 
     Set-Content -Path $markerPath -Value "preserve" -Encoding UTF8
@@ -98,8 +124,11 @@ try {
     if (-not (Test-Path $markerPath)) {
         throw "HomeServer data was removed during default uninstall"
     }
+    if (-not $backupPath -or -not (Test-Path $backupPath)) {
+        throw "Encrypted HomeServer backups were removed during default uninstall"
+    }
 
-    Write-Host "HomeServer installer, service, health, logging, data-preservation, and uninstall smoke tests passed."
+    Write-Host "HomeServer installer, LocalSystem backup encryption, verification, logging, data preservation, and uninstall smoke tests passed."
 }
 finally {
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
