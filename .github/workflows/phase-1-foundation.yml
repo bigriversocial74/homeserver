@@ -1,9 +1,11 @@
-name: Phase 1 Installable Foundation
+name: HomeServer Production Quality
 
 on:
   pull_request:
   push:
-    branches: [main]
+    branches:
+      - main
+      - fix/phase-1-production-hardening-20260724
 
 permissions:
   contents: read
@@ -11,51 +13,91 @@ permissions:
 jobs:
   validate:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           components: rustfmt, clippy
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: windows-cargo-${{ hashFiles('**/Cargo.toml') }}
+          key: windows-cargo-${{ hashFiles('Cargo.toml', '**/Cargo.toml', 'Cargo.lock') }}
           restore-keys: windows-cargo-
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Generate reproducible dependency locks
+        shell: pwsh
+        run: |
+          npm install --package-lock-only
+          cargo generate-lockfile
+
+      - name: Upload generated lockfiles
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dependency-lockfiles
+          path: |
+            Cargo.lock
+            package-lock.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
 
-      - name: Frontend syntax
-        run: npm run check:frontend
+      - name: Frontend and script syntax
+        shell: pwsh
+        run: |
+          npm run check:frontend
+          $scripts = Get-ChildItem scripts -Filter "*.ps1"
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              throw "PowerShell syntax validation failed for $($script.Name)"
+            }
+          }
 
       - name: Frontend build
         run: npm run build
 
-      - name: Normalize Rust formatting
-        run: cargo fmt --all
+      - name: Dependency vulnerability audit
+        run: npm audit --audit-level=high
+
+      - name: Prepare generated Windows resources
+        run: npm run prepare:icons
+
+      - name: Rust formatting
+        run: cargo fmt --all --check
+
+      - name: Full workspace tests
+        run: cargo test --workspace --locked
+
+      - name: Full workspace lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Build Windows service
-        run: cargo build --release --package microgifter-homeserver-service
+        run: cargo build --release --package microgifter-homeserver-service --locked
+
+      - name: Native service console smoke test
+        shell: pwsh
+        run: ./scripts/smoke-test-service.ps1
 
       - name: Stage Windows service for Tauri
         shell: pwsh
         run: Copy-Item target/release/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
-
-      - name: Core and service tests
-        run: cargo test --package microgifter-homeserver-core --package microgifter-homeserver-service
-
-      - name: Core and service lint
-        run: cargo clippy --package microgifter-homeserver-core --package microgifter-homeserver-service --all-targets -- -D warnings
 
       - name: Build NSIS installer
         shell: pwsh
@@ -69,7 +111,7 @@ jobs:
 
       - name: Upload Tauri build log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: tauri-build-log
           path: tauri-build.log
@@ -84,7 +126,12 @@ jobs:
           if (-not $installer) { throw "NSIS installer was not produced" }
           Copy-Item $installer.FullName "$bundle/Microgifter-HomeServer-Setup.exe" -Force
 
-      - uses: actions/upload-artifact@v4
+      - name: Installed application smoke test
+        shell: pwsh
+        run: ./scripts/smoke-test-installer.ps1 -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Setup.exe
+
+      - name: Upload validated installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: Microgifter-HomeServer-Setup
           path: target/release/bundle/nsis/Microgifter-HomeServer-Setup.exe
