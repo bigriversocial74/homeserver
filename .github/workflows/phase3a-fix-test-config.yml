@@ -26,27 +26,34 @@ jobs:
       - name: Add imports directory to backup test fixture
         shell: pwsh
         run: |
-          $path = "crates/homeserver-service/src/backup.rs"
-          $content = Get-Content $path -Raw
-          $oldField = '            recovery_dir: data_dir.join("recovery-packages"),'
-          $newField = @'
-            recovery_dir: data_dir.join("recovery-packages"),
-            imports_dir: data_dir.join("imports"),
-'@
-          if (-not $content.Contains($oldField)) { throw "backup config field matcher failed" }
-          $content = $content.Replace($oldField, $newField.TrimEnd("`r", "`n"))
-          $oldLoop = @'
-            &config.recovery_dir,
-            &config.restore_dir,
-'@
-          $newLoop = @'
-            &config.recovery_dir,
-            &config.imports_dir,
-            &config.restore_dir,
-'@
-          if (-not $content.Contains($oldLoop.TrimStart("`r", "`n"))) { throw "backup directory loop matcher failed" }
-          $content = $content.Replace($oldLoop.TrimStart("`r", "`n"), $newLoop.TrimStart("`r", "`n"))
-          Set-Content $path $content -Encoding utf8NoBOM
+          @'
+          from pathlib import Path
+
+          path = Path("crates/homeserver-service/src/backup.rs")
+          lines = path.read_text(encoding="utf-8").splitlines()
+          field_line = '            recovery_dir: data_dir.join("recovery-packages"),'
+          field_insert = '            imports_dir: data_dir.join("imports"),'
+          loop_line = '            &config.recovery_dir,'
+          loop_insert = '            &config.imports_dir,'
+
+          if field_insert not in lines:
+              matches = [i for i, line in enumerate(lines) if line == field_line]
+              if len(matches) != 1:
+                  raise SystemExit(f"expected one recovery_dir field, found {len(matches)}")
+              lines.insert(matches[0] + 1, field_insert)
+
+          if loop_insert not in lines:
+              matches = [i for i, line in enumerate(lines) if line == loop_line]
+              if len(matches) != 1:
+                  raise SystemExit(f"expected one recovery_dir loop entry, found {len(matches)}")
+              lines.insert(matches[0] + 1, loop_insert)
+
+          if lines.count(field_insert) != 1 or lines.count(loop_insert) != 1:
+              raise SystemExit("imports_dir fixture repair is not unique")
+
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          '@ | Set-Content repair_test_config.py -Encoding utf8NoBOM
+          python repair_test_config.py
           cargo fmt --all
 
       - name: Create exact Git tree and commit
