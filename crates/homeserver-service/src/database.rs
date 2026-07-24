@@ -6,7 +6,8 @@ use std::path::Path;
 use uuid::Uuid;
 
 const INITIAL_MIGRATION: &str = include_str!("../../../database/migrations/0001_initial.sql");
-const CLOUD_MIGRATION: &str = include_str!("../../../database/migrations/0002_cloud_pairing_sync.sql");
+const CLOUD_MIGRATION: &str =
+    include_str!("../../../database/migrations/0002_cloud_pairing_sync.sql");
 const INITIAL_MIGRATION_KEY: &str = "0001_initial";
 const CLOUD_MIGRATION_KEY: &str = "0002_cloud_pairing_sync";
 
@@ -65,7 +66,10 @@ pub fn initialize(path: &Path) -> Result<Connection> {
 pub fn health_check(connection: &Connection) -> Result<()> {
     let quick_check: String =
         connection.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
-    ensure!(quick_check == "ok", "SQLite quick_check returned '{quick_check}'");
+    ensure!(
+        quick_check == "ok",
+        "SQLite quick_check returned '{quick_check}'"
+    );
 
     for migration in [INITIAL_MIGRATION_KEY, CLOUD_MIGRATION_KEY] {
         let count: i64 = connection.query_row(
@@ -73,7 +77,10 @@ pub fn health_check(connection: &Connection) -> Result<()> {
             params![migration],
             |row| row.get(0),
         )?;
-        ensure!(count == 1, "migration '{migration}' is not registered exactly once");
+        ensure!(
+            count == 1,
+            "migration '{migration}' is not registered exactly once"
+        );
     }
 
     Ok(())
@@ -118,7 +125,17 @@ pub fn cloud_connection(connection: &Connection) -> Result<CloudConnectionRecord
         )
         .optional()?;
 
-    let Some((base_url, device_id, public_key, state, scopes_json, paired_at, last_success, last_error)) = row else {
+    let Some((
+        base_url,
+        device_id,
+        public_key,
+        state,
+        scopes_json,
+        paired_at,
+        last_success,
+        last_error,
+    )) = row
+    else {
         return Ok(CloudConnectionRecord {
             snapshot: CloudConnectionSnapshot::default(),
             public_key_base64: String::new(),
@@ -199,7 +216,13 @@ pub fn enqueue_sync(
         .query_row(
             "SELECT queue_id,operation_type,payload_json FROM sync_queue WHERE idempotency_key=?1",
             params![idempotency_key],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
         )
         .optional()?;
     if let Some((queue_id, existing_type, existing_payload)) = existing {
@@ -309,7 +332,10 @@ mod tests {
         let first_id = installation_id(&first).expect("first installation id");
         drop(first);
         let second = initialize(&path).expect("second initialization");
-        assert_eq!(first_id, installation_id(&second).expect("second installation id"));
+        assert_eq!(
+            first_id,
+            installation_id(&second).expect("second installation id")
+        );
         health_check(&second).expect("database health");
     }
 
@@ -326,17 +352,28 @@ mod tests {
         .expect("save connection");
         let record = cloud_connection(&connection).expect("connection snapshot");
         assert_eq!(record.snapshot.state, CloudConnectionState::Connected);
-        assert_eq!(record.snapshot.device_id.as_deref(), Some("00000000-0000-4000-8000-000000000001"));
+        assert_eq!(
+            record.snapshot.device_id.as_deref(),
+            Some("00000000-0000-4000-8000-000000000001")
+        );
     }
 
     #[test]
     fn queue_is_idempotent_and_receipts_finalize_work() {
         let mut connection = open();
         let payload = serde_json::json!({"status": "ready"});
-        let first = enqueue_sync(&connection, "test:1", "device.heartbeat", &payload).expect("enqueue");
-        let second = enqueue_sync(&connection, "test:1", "device.heartbeat", &payload).expect("replay");
+        let first =
+            enqueue_sync(&connection, "test:1", "device.heartbeat", &payload).expect("enqueue");
+        let second =
+            enqueue_sync(&connection, "test:1", "device.heartbeat", &payload).expect("replay");
         assert_eq!(first, second);
-        assert!(enqueue_sync(&connection, "test:1", "device.heartbeat", &serde_json::json!({"different": true})).is_err());
+        assert!(enqueue_sync(
+            &connection,
+            "test:1",
+            "device.heartbeat",
+            &serde_json::json!({"different": true})
+        )
+        .is_err());
 
         let operations = claim_due_sync(&mut connection, 10).expect("claim");
         assert_eq!(operations.len(), 1);

@@ -245,7 +245,13 @@ impl CloudClient {
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(body.to_owned());
         }
-        decode_response(request.send().await.context("Microgifter cloud request failed")?).await
+        decode_response(
+            request
+                .send()
+                .await
+                .context("Microgifter cloud request failed")?,
+        )
+        .await
     }
 }
 
@@ -355,8 +361,8 @@ mod tests {
         key.verifying_key()
             .verify(canonical.as_bytes(), &signature)
             .unwrap();
-        assert!(canonical.ends_with(
-            "5041bf1f713df204784353e82f6a4a535931cb64f1f4b4a5aeaffcb720918b22"
-        ));
+        assert!(
+            canonical.ends_with("5041bf1f713df204784353e82f6a4a535931cb64f1f4b4a5aeaffcb720918b22")
+        );
     }
 }

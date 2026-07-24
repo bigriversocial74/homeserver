@@ -78,9 +78,7 @@ async fn pair(
         .map_err(|error| gateway_error("pairing_failed", error))
 }
 
-async fn disconnect(
-    State(state): State<Arc<AppState>>,
-) -> ApiResult<CloudConnectionSnapshot> {
+async fn disconnect(State(state): State<Arc<AppState>>) -> ApiResult<CloudConnectionSnapshot> {
     state
         .disconnect_cloud()
         .map(Json)
@@ -153,7 +151,10 @@ mod tests {
         };
         std::fs::create_dir_all(&config.logs_dir).expect("logs directory");
         let connection = database::initialize(&config.database_path).expect("database");
-        (Arc::new(AppState::new(config, connection).expect("state")), directory)
+        (
+            Arc::new(AppState::new(config, connection).expect("state")),
+            directory,
+        )
     }
 
     #[tokio::test]

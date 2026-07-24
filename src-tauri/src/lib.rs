@@ -32,11 +32,19 @@ where
     if !status.is_success() {
         let message = serde_json::from_str::<Value>(&text)
             .ok()
-            .and_then(|value| value.get("message").and_then(Value::as_str).map(str::to_owned))
-            .unwrap_or_else(|| format!("HomeServer request failed with status {}", status.as_u16()));
+            .and_then(|value| {
+                value
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| {
+                format!("HomeServer request failed with status {}", status.as_u16())
+            });
         return Err(message);
     }
-    serde_json::from_str(&text).map_err(|error| format!("HomeServer returned invalid data: {error}"))
+    serde_json::from_str(&text)
+        .map_err(|error| format!("HomeServer returned invalid data: {error}"))
 }
 
 #[tauri::command]
