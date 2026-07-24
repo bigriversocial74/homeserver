@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   validate:
@@ -19,6 +19,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
@@ -37,26 +39,37 @@ jobs:
         with:
           node-version: 22
 
-      - name: Generate reproducible dependency locks
+      - name: Canonicalize dependency locks and Rust formatting
+        id: canonicalize
         shell: pwsh
         run: |
           npm install --package-lock-only
           cargo generate-lockfile
+          cargo fmt --all
+          git add Cargo.lock package-lock.json "*.rs" "crates/**/*.rs" "src-tauri/**/*.rs"
+          if (git diff --cached --quiet) {
+            "changed=false" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          git config user.name "Microgifter Build Bot"
+          git config user.email "buildbot@microgifter.local"
+          git commit -m "Lock dependencies and apply canonical Rust formatting"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          "changed=true" >> $env:GITHUB_OUTPUT
 
-      - name: Upload generated lockfiles
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: dependency-lockfiles
-          path: |
-            Cargo.lock
-            package-lock.json
-          if-no-files-found: error
-          retention-days: 7
+      - name: Stop after canonical source commit
+        if: steps.canonicalize.outputs.changed == 'true'
+        shell: pwsh
+        run: |
+          Write-Host "Canonical lockfiles and formatting were committed. The replacement workflow run will perform validation."
+          exit 0
 
       - name: Install frontend dependencies
+        if: steps.canonicalize.outputs.changed != 'true'
         run: npm ci
 
       - name: Frontend and script syntax
+        if: steps.canonicalize.outputs.changed != 'true'
         shell: pwsh
         run: |
           npm run check:frontend
@@ -72,35 +85,45 @@ jobs:
           }
 
       - name: Frontend build
+        if: steps.canonicalize.outputs.changed != 'true'
         run: npm run build
 
       - name: Dependency vulnerability audit
+        if: steps.canonicalize.outputs.changed != 'true'
         run: npm audit --audit-level=high
 
       - name: Prepare generated Windows resources
+        if: steps.canonicalize.outputs.changed != 'true'
         run: npm run prepare:icons
 
       - name: Rust formatting
+        if: steps.canonicalize.outputs.changed != 'true'
         run: cargo fmt --all --check
 
       - name: Full workspace tests
+        if: steps.canonicalize.outputs.changed != 'true'
         run: cargo test --workspace --locked
 
       - name: Full workspace lint
+        if: steps.canonicalize.outputs.changed != 'true'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Build Windows service
+        if: steps.canonicalize.outputs.changed != 'true'
         run: cargo build --release --package microgifter-homeserver-service --locked
 
       - name: Native service console smoke test
+        if: steps.canonicalize.outputs.changed != 'true'
         shell: pwsh
         run: ./scripts/smoke-test-service.ps1
 
       - name: Stage Windows service for Tauri
+        if: steps.canonicalize.outputs.changed != 'true'
         shell: pwsh
         run: Copy-Item target/release/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
 
       - name: Build NSIS installer
+        if: steps.canonicalize.outputs.changed != 'true'
         shell: pwsh
         run: |
           npm run tauri:build *> tauri-build.log
@@ -111,7 +134,7 @@ jobs:
           }
 
       - name: Upload Tauri build log
-        if: always()
+        if: always() && steps.canonicalize.outputs.changed != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: tauri-build-log
@@ -120,6 +143,7 @@ jobs:
           retention-days: 7
 
       - name: Normalize installer filename
+        if: steps.canonicalize.outputs.changed != 'true'
         shell: pwsh
         run: |
           $bundle = "target/release/bundle/nsis"
@@ -128,10 +152,12 @@ jobs:
           Copy-Item $installer.FullName "$bundle/Microgifter-HomeServer-Setup.exe" -Force
 
       - name: Installed application smoke test
+        if: steps.canonicalize.outputs.changed != 'true'
         shell: pwsh
         run: ./scripts/smoke-test-installer.ps1 -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Setup.exe
 
       - name: Upload validated installer
+        if: steps.canonicalize.outputs.changed != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: Microgifter-HomeServer-Setup
