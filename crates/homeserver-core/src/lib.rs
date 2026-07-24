@@ -1,0 +1,87 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+pub const PRODUCT_NAME: &str = "Microgifter HomeServer";
+pub const SERVICE_NAME: &str = "MicrogifterHomeServer";
+pub const API_HOST: &str = "127.0.0.1";
+pub const API_PORT: u16 = 47_831;
+
+pub fn api_base_url() -> String {
+    format!("http://{API_HOST}:{API_PORT}")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceState {
+    Starting,
+    Running,
+    Offline,
+    NeedsAttention,
+    Stopped,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HealthSnapshot {
+    pub version: String,
+    pub server_name: String,
+    pub state: ServiceState,
+    pub api_available: bool,
+    pub api_url: String,
+    pub database: String,
+    pub cloud: String,
+    pub pending_sync: u64,
+    pub last_backup: Option<String>,
+    pub model: Option<String>,
+    pub last_updated_utc: DateTime<Utc>,
+}
+
+impl HealthSnapshot {
+    pub fn running(server_name: impl Into<String>, database: impl Into<String>) -> Self {
+        Self {
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            server_name: server_name.into(),
+            state: ServiceState::Running,
+            api_available: true,
+            api_url: api_base_url(),
+            database: database.into(),
+            cloud: "not_paired".to_owned(),
+            pending_sync: 0,
+            last_backup: None,
+            model: None,
+            last_updated_utc: Utc::now(),
+        }
+    }
+
+    pub fn offline(reason: impl Into<String>) -> Self {
+        Self {
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            server_name: PRODUCT_NAME.to_owned(),
+            state: ServiceState::Offline,
+            api_available: false,
+            api_url: api_base_url(),
+            database: reason.into(),
+            cloud: "not_paired".to_owned(),
+            pending_sync: 0,
+            last_backup: None,
+            model: None,
+            last_updated_utc: Utc::now(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_url_is_loopback_only() {
+        assert_eq!(api_base_url(), "http://127.0.0.1:47831");
+    }
+
+    #[test]
+    fn offline_snapshot_never_reports_api_available() {
+        let snapshot = HealthSnapshot::offline("unavailable");
+        assert_eq!(snapshot.state, ServiceState::Offline);
+        assert!(!snapshot.api_available);
+    }
+}

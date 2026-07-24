@@ -1,0 +1,15 @@
+node_modules/
+dist/
+target/
+src-tauri/target/
+src-tauri/resources/microgifter-homeserver-service.exe
+src-tauri/icons/icon.ico
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+coverage/

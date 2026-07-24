@@ -1,0 +1,92 @@
+name: Phase 1 Installable Foundation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: windows-cargo-
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Frontend syntax
+        run: npm run check:frontend
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Normalize Rust formatting
+        run: cargo fmt --all
+
+      - name: Build Windows service
+        run: cargo build --release --package microgifter-homeserver-service
+
+      - name: Stage Windows service for Tauri
+        shell: pwsh
+        run: Copy-Item target/release/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
+
+      - name: Core and service tests
+        run: cargo test --package microgifter-homeserver-core --package microgifter-homeserver-service
+
+      - name: Core and service lint
+        run: cargo clippy --package microgifter-homeserver-core --package microgifter-homeserver-service --all-targets -- -D warnings
+
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          npm run tauri:build *> tauri-build.log
+          $buildCode = $LASTEXITCODE
+          if ($buildCode -ne 0) {
+            Write-Host "Tauri/NSIS build failed. Full log is attached as a workflow artifact."
+            exit $buildCode
+          }
+
+      - name: Upload Tauri build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-build-log
+          path: tauri-build.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Normalize installer filename
+        shell: pwsh
+        run: |
+          $bundle = "target/release/bundle/nsis"
+          $installer = Get-ChildItem $bundle -Filter "*-setup.exe" | Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer was not produced" }
+          Copy-Item $installer.FullName "$bundle/Microgifter-HomeServer-Setup.exe" -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Microgifter-HomeServer-Setup
+          path: target/release/bundle/nsis/Microgifter-HomeServer-Setup.exe
+          if-no-files-found: error
+          retention-days: 14

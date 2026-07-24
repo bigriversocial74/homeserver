@@ -6,7 +6,7 @@ Microgifter HomeServer is the private local edge platform for Microgifter. It pr
 
 The approved HomeServer v1 product and technical blueprint was adopted in `bigriversocial74/contactform` through PR #1341 and merge commit `80055acb325a6e5714f12ce9fd7d1283d20965a3`.
 
-The dedicated repository is now the implementation authority. The blueprint will be maintained under `docs/product-technical-blueprint.md`.
+The dedicated repository is now the implementation authority. The blueprint is maintained under `docs/product-technical-blueprint.md`.
 
 ## Primary customer release
 
@@ -15,10 +15,24 @@ The dedicated repository is now the implementation authority. The blueprint will
 - Windows 11 x64 first.
 - Tauri 2 Control Center.
 - Native Windows service.
-- Local API and embedded database.
+- Loopback-only local API and embedded SQLite database.
 - NSIS per-machine installer.
 - Docker retained for later Linux, NAS, development, and appliance deployments.
 
+## Development
+
+On Windows with Node.js, Rust, and the Tauri prerequisites installed:
+
+```powershell
+./scripts/dev-windows.ps1
+```
+
+Build the service, tests, Control Center, and NSIS installer:
+
+```powershell
+./scripts/build-windows.ps1
+```
+
 ## Status
 
-Phase 1 foundation is starting. No production installer has been released.
+Phase 1 installable foundation is under development. No production installer has been released or code signed.
