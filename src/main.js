@@ -70,6 +70,11 @@ function backupRows() {
             ${backup.failure_code ? `<small class="failure-text">${escapeHtml(humanize(backup.failure_code))}</small>` : ""}
           </div>
           <div class="backup-actions">
+            ${
+              backup.kind === "recovery"
+                ? `<button type="button" data-backup-action="export" data-backup-id="${escapeHtml(backup.backup_id)}" data-backup-file-name="${escapeHtml(backup.file_name)}" ${busy ? "disabled" : ""}>Export</button>`
+                : ""
+            }
             <button type="button" data-backup-action="verify" data-backup-id="${escapeHtml(backup.backup_id)}" data-backup-kind="${escapeHtml(backup.kind)}" ${busy ? "disabled" : ""}>Verify</button>
             <button class="danger-button" type="button" data-backup-action="restore" data-backup-id="${escapeHtml(backup.backup_id)}" data-backup-kind="${escapeHtml(backup.kind)}" ${busy ? "disabled" : ""}>Restore</button>
           </div>
@@ -149,7 +154,7 @@ function render() {
           <div class="backup-tools">
             <article class="backup-tool-card">
               <h3>Protected local backup</h3>
-              <p>Creates an encrypted SQLite snapshot using a device key stored in the Windows credential vault.</p>
+              <p>Creates an encrypted SQLite snapshot using a Windows DPAPI-protected device key stored with HomeServer data.</p>
               <button id="create-manual-backup" class="primary-button" type="button" ${busy || !apiAvailable ? "disabled" : ""}>Create backup</button>
             </article>
             <article class="backup-tool-card">
@@ -159,6 +164,16 @@ function render() {
                 <input id="recovery-passphrase" type="password" minlength="12" maxlength="256" autocomplete="new-password" placeholder="Recovery passphrase" required>
                 <input id="recovery-passphrase-confirm" type="password" minlength="12" maxlength="256" autocomplete="new-password" placeholder="Confirm passphrase" required>
                 <button class="primary-button" type="submit" ${busy || !apiAvailable ? "disabled" : ""}>Create recovery package</button>
+              </form>
+            </article>
+            <article class="backup-tool-card import-card">
+              <div>
+                <h3>Recover another installation</h3>
+                <p>Choose an exported <code>.mghbackup</code> package. HomeServer decrypts, validates, and registers it before restore can be staged.</p>
+              </div>
+              <form id="import-recovery-form" class="import-recovery-form">
+                <input id="import-recovery-passphrase" type="password" minlength="12" maxlength="256" autocomplete="current-password" placeholder="Package passphrase" required>
+                <button class="primary-button" type="submit" ${busy || !apiAvailable ? "disabled" : ""}>Choose package to import</button>
               </form>
             </article>
           </div>
@@ -205,6 +220,7 @@ function bindEvents() {
   document.querySelector("#refresh-status")?.addEventListener("click", () => loadAll());
   document.querySelector("#create-manual-backup")?.addEventListener("click", createManualBackup);
   document.querySelector("#recovery-package-form")?.addEventListener("submit", createRecoveryPackage);
+  document.querySelector("#import-recovery-form")?.addEventListener("submit", importRecoveryPackage);
   document.querySelectorAll("[data-backup-action]").forEach((button) => {
     button.addEventListener("click", handleBackupAction);
   });
@@ -246,7 +262,20 @@ async function createRecoveryPackage(event) {
     const result = await invoke("homeserver_create_backup", {
       request: { kind: "recovery", passphrase, note: "Portable recovery package" },
     });
-    return { kind: "success", message: `${result.message} File: ${result.backup.file_name}` };
+    return {
+      kind: "success",
+      message: `${result.message} Use Export beside the package to save a disaster-recovery copy.`,
+    };
+  });
+}
+
+async function importRecoveryPackage(event) {
+  event.preventDefault();
+  const passphrase = document.querySelector("#import-recovery-passphrase")?.value || "";
+  await withBusy(async () => {
+    const result = await invoke("homeserver_import_recovery_package", { passphrase });
+    if (!result) return null;
+    return { kind: "success", message: result.message };
   });
 }
 
@@ -255,6 +284,19 @@ async function handleBackupAction(event) {
   const action = button.dataset.backupAction;
   const backupId = button.dataset.backupId;
   const backupKind = button.dataset.backupKind;
+
+  if (action === "export") {
+    await withBusy(async () => {
+      const destination = await invoke("homeserver_export_recovery_package", {
+        backupId,
+        suggestedFileName: button.dataset.backupFileName || "Microgifter-HomeServer-Recovery.mghbackup",
+      });
+      if (!destination) return null;
+      return { kind: "success", message: `Recovery package exported to ${destination}` };
+    });
+    return;
+  }
+
   let passphrase = null;
   if (backupKind === "recovery") {
     passphrase = window.prompt("Enter the recovery package passphrase:");
