@@ -1,4 +1,4 @@
-use crate::{config::AppConfig, database, http, AppState};
+use crate::{config::AppConfig, database, http, sync, AppState};
 use anyhow::{Context, Result};
 use microgifter_homeserver_core::{API_HOST, API_PORT};
 use std::{net::SocketAddr, sync::Arc};
@@ -13,20 +13,24 @@ pub async fn run(
     info!(data_dir = %config.data_dir.display(), "starting HomeServer service");
 
     let connection = database::initialize(&config.database_path)?;
-    let state = Arc::new(AppState::new(config, connection));
+    let state = Arc::new(AppState::new(config, connection)?);
     let address: SocketAddr = format!("{API_HOST}:{API_PORT}").parse()?;
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .with_context(|| format!("unable to bind local API at {address}"))?;
 
+    let worker = tokio::spawn(sync::run(state.clone(), shutdown.clone()));
     info!(%address, "HomeServer local API ready");
     if let Some(ready) = ready {
         let _ = ready.send(());
     }
 
-    axum::serve(listener, http::router(state))
+    let serve_result = axum::serve(listener, http::router(state))
         .with_graceful_shutdown(wait_for_shutdown(shutdown))
-        .await?;
+        .await;
+    worker.abort();
+    let _ = worker.await;
+    serve_result?;
 
     Ok(())
 }
