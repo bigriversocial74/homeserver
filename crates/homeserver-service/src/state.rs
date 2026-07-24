@@ -131,6 +131,11 @@ impl AppState {
         Ok(CloudConnectionSnapshot::default())
     }
 
+    pub fn credential_vault_self_test(&self) -> Result<()> {
+        let installation_id = database::installation_id(&*self.connection()?)?;
+        secrets::self_test(&installation_id)
+    }
+
     pub fn enqueue_sync(&self, request: EnqueueSyncRequest) -> Result<String> {
         let operation_type = request.operation_type.trim().to_lowercase();
         if !ALLOWED_LOCAL_OPERATIONS.contains(&operation_type.as_str()) {
