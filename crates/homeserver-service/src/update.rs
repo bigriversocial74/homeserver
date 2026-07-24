@@ -6,8 +6,7 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures_util::StreamExt;
 use microgifter_homeserver_core::{
     SignedUpdateManifest, UpdateApplicationPlan, UpdateApplicationResult, UpdateManifestPayload,
-    UpdateRecord, UpdateState, PRODUCT_NAME, SERVICE_NAME, UPDATE_KEY_ID,
-    UPDATE_MANIFEST_SCHEMA_VERSION,
+    UpdateRecord, UpdateState, PRODUCT_NAME, UPDATE_KEY_ID, UPDATE_MANIFEST_SCHEMA_VERSION,
 };
 use semver::Version;
 use sha2::{Digest, Sha256};
@@ -19,7 +18,6 @@ use std::{
     time::Duration,
 };
 use url::Url;
-use uuid::Uuid;
 
 const PINNED_UPDATE_PUBLIC_KEY_BASE64: &str = "nzuIihsgbLnkpjq217CZZm6v8eD9YKBMrLOOTC3jeRc=";
 const MAX_MANIFEST_BYTES: usize = 256 * 1024;
@@ -49,7 +47,10 @@ pub async fn fetch_and_verify_manifest(
         .context("HomeServer update manifest request was rejected")?;
 
     if let Some(length) = response.content_length() {
-        ensure!(length <= MAX_MANIFEST_BYTES as u64, "update manifest exceeds the size limit");
+        ensure!(
+            length <= MAX_MANIFEST_BYTES as u64,
+            "update manifest exceeds the size limit"
+        );
     }
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
@@ -80,7 +81,10 @@ fn verify_manifest_with_key(
     current_version: &str,
     public_key: &VerifyingKey,
 ) -> Result<VerifiedUpdate> {
-    ensure!(manifest.key_id == UPDATE_KEY_ID, "update manifest signing key is not trusted");
+    ensure!(
+        manifest.key_id == UPDATE_KEY_ID,
+        "update manifest signing key is not trusted"
+    );
     let signature_bytes = URL_SAFE_NO_PAD
         .decode(&manifest.signature)
         .context("update manifest signature encoding is invalid")?;
@@ -108,17 +112,27 @@ fn validate_payload(payload: &UpdateManifestPayload, current_version: &str) -> R
         payload.schema_version == UPDATE_MANIFEST_SCHEMA_VERSION,
         "unsupported update manifest schema"
     );
-    ensure!(payload.product == PRODUCT_NAME, "update manifest product is invalid");
+    ensure!(
+        payload.product == PRODUCT_NAME,
+        "update manifest product is invalid"
+    );
     ensure!(
         payload.channel == microgifter_homeserver_core::UpdateChannel::Stable,
         "only stable HomeServer updates are supported"
     );
-    let current = Version::parse(current_version).context("current HomeServer version is invalid")?;
+    let current =
+        Version::parse(current_version).context("current HomeServer version is invalid")?;
     let target = Version::parse(&payload.version).context("update target version is invalid")?;
-    ensure!(target.pre.is_empty(), "stable update cannot contain a prerelease version");
+    ensure!(
+        target.pre.is_empty(),
+        "stable update cannot contain a prerelease version"
+    );
     if let Some(minimum) = &payload.minimum_version {
         let minimum = Version::parse(minimum).context("minimum update version is invalid")?;
-        ensure!(current >= minimum, "this update requires a newer HomeServer upgrade baseline");
+        ensure!(
+            current >= minimum,
+            "this update requires a newer HomeServer upgrade baseline"
+        );
     }
     ensure!(
         payload.published_at_utc <= Utc::now() + ChronoDuration::minutes(10),
@@ -136,7 +150,10 @@ fn validate_payload(payload: &UpdateManifestPayload, current_version: &str) -> R
         (MIN_INSTALLER_BYTES..=MAX_INSTALLER_BYTES).contains(&payload.installer.size_bytes),
         "update installer size is outside the supported range"
     );
-    ensure!(valid_sha256(&payload.installer.sha256), "update installer SHA-256 is invalid");
+    ensure!(
+        valid_sha256(&payload.installer.sha256),
+        "update installer SHA-256 is invalid"
+    );
     ensure!(
         valid_thumbprint(&payload.installer.authenticode_thumbprint),
         "update Authenticode thumbprint is invalid"
@@ -156,12 +173,20 @@ pub async fn download_and_verify_installer(
     record: &UpdateRecord,
     manifest: &SignedUpdateManifest,
 ) -> Result<PathBuf> {
-    ensure!(record.state == UpdateState::Available || record.state == UpdateState::Downloading, "update is not available for download");
-    ensure!(record.version == manifest.payload.version, "update record and manifest version do not match");
+    ensure!(
+        record.state == UpdateState::Available || record.state == UpdateState::Downloading,
+        "update is not available for download"
+    );
+    ensure!(
+        record.version == manifest.payload.version,
+        "update record and manifest version do not match"
+    );
     let url = secure_https_url(&manifest.payload.installer.url, "update installer")?;
-    let destination = config
-        .update_staging_dir
-        .join(format!("{}-{}", record.update_id.replace(':', "-"), manifest.payload.installer.file_name));
+    let destination = config.update_staging_dir.join(format!(
+        "{}-{}",
+        record.update_id.replace(':', "-"),
+        manifest.payload.installer.file_name
+    ));
     let temporary = destination.with_extension("part");
     if temporary.exists() {
         fs::remove_file(&temporary)?;
@@ -204,70 +229,23 @@ pub async fn download_and_verify_installer(
     drop(output);
 
     let hash = hex::encode(hasher.finalize());
-    ensure!(size == manifest.payload.installer.size_bytes, "update installer is truncated");
+    ensure!(
+        size == manifest.payload.installer.size_bytes,
+        "update installer is truncated"
+    );
     ensure!(
         hash.eq_ignore_ascii_case(&manifest.payload.installer.sha256),
         "update installer SHA-256 does not match the signed manifest"
     );
-    verify_authenticode(&temporary, &manifest.payload.installer.authenticode_thumbprint)?;
+    verify_authenticode(
+        &temporary,
+        &manifest.payload.installer.authenticode_thumbprint,
+    )?;
     if destination.exists() {
         fs::remove_file(&destination)?;
     }
     fs::rename(&temporary, &destination)?;
     Ok(destination)
-}
-
-pub fn prepare_and_launch_updater(config: &AppConfig, record: &UpdateRecord) -> Result<PathBuf> {
-    ensure!(record.state == UpdateState::Staged, "update is not staged for application");
-    let installer_path = record
-        .installer_path()
-        .context("staged installer path is missing")?;
-    ensure!(installer_path.starts_with(&config.update_staging_dir), "staged installer is outside managed update storage");
-
-    let current_exe = std::env::current_exe().context("unable to resolve HomeServer service executable")?;
-    let resource_dir = current_exe.parent().context("HomeServer service resource directory is unavailable")?;
-    ensure!(
-        resource_dir.file_name().and_then(|value| value.to_str()) == Some("resources"),
-        "updates can only be applied from an installed HomeServer service"
-    );
-    let install_dir = resource_dir.parent().context("HomeServer installation directory is unavailable")?;
-    let bundled_updater = resource_dir.join(UPDATER_RESOURCE_NAME);
-    ensure!(bundled_updater.is_file(), "HomeServer updater helper is unavailable");
-
-    let run_id = Uuid::new_v4().simple().to_string();
-    let updater_copy = config
-        .update_staging_dir
-        .join(format!("updater-{run_id}.exe"));
-    fs::copy(&bundled_updater, &updater_copy)?;
-    let rollback_dir = config.update_rollback_dir.join(&record.update_id);
-    let archived_installer_path = config
-        .update_installed_dir
-        .join(format!("Microgifter-HomeServer-{}.exe", record.version));
-    let result_path = config.update_result_path();
-    let plan_path = config.update_plan_path();
-    let plan = UpdateApplicationPlan {
-        schema_version: UPDATE_MANIFEST_SCHEMA_VERSION,
-        update_id: record.update_id.clone(),
-        current_version: env!("CARGO_PKG_VERSION").to_owned(),
-        target_version: record.version.clone(),
-        installer_path: installer_path.to_string_lossy().into_owned(),
-        installer_size_bytes: record.installer_size_bytes,
-        installer_sha256: record.installer_sha256.clone(),
-        authenticode_thumbprint: record.authenticode_thumbprint.clone(),
-        install_dir: install_dir.to_string_lossy().into_owned(),
-        data_dir: config.data_dir.to_string_lossy().into_owned(),
-        rollback_dir: rollback_dir.to_string_lossy().into_owned(),
-        archived_installer_path: archived_installer_path.to_string_lossy().into_owned(),
-        result_path: result_path.to_string_lossy().into_owned(),
-        service_name: SERVICE_NAME.to_owned(),
-        health_url: microgifter_homeserver_core::api_base_url(),
-    };
-    atomic_write_json(&plan_path, &plan)?;
-    if result_path.exists() {
-        fs::remove_file(&result_path)?;
-    }
-    launch_detached(&updater_copy, &plan_path)?;
-    Ok(plan_path)
 }
 
 pub fn consume_application_result(config: &AppConfig) -> Result<Option<UpdateApplicationResult>> {
@@ -276,7 +254,10 @@ pub fn consume_application_result(config: &AppConfig) -> Result<Option<UpdateApp
         return Ok(None);
     }
     let metadata = fs::metadata(&path)?;
-    ensure!(metadata.len() > 2 && metadata.len() <= 64 * 1024, "update result size is invalid");
+    ensure!(
+        metadata.len() > 2 && metadata.len() <= 64 * 1024,
+        "update result size is invalid"
+    );
     let result: UpdateApplicationResult = serde_json::from_slice(&fs::read(&path)?)
         .context("update application result is invalid")?;
     ensure!(
@@ -285,14 +266,6 @@ pub fn consume_application_result(config: &AppConfig) -> Result<Option<UpdateApp
     );
     fs::remove_file(path)?;
     Ok(Some(result))
-}
-
-pub fn verify_staged_installer(record: &UpdateRecord) -> Result<()> {
-    let path = record
-        .installer_path()
-        .context("staged installer path is missing")?;
-    verify_file(&path, record.installer_size_bytes, &record.installer_sha256)?;
-    verify_authenticode(&path, &record.authenticode_thumbprint)
 }
 
 fn secure_client(timeout: Duration) -> Result<reqwest::Client> {
@@ -309,7 +282,10 @@ fn secure_client(timeout: Duration) -> Result<reqwest::Client> {
         .connect_timeout(Duration::from_secs(10))
         .timeout(timeout)
         .redirect(redirect)
-        .user_agent(format!("Microgifter-HomeServer/{}", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!(
+            "Microgifter-HomeServer/{}",
+            env!("CARGO_PKG_VERSION")
+        ))
         .build()
         .context("unable to create the HomeServer update client")
 }
@@ -317,7 +293,10 @@ fn secure_client(timeout: Duration) -> Result<reqwest::Client> {
 fn secure_https_url(value: &str, label: &str) -> Result<Url> {
     let url = Url::parse(value).with_context(|| format!("{label} URL is invalid"))?;
     ensure!(url.scheme() == "https", "{label} URL must use HTTPS");
-    ensure!(url.username().is_empty() && url.password().is_none(), "{label} URL cannot contain credentials");
+    ensure!(
+        url.username().is_empty() && url.password().is_none(),
+        "{label} URL cannot contain credentials"
+    );
     ensure!(url.host_str().is_some(), "{label} URL host is missing");
     Ok(url)
 }
@@ -335,7 +314,10 @@ fn decode_pinned_public_key() -> Result<VerifyingKey> {
 fn verify_file(path: &Path, expected_size: u64, expected_sha256: &str) -> Result<()> {
     let metadata = fs::metadata(path)?;
     ensure!(metadata.is_file(), "staged installer is not a regular file");
-    ensure!(metadata.len() == expected_size, "staged installer size does not match the signed manifest");
+    ensure!(
+        metadata.len() == expected_size,
+        "staged installer size does not match the signed manifest"
+    );
     let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 128 * 1024];
@@ -359,11 +341,20 @@ pub fn verify_authenticode(path: &Path, expected_thumbprint: &str) -> Result<()>
 if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate) { exit 20 }
 [Console]::Out.Write($signature.SignerCertificate.Thumbprint)"#;
     let output = Command::new("powershell.exe")
-        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ])
         .env("MG_UPDATE_FILE", path)
         .output()
         .context("unable to execute Windows Authenticode verification")?;
-    ensure!(output.status.success(), "installer does not have a valid trusted Authenticode signature");
+    ensure!(
+        output.status.success(),
+        "installer does not have a valid trusted Authenticode signature"
+    );
     let actual = String::from_utf8(output.stdout)?.trim().replace(' ', "");
     ensure!(
         actual.eq_ignore_ascii_case(expected_thumbprint),
@@ -416,22 +407,11 @@ fn valid_thumbprint(value: &str) -> bool {
     matches!(value.len(), 40 | 64) && value.chars().all(|character| character.is_ascii_hexdigit())
 }
 
-trait UpdateRecordPath {
-    fn installer_path(&self) -> Option<PathBuf>;
-}
-
-impl UpdateRecordPath for UpdateRecord {
-    fn installer_path(&self) -> Option<PathBuf> {
-        let path = self.installer_file_name.strip_prefix("managed:")?;
-        Some(PathBuf::from(path))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
-    use microgifter_homeserver_core::{UpdateChannel, UpdateInstallerContract};
+    use microgifter_homeserver_core::UpdateChannel;
 
     fn signed_manifest(version: &str) -> (SignedUpdateManifest, VerifyingKey) {
         let key = SigningKey::from_bytes(&[7_u8; 32]);

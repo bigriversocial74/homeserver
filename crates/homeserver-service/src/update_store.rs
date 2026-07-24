@@ -28,13 +28,19 @@ pub fn health_check(connection: &Connection) -> Result<()> {
         params![UPDATE_MIGRATION_KEY],
         |row| row.get(0),
     )?;
-    ensure!(migration_count == 1, "signed update migration is not registered exactly once");
+    ensure!(
+        migration_count == 1,
+        "signed update migration is not registered exactly once"
+    );
     let runtime_count: i64 = connection.query_row(
         "SELECT COUNT(*) FROM update_runtime WHERE singleton_id=1",
         [],
         |row| row.get(0),
     )?;
-    ensure!(runtime_count == 1, "signed update runtime state is unavailable");
+    ensure!(
+        runtime_count == 1,
+        "signed update runtime state is unavailable"
+    );
     Ok(())
 }
 
@@ -173,11 +179,7 @@ pub fn mark_applying(
     update_by_id(connection, update_id)
 }
 
-pub fn mark_failure(
-    connection: &Connection,
-    update_id: &str,
-    failure_code: &str,
-) -> Result<()> {
+pub fn mark_failure(connection: &Connection, update_id: &str, failure_code: &str) -> Result<()> {
     set_record_state(
         connection,
         update_id,
@@ -436,18 +438,25 @@ mod tests {
     #[test]
     fn update_migration_and_state_are_idempotent() {
         let directory = tempdir().unwrap();
-        let connection = database::initialize(&directory.path().join("homeserver.sqlite3")).unwrap();
+        let connection =
+            database::initialize(&directory.path().join("homeserver.sqlite3")).unwrap();
         initialize(&connection).unwrap();
         initialize(&connection).unwrap();
         health_check(&connection).unwrap();
-        let status = status(&connection, "https://updates.microgifter.com/manifest.json", false).unwrap();
+        let status = status(
+            &connection,
+            "https://updates.microgifter.com/manifest.json",
+            false,
+        )
+        .unwrap();
         assert_eq!(status.state, UpdateState::Idle);
     }
 
     #[test]
     fn available_update_round_trips_signed_manifest_and_staged_path() {
         let directory = tempdir().unwrap();
-        let connection = database::initialize(&directory.path().join("homeserver.sqlite3")).unwrap();
+        let connection =
+            database::initialize(&directory.path().join("homeserver.sqlite3")).unwrap();
         initialize(&connection).unwrap();
         let stored = save_available(
             &connection,
@@ -460,6 +469,9 @@ mod tests {
         let staged_path = directory.path().join("setup.exe");
         let staged = mark_staged(&connection, &stored.record.update_id, &staged_path).unwrap();
         assert_eq!(staged.record.state, UpdateState::Staged);
-        assert_eq!(staged.installer_path.as_deref(), Some(staged_path.as_path()));
+        assert_eq!(
+            staged.installer_path.as_deref(),
+            Some(staged_path.as_path())
+        );
     }
 }

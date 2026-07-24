@@ -44,14 +44,18 @@ pub fn prepare_and_launch(
     record: &UpdateRecord,
     installer_path: &Path,
 ) -> Result<PathBuf> {
-    ensure!(record.state == microgifter_homeserver_core::UpdateState::Staged, "update is not staged for application");
+    ensure!(
+        record.state == microgifter_homeserver_core::UpdateState::Staged,
+        "update is not staged for application"
+    );
     ensure!(
         installer_path.starts_with(&config.update_staging_dir),
         "staged installer is outside managed update storage"
     );
     verify_staged_installer(record, installer_path)?;
 
-    let current_exe = std::env::current_exe().context("unable to resolve HomeServer service executable")?;
+    let current_exe =
+        std::env::current_exe().context("unable to resolve HomeServer service executable")?;
     let resource_dir = current_exe
         .parent()
         .context("HomeServer service resource directory is unavailable")?;
@@ -63,7 +67,10 @@ pub fn prepare_and_launch(
         .parent()
         .context("HomeServer installation directory is unavailable")?;
     let bundled_updater = resource_dir.join(UPDATER_RESOURCE_NAME);
-    ensure!(bundled_updater.is_file(), "HomeServer updater helper is unavailable");
+    ensure!(
+        bundled_updater.is_file(),
+        "HomeServer updater helper is unavailable"
+    );
 
     let run_id = Uuid::new_v4().simple().to_string();
     let updater_copy = config

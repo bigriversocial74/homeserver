@@ -51,7 +51,10 @@ async fn main() -> Result<()> {
 
     match result.state {
         UpdateState::Succeeded | UpdateState::RolledBack => Ok(()),
-        _ => bail!("{}", result.failure_code.as_deref().unwrap_or("update_failed")),
+        _ => bail!(
+            "{}",
+            result.failure_code.as_deref().unwrap_or("update_failed")
+        ),
     }
 }
 
@@ -59,7 +62,10 @@ fn read_plan(path: &Path) -> Result<UpdateApplicationPlan> {
     let metadata = fs::metadata(path)
         .with_context(|| format!("unable to read update plan metadata at {}", path.display()))?;
     ensure!(metadata.is_file(), "update plan is not a regular file");
-    ensure!(metadata.len() > 2 && metadata.len() <= MAX_PLAN_BYTES, "update plan size is invalid");
+    ensure!(
+        metadata.len() > 2 && metadata.len() <= MAX_PLAN_BYTES,
+        "update plan size is invalid"
+    );
     let bytes = fs::read(path).context("unable to read update plan")?;
     let plan: UpdateApplicationPlan =
         serde_json::from_slice(&bytes).context("update plan JSON is invalid")?;
@@ -72,17 +78,38 @@ fn validate_plan(plan: &UpdateApplicationPlan) -> Result<()> {
         plan.schema_version == UPDATE_MANIFEST_SCHEMA_VERSION,
         "unsupported update plan schema"
     );
-    ensure!(valid_identifier(&plan.update_id), "update identity is invalid");
-    ensure!(!plan.current_version.trim().is_empty(), "current version is missing");
-    ensure!(!plan.target_version.trim().is_empty(), "target version is missing");
-    ensure!(plan.service_name == "MicrogifterHomeServer", "service identity is invalid");
-    ensure!(plan.health_url == "http://127.0.0.1:47831", "health URL must remain loopback-only");
-    ensure!(valid_sha256(&plan.installer_sha256), "installer SHA-256 is invalid");
+    ensure!(
+        valid_identifier(&plan.update_id),
+        "update identity is invalid"
+    );
+    ensure!(
+        !plan.current_version.trim().is_empty(),
+        "current version is missing"
+    );
+    ensure!(
+        !plan.target_version.trim().is_empty(),
+        "target version is missing"
+    );
+    ensure!(
+        plan.service_name == "MicrogifterHomeServer",
+        "service identity is invalid"
+    );
+    ensure!(
+        plan.health_url == "http://127.0.0.1:47831",
+        "health URL must remain loopback-only"
+    );
+    ensure!(
+        valid_sha256(&plan.installer_sha256),
+        "installer SHA-256 is invalid"
+    );
     ensure!(
         (1_000_000..=MAX_INSTALLER_BYTES).contains(&plan.installer_size_bytes),
         "installer size is outside the supported range"
     );
-    ensure!(valid_thumbprint(&plan.authenticode_thumbprint), "Authenticode thumbprint is invalid");
+    ensure!(
+        valid_thumbprint(&plan.authenticode_thumbprint),
+        "Authenticode thumbprint is invalid"
+    );
 
     let data_dir = absolute(Path::new(&plan.data_dir))?;
     let installer_path = absolute(Path::new(&plan.installer_path))?;
@@ -91,12 +118,30 @@ fn validate_plan(plan: &UpdateApplicationPlan) -> Result<()> {
     let result_path = absolute(Path::new(&plan.result_path))?;
     let install_dir = absolute(Path::new(&plan.install_dir))?;
 
-    ensure!(installer_path.starts_with(&data_dir), "installer must be staged inside HomeServer data");
-    ensure!(rollback_dir.starts_with(&data_dir), "rollback directory must be inside HomeServer data");
-    ensure!(archived_installer.starts_with(&data_dir), "installer archive must be inside HomeServer data");
-    ensure!(result_path.starts_with(&data_dir), "update result must be inside HomeServer data");
-    ensure!(!install_dir.starts_with(&data_dir), "install and data directories must be separate");
-    ensure!(install_dir.is_dir(), "HomeServer install directory is unavailable");
+    ensure!(
+        installer_path.starts_with(&data_dir),
+        "installer must be staged inside HomeServer data"
+    );
+    ensure!(
+        rollback_dir.starts_with(&data_dir),
+        "rollback directory must be inside HomeServer data"
+    );
+    ensure!(
+        archived_installer.starts_with(&data_dir),
+        "installer archive must be inside HomeServer data"
+    );
+    ensure!(
+        result_path.starts_with(&data_dir),
+        "update result must be inside HomeServer data"
+    );
+    ensure!(
+        !install_dir.starts_with(&data_dir),
+        "install and data directories must be separate"
+    );
+    ensure!(
+        install_dir.is_dir(),
+        "HomeServer install directory is unavailable"
+    );
     Ok(())
 }
 
@@ -119,7 +164,12 @@ async fn apply_update(plan: &UpdateApplicationPlan) -> Result<UpdateApplicationR
         .status()
         .context("unable to start the staged HomeServer installer")?;
     let installation_healthy = install_result.success()
-        && wait_for_health(&plan.health_url, &plan.target_version, Duration::from_secs(120)).await;
+        && wait_for_health(
+            &plan.health_url,
+            &plan.target_version,
+            Duration::from_secs(120),
+        )
+        .await;
 
     if installation_healthy {
         let archived_installer = PathBuf::from(&plan.archived_installer_path);
@@ -132,7 +182,10 @@ async fn apply_update(plan: &UpdateApplicationPlan) -> Result<UpdateApplicationR
             update_id: plan.update_id.clone(),
             target_version: plan.target_version.clone(),
             state: UpdateState::Succeeded,
-            message: format!("Microgifter HomeServer {} installed and passed health verification.", plan.target_version),
+            message: format!(
+                "Microgifter HomeServer {} installed and passed health verification.",
+                plan.target_version
+            ),
             failure_code: None,
             completed_at_utc: Utc::now(),
         });
@@ -163,12 +216,18 @@ async fn rollback_installation(
 ) -> Result<()> {
     stop_service(&plan.service_name)?;
     if install_dir.exists() {
-        fs::remove_dir_all(install_dir).context("unable to remove failed HomeServer installation")?;
+        fs::remove_dir_all(install_dir)
+            .context("unable to remove failed HomeServer installation")?;
     }
     copy_directory(rollback_dir, install_dir)?;
     start_service(&plan.service_name)?;
     ensure!(
-        wait_for_health(&plan.health_url, &plan.current_version, Duration::from_secs(90)).await,
+        wait_for_health(
+            &plan.health_url,
+            &plan.current_version,
+            Duration::from_secs(90)
+        )
+        .await,
         "binary rollback completed but the previous HomeServer service did not become healthy"
     );
     Ok(())
@@ -178,7 +237,10 @@ fn verify_file(path: &Path, expected_size: u64, expected_sha256: &str) -> Result
     let metadata = fs::metadata(path)
         .with_context(|| format!("unable to inspect staged installer at {}", path.display()))?;
     ensure!(metadata.is_file(), "staged installer is not a regular file");
-    ensure!(metadata.len() == expected_size, "staged installer size does not match the signed manifest");
+    ensure!(
+        metadata.len() == expected_size,
+        "staged installer size does not match the signed manifest"
+    );
 
     let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
@@ -203,11 +265,20 @@ fn verify_authenticode(path: &Path, expected_thumbprint: &str) -> Result<()> {
 if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate) { exit 20 }
 [Console]::Out.Write($signature.SignerCertificate.Thumbprint)"#;
     let output = Command::new("powershell.exe")
-        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ])
         .env("MG_UPDATE_FILE", path)
         .output()
         .context("unable to execute Windows Authenticode verification")?;
-    ensure!(output.status.success(), "staged installer does not have a valid trusted Authenticode signature");
+    ensure!(
+        output.status.success(),
+        "staged installer does not have a valid trusted Authenticode signature"
+    );
     let actual = String::from_utf8(output.stdout)?.trim().replace(' ', "");
     ensure!(
         actual.eq_ignore_ascii_case(expected_thumbprint),
@@ -245,17 +316,28 @@ fn copy_directory_inner(
     for entry in fs::read_dir(source)? {
         let entry = entry?;
         let metadata = fs::symlink_metadata(entry.path())?;
-        ensure!(!metadata.file_type().is_symlink(), "symbolic links are not allowed in update rollback trees");
+        ensure!(
+            !metadata.file_type().is_symlink(),
+            "symbolic links are not allowed in update rollback trees"
+        );
         let target = destination.join(entry.file_name());
         if metadata.is_dir() {
             copy_directory_inner(&entry.path(), &target, file_count, byte_count)?;
         } else if metadata.is_file() {
-            *file_count = file_count.checked_add(1).context("rollback file count overflow")?;
+            *file_count = file_count
+                .checked_add(1)
+                .context("rollback file count overflow")?;
             *byte_count = byte_count
                 .checked_add(metadata.len())
                 .context("rollback byte count overflow")?;
-            ensure!(*file_count <= MAX_ROLLBACK_FILES, "rollback snapshot contains too many files");
-            ensure!(*byte_count <= MAX_ROLLBACK_BYTES, "rollback snapshot exceeds the size limit");
+            ensure!(
+                *file_count <= MAX_ROLLBACK_FILES,
+                "rollback snapshot contains too many files"
+            );
+            ensure!(
+                *byte_count <= MAX_ROLLBACK_BYTES,
+                "rollback snapshot exceeds the size limit"
+            );
             fs::copy(entry.path(), target)?;
         } else {
             bail!("unsupported file type in HomeServer installation directory");
@@ -287,14 +369,20 @@ fn start_service(service_name: &str) -> Result<()> {
         .args(["start", service_name])
         .output()
         .context("unable to start HomeServer service")?;
-    ensure!(output.status.success() || wait_for_service_state(service_name, "RUNNING", Duration::from_secs(5)).is_ok(), "unable to start HomeServer service");
+    ensure!(
+        output.status.success()
+            || wait_for_service_state(service_name, "RUNNING", Duration::from_secs(5)).is_ok(),
+        "unable to start HomeServer service"
+    );
     Ok(())
 }
 
 fn wait_for_service_state(service_name: &str, state: &str, timeout: Duration) -> Result<()> {
     let started = std::time::Instant::now();
     while started.elapsed() < timeout {
-        let output = Command::new("sc.exe").args(["query", service_name]).output()?;
+        let output = Command::new("sc.exe")
+            .args(["query", service_name])
+            .output()?;
         let text = String::from_utf8_lossy(&output.stdout);
         if text.contains(state) {
             return Ok(());

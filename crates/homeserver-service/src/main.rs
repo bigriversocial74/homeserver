@@ -6,14 +6,15 @@ mod database;
 mod http;
 mod recovery_transfer;
 mod update;
+mod update_apply;
 mod update_store;
 
 use anyhow::{anyhow, bail, Context, Result};
 use config::AppConfig;
 use microgifter_homeserver_core::{
     ApplyUpdateRequest, BackupActionResult, BackupCatalog, BackupKind, BackupReferenceRequest,
-    BackupState, CreateBackupRequest, HealthSnapshot, SERVICE_NAME, UpdateActionResult,
-    UpdateState, UpdateStatus,
+    BackupState, CreateBackupRequest, HealthSnapshot, UpdateActionResult, UpdateState,
+    UpdateStatus, SERVICE_NAME,
 };
 use rusqlite::Connection;
 use std::{
@@ -260,11 +261,8 @@ impl AppState {
                 return Err(error);
             }
         };
-        let staged = update_store::mark_staged(
-            &*self.connection()?,
-            &stored.record.update_id,
-            &path,
-        )?;
+        let staged =
+            update_store::mark_staged(&*self.connection()?, &stored.record.update_id, &path)?;
         Ok(UpdateActionResult {
             status: self.update_status()?,
             message: format!(
@@ -282,7 +280,7 @@ impl AppState {
             .installer_path
             .as_deref()
             .context("staged update installer path is unavailable")?;
-        update::verify_staged_installer_at(&stored.record, installer_path)?;
+        update_apply::verify_staged_installer(&stored.record, installer_path)?;
 
         let backup_result = backup::create_backup(
             &*self.connection()?,
@@ -299,17 +297,18 @@ impl AppState {
             "pre-update encrypted backup created"
         );
 
-        let rollback_path = self.config.update_rollback_dir.join(&stored.record.update_id);
+        let rollback_path = self
+            .config
+            .update_rollback_dir
+            .join(&stored.record.update_id);
         update_store::mark_applying(
             &*self.connection()?,
             &stored.record.update_id,
             &rollback_path,
         )?;
-        if let Err(error) = update::prepare_and_launch_updater_at(
-            &self.config,
-            &stored.record,
-            installer_path,
-        ) {
+        if let Err(error) =
+            update_apply::prepare_and_launch(&self.config, &stored.record, installer_path)
+        {
             let _ = update_store::mark_failure(
                 &*self.connection()?,
                 &stored.record.update_id,
