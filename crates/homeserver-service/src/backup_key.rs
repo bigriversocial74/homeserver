@@ -1,5 +1,6 @@
 use crate::config::AppConfig;
 use anyhow::{ensure, Context, Result};
+#[cfg(not(windows))]
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand::{rngs::OsRng, RngCore};
 use sha2::{Digest, Sha256};
@@ -78,8 +79,8 @@ fn entropy(installation_id: &str) -> [u8; 32] {
 fn protect(value: &[u8], installation_id: &str) -> Result<Vec<u8>> {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::{
+        Foundation::LocalFree,
         Security::Cryptography::{CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB},
-        System::Memory::LocalFree,
     };
 
     let mut value = value.to_vec();
@@ -125,10 +126,10 @@ fn protect(value: &[u8], installation_id: &str) -> Result<Vec<u8>> {
 fn unprotect(value: &[u8], installation_id: &str) -> Result<Vec<u8>> {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::{
+        Foundation::LocalFree,
         Security::Cryptography::{
             CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
         },
-        System::Memory::LocalFree,
     };
 
     let mut value = value.to_vec();
