@@ -7,8 +7,8 @@ mod http;
 use anyhow::{anyhow, bail, Context, Result};
 use config::AppConfig;
 use microgifter_homeserver_core::{
-    BackupActionResult, BackupCatalog, BackupReferenceRequest, BackupState, CreateBackupRequest,
-    HealthSnapshot, SERVICE_NAME,
+    BackupActionResult, BackupCatalog, BackupKind, BackupReferenceRequest, BackupState,
+    CreateBackupRequest, HealthSnapshot, SERVICE_NAME,
 };
 use rusqlite::Connection;
 use std::sync::{Mutex, MutexGuard};
@@ -106,7 +106,14 @@ impl AppState {
     }
 
     fn create_backup(&self, request: CreateBackupRequest) -> Result<BackupActionResult> {
-        backup::create_backup(&self.connection()?, &self.config, request)
+        match &request.kind {
+            BackupKind::Manual | BackupKind::Recovery => {
+                backup::create_backup(&self.connection()?, &self.config, request)
+            }
+            BackupKind::Automatic | BackupKind::PreUpdate => {
+                bail!("backup kind is reserved for internal HomeServer operations")
+            }
+        }
     }
 
     fn verify_backup(&self, request: BackupReferenceRequest) -> Result<BackupActionResult> {
