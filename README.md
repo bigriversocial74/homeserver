@@ -38,6 +38,8 @@ Phase 3A adds:
 
 Recovery passphrases are never stored. Automatic and manual backup keys are saved as a Windows DPAPI-protected key file under the HomeServer data directory and can only be decrypted by the Windows account that protected them. Portable recovery packages use an independent Argon2id-derived passphrase key so they can be imported after reinstalling HomeServer or moving to another Windows installation.
 
+The complete Phase 3A threat boundaries, acceptance gates, and fresh-install recovery test matrix are maintained in `docs/quality-audit-phase-3a.md`.
+
 ## Development
 
 On Windows with Node.js, Rust, and the Tauri prerequisites installed:
@@ -51,6 +53,8 @@ Build the service, tests, Control Center, and NSIS installer:
 ```powershell
 ./scripts/build-windows.ps1
 ```
+
+The Windows production-quality workflow validates immutable dependency locks, frontend and PowerShell syntax, native compilation, workspace tests, strict clippy, encrypted backup and recovery, fresh-install package import and restore, NSIS packaging, and installed LocalSystem behavior.
 
 ## Status
 
