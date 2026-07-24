@@ -1,8 +1,8 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use futures_util::StreamExt;
 use microgifter_homeserver_core::{
-    api_base_url, BackupActionResult, BackupCatalog, BackupReferenceRequest, CreateBackupRequest,
-    HealthSnapshot,
+    api_base_url, ApplyUpdateRequest, BackupActionResult, BackupCatalog, BackupReferenceRequest,
+    CreateBackupRequest, HealthSnapshot, UpdateActionResult, UpdateStatus,
 };
 use rfd::AsyncFileDialog;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -22,7 +22,7 @@ struct ApiErrorPayload {
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(2))
-        .timeout(Duration::from_secs(300))
+        .timeout(Duration::from_secs(15 * 60))
         .build()
         .map_err(|error| error.to_string())
 }
@@ -119,6 +119,28 @@ async fn homeserver_stage_restore(
     request: BackupReferenceRequest,
 ) -> Result<BackupActionResult, String> {
     post_json("/v1/backups/stage-restore", &request).await
+}
+
+#[tauri::command]
+async fn homeserver_updates() -> Result<UpdateStatus, String> {
+    get_json("/v1/updates").await
+}
+
+#[tauri::command]
+async fn homeserver_check_updates() -> Result<UpdateActionResult, String> {
+    post_json("/v1/updates/check", &serde_json::json!({})).await
+}
+
+#[tauri::command]
+async fn homeserver_download_update() -> Result<UpdateActionResult, String> {
+    post_json("/v1/updates/download", &serde_json::json!({})).await
+}
+
+#[tauri::command]
+async fn homeserver_apply_update(
+    request: ApplyUpdateRequest,
+) -> Result<UpdateActionResult, String> {
+    post_json("/v1/updates/apply", &request).await
 }
 
 #[tauri::command]
@@ -238,6 +260,10 @@ pub fn run() {
             homeserver_create_backup,
             homeserver_verify_backup,
             homeserver_stage_restore,
+            homeserver_updates,
+            homeserver_check_updates,
+            homeserver_download_update,
+            homeserver_apply_update,
             homeserver_import_recovery_package,
             homeserver_export_recovery_package
         ])
