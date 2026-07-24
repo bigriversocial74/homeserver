@@ -24,6 +24,7 @@ use zeroize::Zeroizing;
 
 const MAX_CONTROL_BODY_BYTES: usize = 64 * 1024;
 const MAX_IMPORT_BODY_BYTES: usize = 320 * 1024 * 1024;
+const MAX_ENCODED_PASSPHRASE_HEADER_BYTES: usize = 4 * 1024;
 const PASSPHRASE_HEADER: &str = "x-mg-recovery-passphrase";
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
@@ -137,9 +138,12 @@ async fn import_recovery_package(
     while let Some(chunk) = stream.next().await {
         let chunk = chunk
             .map_err(|error| action_error("recovery_import_stream_failed", error.into()))?;
-        total_bytes = total_bytes
-            .checked_add(chunk.len())
-            .ok_or_else(|| action_error("recovery_import_too_large", anyhow::anyhow!("recovery package size overflow")))?;
+        total_bytes = total_bytes.checked_add(chunk.len()).ok_or_else(|| {
+            action_error(
+                "recovery_import_too_large",
+                anyhow::anyhow!("recovery package size overflow"),
+            )
+        })?;
         if total_bytes > MAX_IMPORT_BODY_BYTES {
             let _ = tokio::fs::remove_file(&temporary_path).await;
             return Err(action_error(
@@ -228,7 +232,7 @@ fn decode_passphrase(
                 anyhow::anyhow!("recovery passphrase is required"),
             )
         })?;
-    if encoded.len() > 1024 {
+    if encoded.len() > MAX_ENCODED_PASSPHRASE_HEADER_BYTES {
         return Err(action_error(
             "recovery_passphrase_invalid",
             anyhow::anyhow!("recovery passphrase header is too large"),
