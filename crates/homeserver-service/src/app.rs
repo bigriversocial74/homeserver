@@ -1,4 +1,4 @@
-use crate::{backup, config::AppConfig, database, http, AppState};
+use crate::{backup, config::AppConfig, database, http, update, update_store, AppState};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use microgifter_homeserver_core::{API_HOST, API_PORT};
@@ -22,6 +22,7 @@ pub async fn run(
         }
     };
     let connection = database::initialize(&config.database_path)?;
+    update_store::initialize(&connection)?;
     if let Some(outcome) = restore_outcome {
         match outcome {
             backup::RestoreOutcome::Applied {
@@ -52,6 +53,14 @@ pub async fn run(
             }
         }
     }
+    if let Some(result) = update::consume_application_result(&config)? {
+        update_store::record_application_result(&connection, &result)?;
+        info!(
+            update_id = %result.update_id,
+            state = %result.state.as_str(),
+            "HomeServer updater result recorded"
+        );
+    }
 
     let state = Arc::new(AppState::new(config, connection));
     let address: SocketAddr = format!("{API_HOST}:{API_PORT}").parse()?;
@@ -59,7 +68,8 @@ pub async fn run(
         .await
         .with_context(|| format!("unable to bind local API at {address}"))?;
 
-    let scheduler = tokio::spawn(run_backup_scheduler(state.clone(), shutdown.clone()));
+    let backup_scheduler = tokio::spawn(run_backup_scheduler(state.clone(), shutdown.clone()));
+    let update_scheduler = tokio::spawn(run_update_scheduler(state.clone(), shutdown.clone()));
     info!(%address, "HomeServer local API ready");
     if let Some(ready) = ready {
         let _ = ready.send(());
@@ -68,7 +78,8 @@ pub async fn run(
     let result = axum::serve(listener, http::router(state))
         .with_graceful_shutdown(wait_for_shutdown(shutdown))
         .await;
-    scheduler.abort();
+    backup_scheduler.abort();
+    update_scheduler.abort();
     result?;
     Ok(())
 }
@@ -84,6 +95,25 @@ async fn run_backup_scheduler(state: Arc<AppState>, mut shutdown: watch::Receive
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => error!(?error, "scheduled HomeServer backup failed"),
                     Err(error) => error!(?error, "scheduled HomeServer backup task failed"),
+                }
+            }
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+async fn run_update_scheduler(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>) {
+    let start = tokio::time::Instant::now() + Duration::from_secs(5 * 60);
+    let mut interval = tokio::time::interval_at(start, Duration::from_secs(6 * 60 * 60));
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                if let Err(error) = state.check_for_updates().await {
+                    warn!(?error, "scheduled HomeServer update check failed");
                 }
             }
             changed = shutdown.changed() => {
