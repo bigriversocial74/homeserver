@@ -51,18 +51,18 @@ pub fn self_test(installation_id: &str) -> Result<()> {
         .context("unable to open a diagnostic operating-system credential entry")?;
     let mut secret = format!("homeserver-vault-test:{}", Uuid::new_v4().simple());
 
-    let result = (|| -> Result<()> {
-        diagnostic_entry
-            .set_password(&secret)
-            .context("unable to write a diagnostic operating-system credential")?;
-        let stored = diagnostic_entry
-            .get_password()
-            .context("unable to read the diagnostic operating-system credential")?;
-        if stored != secret {
-            bail!("operating-system credential vault returned mismatched data");
-        }
-        Ok(())
-    })();
+    let result = diagnostic_entry
+        .set_password(&secret)
+        .context("unable to write a diagnostic operating-system credential")
+        .and_then(|()| {
+            let stored = diagnostic_entry
+                .get_password()
+                .context("unable to read the diagnostic operating-system credential")?;
+            if stored != secret {
+                bail!("operating-system credential vault returned mismatched data");
+            }
+            Ok(())
+        });
 
     let delete_result = match diagnostic_entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
