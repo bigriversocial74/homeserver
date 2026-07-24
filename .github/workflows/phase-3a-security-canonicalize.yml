@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   patch:
@@ -23,6 +24,8 @@ jobs:
           components: rustfmt
 
       - name: Apply security corrections
+        id: patch_source
+        continue-on-error: true
         shell: python {0}
         run: |
           from pathlib import Path
@@ -34,42 +37,17 @@ jobs:
 
           backup_path = Path("crates/homeserver-service/src/backup.rs")
           text = backup_path.read_text()
-          text = replace_once(
-              text,
-              "use rusqlite::{backup::Backup, Connection};",
-              "use rusqlite::{backup::Backup, Connection, OpenFlags};",
-              "rusqlite imports",
-          )
-          text = replace_once(
-              text,
-              "use zeroize::Zeroize;",
-              "use zeroize::Zeroizing;",
-              "zeroizing import",
-          )
+          text = replace_once(text, "use rusqlite::{backup::Backup, Connection};", "use rusqlite::{backup::Backup, Connection, OpenFlags};", "rusqlite imports")
+          text = replace_once(text, "use zeroize::Zeroize;", "use zeroize::Zeroizing;", "zeroizing import")
           text = replace_once(
               text,
               "        let (mut key, salt) = encryption_key(&installation_id, &kind, passphrase)?;\n        let mut nonce_bytes = [0_u8; 12];",
               "        let (key, salt) = encryption_key(&installation_id, &kind, passphrase)?;\n        let key = Zeroizing::new(key);\n        let mut nonce_bytes = [0_u8; 12];",
               "encryption key guard",
           )
-          text = replace_once(
-              text,
-              "        key.zeroize();\n\n        let header = PackageHeader {",
-              "        let header = PackageHeader {",
-              "encryption key manual zeroize",
-          )
-          text = replace_once(
-              text,
-              "    let mut key = decryption_key(&installation_id, &header, passphrase)?;",
-              "    let key = Zeroizing::new(decryption_key(&installation_id, &header, passphrase)?);",
-              "decryption key guard",
-          )
-          text = replace_once(
-              text,
-              "    key.zeroize();\n    ensure!(",
-              "    ensure!(",
-              "decryption key manual zeroize",
-          )
+          text = replace_once(text, "        key.zeroize();\n\n        let header = PackageHeader {", "        let header = PackageHeader {", "encryption key manual zeroize")
+          text = replace_once(text, "    let mut key = decryption_key(&installation_id, &header, passphrase)?;", "    let key = Zeroizing::new(decryption_key(&installation_id, &header, passphrase)?);", "decryption key guard")
+          text = replace_once(text, "    key.zeroize();\n    ensure!(", "    ensure!(", "decryption key manual zeroize")
           text = replace_once(
               text,
               "            let _ = fs::rename(&config.database_path, failed_path);\n            if let Some(rollback_path) = rollback_path {",
@@ -193,11 +171,17 @@ jobs:
           main_path.write_text(text)
 
       - name: Canonicalize dependency lock and formatting
+        id: canonicalize
+        if: steps.patch_source.outcome == 'success'
+        continue-on-error: true
         run: |
           cargo generate-lockfile
           cargo fmt --all
 
       - name: Commit canonical security corrections
+        id: commit_source
+        if: steps.patch_source.outcome == 'success' && steps.canonicalize.outcome == 'success'
+        continue-on-error: true
         shell: bash
         run: |
           git add Cargo.lock crates/homeserver-core crates/homeserver-service
@@ -209,3 +193,28 @@ jobs:
           git config user.email "buildbot@microgifter.local"
           git commit -m "Harden Phase 3A backup keys and request secrets"
           git push origin HEAD:feature/phase-3-backup-recovery-updates-20260724
+
+      - name: Report security canonicalization
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > security-report.md <<EOF
+          ## Phase 3A security canonicalization
+
+          Commit: `${{ github.sha }}`
+
+          - Source patch: **${{ steps.patch_source.outcome }}**
+          - Lock and formatting: **${{ steps.canonicalize.outcome }}**
+          - Branch commit: **${{ steps.commit_source.outcome }}**
+          EOF
+          gh issue comment 4 --repo bigriversocial74/homeserver --body-file security-report.md
+
+      - name: Enforce successful canonicalization
+        if: always()
+        shell: bash
+        run: |
+          test "${{ steps.patch_source.outcome }}" = "success"
+          test "${{ steps.canonicalize.outcome }}" = "success"
+          test "${{ steps.commit_source.outcome }}" = "success"
