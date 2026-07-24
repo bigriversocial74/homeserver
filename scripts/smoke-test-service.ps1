@@ -57,6 +57,11 @@ try {
         throw "Expected an unpaired connection snapshot"
     }
 
+    $vault = Invoke-RestMethod -Method Post -Uri "$apiBase/v1/diagnostics/credential-vault" -ContentType "application/json" -Body "{}" -TimeoutSec 5
+    if (-not $vault.ok -or $vault.credential_vault -ne "ready") {
+        throw "HomeServer operating-system credential vault self-test failed"
+    }
+
     $idempotencyKey = "ci.settings.snapshot.1"
     $enqueueBody = @{
         operation_type = "local.settings.snapshot"
@@ -108,7 +113,7 @@ try {
         throw "HomeServer SQLite database was not created"
     }
 
-    Write-Host "HomeServer Phase 2 console smoke test passed."
+    Write-Host "HomeServer Phase 2 console and credential-vault smoke test passed."
 }
 finally {
     if ($process -and -not $process.HasExited) {
