@@ -26,64 +26,49 @@ jobs:
       - name: Apply security corrections
         id: patch_source
         continue-on-error: true
-        shell: python {0}
+        shell: bash
         run: |
+          python - <<'PY' 2>&1 | tee security-patch.log
           from pathlib import Path
 
-          def replace_once(text: str, old: str, new: str, label: str) -> str:
+          def replace_required(text: str, old: str, new: str, label: str) -> str:
               if old not in text:
-                  raise SystemExit(f"expected pattern not found: {label}")
+                  raise RuntimeError(f"expected pattern not found: {label}")
               return text.replace(old, new, 1)
 
           backup_path = Path("crates/homeserver-service/src/backup.rs")
           text = backup_path.read_text()
-          text = replace_once(text, "use rusqlite::{backup::Backup, Connection};", "use rusqlite::{backup::Backup, Connection, OpenFlags};", "rusqlite imports")
-          text = replace_once(text, "use zeroize::Zeroize;", "use zeroize::Zeroizing;", "zeroizing import")
-          text = replace_once(
-              text,
-              "        let (mut key, salt) = encryption_key(&installation_id, &kind, passphrase)?;\n        let mut nonce_bytes = [0_u8; 12];",
-              "        let (key, salt) = encryption_key(&installation_id, &kind, passphrase)?;\n        let key = Zeroizing::new(key);\n        let mut nonce_bytes = [0_u8; 12];",
-              "encryption key guard",
-          )
-          text = replace_once(text, "        key.zeroize();\n\n        let header = PackageHeader {", "        let header = PackageHeader {", "encryption key manual zeroize")
-          text = replace_once(text, "    let mut key = decryption_key(&installation_id, &header, passphrase)?;", "    let key = Zeroizing::new(decryption_key(&installation_id, &header, passphrase)?);", "decryption key guard")
-          text = replace_once(text, "    key.zeroize();\n    ensure!(", "    ensure!(", "decryption key manual zeroize")
-          text = replace_once(
-              text,
-              "            let _ = fs::rename(&config.database_path, failed_path);\n            if let Some(rollback_path) = rollback_path {",
-              "            let _ = fs::rename(&config.database_path, failed_path);\n            remove_sqlite_sidecars(&config.database_path);\n            if let Some(rollback_path) = rollback_path {",
-              "rollback sidecar cleanup",
-          )
-          old_key_functions = '''fn load_or_create_device_key(installation_id: &str) -> Result<[u8; 32]> {
-              match load_device_key(installation_id) {
-                  Ok(key) => Ok(key),
-                  Err(_) => {
-                      let mut key = [0_u8; 32];
-                      OsRng.fill_bytes(&mut key);
-                      device_key_entry(installation_id)?
-                          .set_password(&URL_SAFE_NO_PAD.encode(key))
-                          .context("unable to save the HomeServer backup encryption key")?;
-                      Ok(key)
-                  }
-              }
-          }
+          if "use rusqlite::{backup::Backup, Connection, OpenFlags};" not in text:
+              text = replace_required(text, "use rusqlite::{backup::Backup, Connection};", "use rusqlite::{backup::Backup, Connection, OpenFlags};", "rusqlite imports")
+          if "use zeroize::Zeroizing;" not in text:
+              text = replace_required(text, "use zeroize::Zeroize;", "use zeroize::Zeroizing;", "zeroizing import")
+          if "let (mut key, salt)" in text:
+              text = replace_required(
+                  text,
+                  "        let (mut key, salt) = encryption_key(&installation_id, &kind, passphrase)?;\n        let mut nonce_bytes = [0_u8; 12];",
+                  "        let (key, salt) = encryption_key(&installation_id, &kind, passphrase)?;\n        let key = Zeroizing::new(key);\n        let mut nonce_bytes = [0_u8; 12];",
+                  "encryption key guard",
+              )
+          text = text.replace("        key.zeroize();\n\n        let header = PackageHeader {", "        let header = PackageHeader {", 1)
+          if "let mut key = decryption_key" in text:
+              text = replace_required(
+                  text,
+                  "    let mut key = decryption_key(&installation_id, &header, passphrase)?;",
+                  "    let key = Zeroizing::new(decryption_key(&installation_id, &header, passphrase)?);",
+                  "decryption key guard",
+              )
+          text = text.replace("    key.zeroize();\n    ensure!(", "    ensure!(", 1)
+          if "remove_sqlite_sidecars(&config.database_path);\n            if let Some(rollback_path)" not in text:
+              text = replace_required(
+                  text,
+                  "            let _ = fs::rename(&config.database_path, failed_path);\n            if let Some(rollback_path) = rollback_path {",
+                  "            let _ = fs::rename(&config.database_path, failed_path);\n            remove_sqlite_sidecars(&config.database_path);\n            if let Some(rollback_path) = rollback_path {",
+                  "rollback sidecar cleanup",
+              )
 
-          fn load_device_key(installation_id: &str) -> Result<[u8; 32]> {
-              let encoded = device_key_entry(installation_id)?
-                  .get_password()
-                  .context("HomeServer backup encryption key is unavailable")?;
-              let decoded = URL_SAFE_NO_PAD
-                  .decode(encoded)
-                  .context("HomeServer backup encryption key is invalid")?;
-              ensure!(
-                  decoded.len() == 32,
-                  "HomeServer backup encryption key is invalid"
-              );
-              let mut key = [0_u8; 32];
-              key.copy_from_slice(&decoded);
-              Ok(key)
-          }'''
-          new_key_functions = '''fn load_or_create_device_key(installation_id: &str) -> Result<[u8; 32]> {
+          key_start = text.index("fn load_or_create_device_key")
+          key_end = text.index("fn create_sqlite_snapshot", key_start)
+          key_functions = '''fn load_or_create_device_key(installation_id: &str) -> Result<[u8; 32]> {
               let entry = device_key_entry(installation_id)?;
               match entry.get_password() {
                   Ok(encoded) => decode_device_key(&encoded),
@@ -117,46 +102,47 @@ jobs:
               let mut key = [0_u8; 32];
               key.copy_from_slice(&decoded);
               Ok(key)
-          }'''
-          text = replace_once(text, old_key_functions, new_key_functions, "device key handling")
-          text = replace_once(
-              text,
-              '''fn verify_sqlite_database(path: &Path) -> Result<()> {
-              let connection = Connection::open(path)?;
-              database::configure_connection(&connection)?;
-              database::health_check(&connection)
-          }''',
-              '''fn verify_sqlite_database(path: &Path) -> Result<()> {
+          }
+
+          '''
+          text = text[:key_start] + key_functions + text[key_end:]
+
+          verify_start = text.index("fn verify_sqlite_database")
+          verify_end = text.index("fn enforce_retention", verify_start)
+          verify_function = '''fn verify_sqlite_database(path: &Path) -> Result<()> {
               let connection = Connection::open_with_flags(
                   path,
                   OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
               )?;
               database::health_check(&connection)
-          }''',
-              "read-only restore verification",
-          )
+          }
+
+          '''
+          text = text[:verify_start] + verify_function + text[verify_end:]
           backup_path.write_text(text)
 
           main_path = Path("crates/homeserver-service/src/main.rs")
           text = main_path.read_text()
-          text = replace_once(
-              text,
-              '''use microgifter_homeserver_core::{
+          if "BackupCatalog, BackupKind," not in text:
+              text = replace_required(
+                  text,
+                  '''use microgifter_homeserver_core::{
               BackupActionResult, BackupCatalog, BackupReferenceRequest, BackupState, CreateBackupRequest,
               HealthSnapshot, SERVICE_NAME,
           };''',
-              '''use microgifter_homeserver_core::{
+                  '''use microgifter_homeserver_core::{
               BackupActionResult, BackupCatalog, BackupKind, BackupReferenceRequest, BackupState,
               CreateBackupRequest, HealthSnapshot, SERVICE_NAME,
           };''',
-              "BackupKind import",
-          )
-          text = replace_once(
-              text,
-              '''    fn create_backup(&self, request: CreateBackupRequest) -> Result<BackupActionResult> {
+                  "BackupKind import",
+              )
+          if "reserved for internal HomeServer operations" not in text:
+              text = replace_required(
+                  text,
+                  '''    fn create_backup(&self, request: CreateBackupRequest) -> Result<BackupActionResult> {
               backup::create_backup(&self.connection()?, &self.config, request)
           }''',
-              '''    fn create_backup(&self, request: CreateBackupRequest) -> Result<BackupActionResult> {
+                  '''    fn create_backup(&self, request: CreateBackupRequest) -> Result<BackupActionResult> {
               match request.kind {
                   BackupKind::Manual | BackupKind::Recovery => {
                       backup::create_backup(&self.connection()?, &self.config, request)
@@ -166,9 +152,12 @@ jobs:
                   }
               }
           }''',
-              "public backup kind restriction",
-          )
+                  "public backup kind restriction",
+              )
           main_path.write_text(text)
+          print("Phase 3A security source patch applied.")
+          PY
+          exit ${PIPESTATUS[0]}
 
       - name: Canonicalize dependency lock and formatting
         id: canonicalize
@@ -200,15 +189,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cat > security-report.md <<EOF
-          ## Phase 3A security canonicalization
-
-          Commit: `${{ github.sha }}`
-
-          - Source patch: **${{ steps.patch_source.outcome }}**
-          - Lock and formatting: **${{ steps.canonicalize.outcome }}**
-          - Branch commit: **${{ steps.commit_source.outcome }}**
-          EOF
+          {
+            echo "## Phase 3A security canonicalization"
+            echo
+            echo 'Commit: `${{ github.sha }}`'
+            echo
+            echo "- Source patch: **${{ steps.patch_source.outcome }}**"
+            echo "- Lock and formatting: **${{ steps.canonicalize.outcome }}**"
+            echo "- Branch commit: **${{ steps.commit_source.outcome }}**"
+            if test -f security-patch.log; then
+              echo
+              echo '<details><summary>security-patch.log</summary>'
+              echo
+              echo '```text'
+              tail -100 security-patch.log
+              echo '```'
+              echo
+              echo '</details>'
+            fi
+          } > security-report.md
           gh issue comment 4 --repo bigriversocial74/homeserver --body-file security-report.md
 
       - name: Enforce successful canonicalization
