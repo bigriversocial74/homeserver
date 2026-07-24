@@ -77,7 +77,25 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Build Windows service resource
-        run: cargo build --release --package microgifter-homeserver-service --locked
+        shell: pwsh
+        run: |
+          cargo build --release --package microgifter-homeserver-service --locked *> service-build.log
+          $buildCode = $LASTEXITCODE
+          if ($buildCode -ne 0) {
+            Write-Host "Windows service compilation failed. The complete compiler log is attached."
+            Get-Content service-build.log -Tail 120
+            exit $buildCode
+          }
+          Get-Content service-build.log -Tail 20
+
+      - name: Upload Windows service compiler log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: service-build-log
+          path: service-build.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Stage Windows service for desktop targets
         shell: pwsh
