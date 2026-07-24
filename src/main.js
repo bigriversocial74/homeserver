@@ -4,6 +4,7 @@ import "./styles.css";
 const app = document.querySelector("#app");
 let statusSnapshot = null;
 let backupCatalog = null;
+let updateStatus = null;
 let notice = null;
 let busy = false;
 
@@ -13,6 +14,7 @@ const serviceRows = [
   ["Local database", "Embedded operational storage for local state."],
   ["Microgifter connection", "Cloud pairing and synchronization foundation."],
   ["Backup service", "Encrypted backups, recovery packages, and staged restore."],
+  ["Update service", "Signed release discovery, verified staging, and automatic rollback."],
   ["Model Center", "Optional local AI runtime management."],
 ];
 
@@ -58,7 +60,7 @@ function backupRows() {
     .map(
       (backup) => `
         <article class="backup-row">
-          <div class="backup-kind">${escapeHtml(backup.kind === "recovery" ? "RP" : "BK")}</div>
+          <div class="backup-kind">${escapeHtml(backup.kind === "recovery" ? "RP" : backup.kind === "pre_update" ? "UP" : "BK")}</div>
           <div class="backup-copy">
             <div class="backup-title">
               <strong>${escapeHtml(humanize(backup.kind))}</strong>
@@ -81,6 +83,72 @@ function backupRows() {
         </article>`,
     )
     .join("");
+}
+
+function updatePanel(apiAvailable) {
+  const state = updateStatus?.state || "idle";
+  const release = updateStatus?.update;
+  const canCheck = apiAvailable && !busy && !["downloading", "applying"].includes(state);
+  const canDownload = apiAvailable && !busy && state === "available" && release;
+  const canApply = apiAvailable && !busy && state === "staged" && release;
+  const signer = release?.authenticode_thumbprint
+    ? `${release.authenticode_thumbprint.slice(0, 12)}…${release.authenticode_thumbprint.slice(-8)}`
+    : "Not staged";
+
+  return `
+    <section class="panel update-panel" id="updates">
+      <div class="panel-heading">
+        <div><p class="eyebrow">Verified Windows delivery</p><h2>Signed Updates</h2></div>
+        <span class="pill ${statusClass(state)}">${escapeHtml(humanize(state))}</span>
+      </div>
+
+      <div class="update-summary">
+        <div>
+          <span>Installed version</span>
+          <strong>${escapeHtml(updateStatus?.current_version || statusSnapshot?.version || "0.1.0")}</strong>
+        </div>
+        <div>
+          <span>Stable release</span>
+          <strong>${escapeHtml(release?.version || "No newer release")}</strong>
+        </div>
+        <div>
+          <span>Last checked</span>
+          <strong>${escapeHtml(formatDate(updateStatus?.last_checked_at_utc))}</strong>
+        </div>
+        <div>
+          <span>Authenticode signer</span>
+          <strong class="mono">${escapeHtml(signer)}</strong>
+        </div>
+      </div>
+
+      ${updateStatus?.last_error ? `<div class="notice warning">Update warning: ${escapeHtml(humanize(updateStatus.last_error))}</div>` : ""}
+      ${state === "applying" || updateStatus?.apply_pending ? `<div class="notice warning"><strong>Update application is active.</strong> The Windows service will stop, install the verified release, and either pass health verification or restore the previous binaries automatically.</div>` : ""}
+      ${state === "rolled_back" ? `<div class="notice warning"><strong>Automatic rollback completed.</strong> The attempted release did not pass health verification, so the previous HomeServer binaries were restored.</div>` : ""}
+      ${state === "succeeded" ? `<div class="notice success"><strong>Update verified.</strong> The installed release restarted and passed the loopback health and version checks.</div>` : ""}
+
+      <div class="update-release-card">
+        <div>
+          <p class="eyebrow">Release integrity</p>
+          <h3>${release ? `Microgifter HomeServer ${escapeHtml(release.version)}` : "Stable release channel"}</h3>
+          <p>${escapeHtml(release?.release_notes || "Check the pinned Microgifter release channel for a newer signed HomeServer installer.")}</p>
+        </div>
+        <dl>
+          <div><dt>Channel</dt><dd>${escapeHtml(humanize(updateStatus?.channel || "stable"))}</dd></div>
+          <div><dt>Installer</dt><dd>${escapeHtml(release?.installer_file_name || "Not downloaded")}</dd></div>
+          <div><dt>Size</dt><dd>${escapeHtml(formatBytes(release?.installer_size_bytes))}</dd></div>
+          <div><dt>Manifest</dt><dd>Ed25519 pinned key</dd></div>
+          <div><dt>Installer</dt><dd>SHA-256 + Authenticode</dd></div>
+          <div><dt>Rollback</dt><dd>Health-confirmed binary restore</dd></div>
+        </dl>
+      </div>
+
+      <div class="update-actions">
+        <button id="check-updates" type="button" ${canCheck ? "" : "disabled"}>Check for updates</button>
+        <button id="download-update" class="primary-button" type="button" ${canDownload ? "" : "disabled"}>Download verified installer</button>
+        <button id="apply-update" class="danger-button" type="button" ${canApply ? "" : "disabled"}>Apply update</button>
+      </div>
+      <div class="security-note"><strong>Update boundary:</strong> the Control Center cannot choose a URL, public key, installer path, hash, or signer. Those values must come from the pinned, signed release manifest. A pre-update encrypted backup is created before the helper is launched.</div>
+    </section>`;
 }
 
 function render() {
@@ -142,8 +210,10 @@ function render() {
           <article><span>Cloud connection</span><strong>${escapeHtml(humanize(snapshot?.cloud || "not_paired"))}</strong><small>Pairing is developed separately</small></article>
           <article><span>Sync queue</span><strong>${snapshot?.pending_sync ?? 0}</strong><small>Waiting operations</small></article>
           <article><span>Last backup</span><strong class="metric-date">${escapeHtml(formatDate(snapshot?.last_backup))}</strong><small>${intervalHours}-hour automatic schedule</small></article>
-          <article><span>Backup state</span><strong>${escapeHtml(humanize(snapshot?.backup || "ready"))}</strong><small>${retentionCount} automatic backups retained</small></article>
+          <article><span>Update state</span><strong>${escapeHtml(humanize(snapshot?.update || "idle"))}</strong><small>${escapeHtml(snapshot?.update_version || "Stable channel")}</small></article>
         </section>
+
+        ${updatePanel(apiAvailable)}
 
         <section class="panel backup-panel" id="backups">
           <div class="panel-heading">
@@ -195,7 +265,7 @@ function render() {
           <div class="service-list">
             ${serviceRows
               .map(([name, description], index) => {
-                const running = index < 3 ? apiAvailable : index === 4 && apiAvailable;
+                const running = index < 3 || (index === 4 && apiAvailable) || (index === 5 && apiAvailable);
                 return `<article class="service-row">
                   <div class="service-icon">${index + 1}</div>
                   <div><strong>${escapeHtml(name)}</strong><p>${escapeHtml(description)}</p></div>
@@ -221,6 +291,9 @@ function bindEvents() {
   document.querySelector("#create-manual-backup")?.addEventListener("click", createManualBackup);
   document.querySelector("#recovery-package-form")?.addEventListener("submit", createRecoveryPackage);
   document.querySelector("#import-recovery-form")?.addEventListener("submit", importRecoveryPackage);
+  document.querySelector("#check-updates")?.addEventListener("click", checkUpdates);
+  document.querySelector("#download-update")?.addEventListener("click", downloadUpdate);
+  document.querySelector("#apply-update")?.addEventListener("click", applyUpdate);
   document.querySelectorAll("[data-backup-action]").forEach((button) => {
     button.addEventListener("click", handleBackupAction);
   });
@@ -237,6 +310,37 @@ async function withBusy(action) {
   } finally {
     busy = false;
     await loadAll(false);
+  }
+}
+
+async function checkUpdates() {
+  await withBusy(async () => {
+    const result = await invoke("homeserver_check_updates");
+    return { kind: "success", message: result.message };
+  });
+}
+
+async function downloadUpdate() {
+  await withBusy(async () => {
+    const result = await invoke("homeserver_download_update");
+    return { kind: "success", message: result.message };
+  });
+}
+
+async function applyUpdate() {
+  const confirmation = window.prompt("Type UPDATE to create a pre-update backup and apply this verified HomeServer release:");
+  if (confirmation !== "UPDATE") return;
+  busy = true;
+  notice = null;
+  render();
+  try {
+    const result = await invoke("homeserver_apply_update", { request: { confirmation } });
+    notice = { kind: "success", message: result.message };
+  } catch (error) {
+    notice = { kind: "warning", message: String(error) };
+  } finally {
+    busy = false;
+    render();
   }
 }
 
@@ -328,13 +432,15 @@ async function handleBackupAction(event) {
 async function loadAll(clearNotice = true) {
   if (clearNotice) notice = null;
   try {
-    [statusSnapshot, backupCatalog] = await Promise.all([
+    [statusSnapshot, backupCatalog, updateStatus] = await Promise.all([
       invoke("homeserver_status"),
       invoke("homeserver_backups"),
+      invoke("homeserver_updates"),
     ]);
   } catch (error) {
     statusSnapshot = null;
     backupCatalog = null;
+    updateStatus = null;
     notice = { kind: "warning", message: `HomeServer service unavailable: ${String(error)}` };
   }
   render();
