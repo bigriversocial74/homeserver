@@ -60,7 +60,7 @@ The Windows production-quality workflow validates immutable dependency locks, fr
 
 - Phase 1 installable foundation: merged and validated.
 - Phase 2 cloud pairing and synchronization: active draft PR, coordinated with a separate Microgifter cloud PR.
-- Phase 3A backup and recovery: active scoped branch.
+- Phase 3A backup and recovery: active draft PR #5.
 - Phase 3B signed updates: planned after Phase 3A.
 
 No public production installer has been released or code signed.
