@@ -3,7 +3,6 @@ use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::Utc;
 use ed25519_dalek::{Signer, SigningKey};
-use microgifter_homeserver_core::CloudConnectionSnapshot;
 use rand::rngs::OsRng;
 use reqwest::{Method, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -174,15 +173,16 @@ impl CloudClient {
             .cloud_base_url
             .as_deref()
             .context("HomeServer is not paired")?;
+        let sync_operations = operations
+            .iter()
+            .map(|operation| SyncOperation {
+                idempotency_key: operation.idempotency_key.clone(),
+                operation_type: operation.operation_type.clone(),
+                payload: operation.payload.clone(),
+            })
+            .collect::<Vec<_>>();
         let body = serde_json::to_string(&SyncPayload {
-            operations: &operations
-                .iter()
-                .map(|operation| SyncOperation {
-                    idempotency_key: operation.idempotency_key.clone(),
-                    operation_type: operation.operation_type.clone(),
-                    payload: operation.payload.clone(),
-                })
-                .collect::<Vec<_>>(),
+            operations: &sync_operations,
         })?;
         let data: SyncData = self
             .signed_request(Method::POST, base_url, SYNC_PATH, &body, record, secrets)
@@ -249,16 +249,36 @@ impl CloudClient {
     }
 }
 
-fn canonical_request(method: &Method, path: &str, timestamp: &str, nonce: &str, body: &str) -> String {
+fn canonical_request(
+    method: &Method,
+    path: &str,
+    timestamp: &str,
+    nonce: &str,
+    body: &str,
+) -> String {
     let body_hash = format!("{:x}", Sha256::digest(body.as_bytes()));
-    format!("{}\n{}\n{}\n{}\n{}", method.as_str(), path, timestamp, nonce, body_hash)
+    format!(
+        "{}\n{}\n{}\n{}\n{}",
+        method.as_str(),
+        path,
+        timestamp,
+        nonce,
+        body_hash
+    )
 }
 
 async fn decode_response<T: DeserializeOwned>(response: reqwest::Response) -> Result<T> {
     let status = response.status();
-    let text = response.text().await.context("unable to read Microgifter response")?;
-    let envelope: ApiEnvelope<T> = serde_json::from_str(&text)
-        .with_context(|| format!("Microgifter returned an invalid response ({})", status.as_u16()))?;
+    let text = response
+        .text()
+        .await
+        .context("unable to read Microgifter response")?;
+    let envelope: ApiEnvelope<T> = serde_json::from_str(&text).with_context(|| {
+        format!(
+            "Microgifter returned an invalid response ({})",
+            status.as_u16()
+        )
+    })?;
     if !status.is_success() || !envelope.ok {
         let prefix = if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
             "cloud_authentication_failed"
@@ -274,12 +294,18 @@ async fn decode_response<T: DeserializeOwned>(response: reqwest::Response) -> Re
 
 pub fn normalize_cloud_base_url(value: &str) -> Result<String> {
     let mut url = Url::parse(value.trim()).context("cloud URL is invalid")?;
-    if url.username() != "" || url.password().is_some() || url.query().is_some() || url.fragment().is_some() {
+    if url.username() != ""
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
         bail!("cloud URL cannot include credentials, a query, or a fragment");
     }
     let host = url.host_str().context("cloud URL host is required")?;
     let loopback = host.eq_ignore_ascii_case("localhost")
-        || host.parse::<IpAddr>().is_ok_and(|address| address.is_loopback());
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
     match url.scheme() {
         "https" => {}
         "http" if loopback => {}
@@ -292,7 +318,9 @@ pub fn normalize_cloud_base_url(value: &str) -> Result<String> {
 }
 
 pub fn authentication_failed(error: &anyhow::Error) -> bool {
-    error.to_string().starts_with("cloud_authentication_failed:")
+    error
+        .to_string()
+        .starts_with("cloud_authentication_failed:")
 }
 
 #[cfg(test)]
@@ -302,17 +330,33 @@ mod tests {
 
     #[test]
     fn cloud_url_requires_https_except_loopback() {
-        assert_eq!(normalize_cloud_base_url("https://microgifter.com/").unwrap(), "https://microgifter.com");
+        assert_eq!(
+            normalize_cloud_base_url("https://microgifter.com/").unwrap(),
+            "https://microgifter.com"
+        );
         assert!(normalize_cloud_base_url("http://microgifter.com").is_err());
-        assert_eq!(normalize_cloud_base_url("http://127.0.0.1:49001/").unwrap(), "http://127.0.0.1:49001");
+        assert_eq!(
+            normalize_cloud_base_url("http://127.0.0.1:49001/").unwrap(),
+            "http://127.0.0.1:49001"
+        );
     }
 
     #[test]
     fn canonical_signature_is_verifiable() {
         let key = SigningKey::generate(&mut OsRng);
-        let canonical = canonical_request(&Method::POST, SYNC_PATH, "100", "nonce-value-1234", "{\"x\":1}");
+        let canonical = canonical_request(
+            &Method::POST,
+            SYNC_PATH,
+            "100",
+            "nonce-value-1234",
+            "{\"x\":1}",
+        );
         let signature = key.sign(canonical.as_bytes());
-        key.verifying_key().verify(canonical.as_bytes(), &signature).unwrap();
-        assert!(canonical.ends_with("5041bf1f713df204784353e82f6a4a535e88739473220b8b4e8f1f6b8f4f42a4"));
+        key.verifying_key()
+            .verify(canonical.as_bytes(), &signature)
+            .unwrap();
+        assert!(canonical.ends_with(
+            "5041bf1f713df204784353e82f6a4a535931cb64f1f4b4a5aeaffcb720918b22"
+        ));
     }
 }
