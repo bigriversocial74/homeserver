@@ -101,12 +101,12 @@ pub fn create_backup(
         timestamp,
         &backup_id[..8]
     );
-    let destination_directory = match request.kind {
+    let destination_directory = match &request.kind {
         BackupKind::Recovery => &config.recovery_dir,
         _ => &config.backups_dir,
     };
     let package_path = destination_directory.join(&file_name);
-    let encryption = match request.kind {
+    let encryption = match &request.kind {
         BackupKind::Recovery => "passphrase_argon2id_aes256gcm",
         _ => "device_key_aes256gcm",
     };
@@ -208,7 +208,7 @@ fn create_backup_inner(
         let key = Zeroizing::new(key);
         let mut nonce_bytes = [0_u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
-        let cipher = Aes256Gcm::new_from_slice(&key)
+        let cipher = Aes256Gcm::new_from_slice(key.as_ref())
             .map_err(|_| anyhow::anyhow!("unable to initialize backup encryption"))?;
         let ciphertext = cipher
             .encrypt(Nonce::from_slice(&nonce_bytes), archive.as_ref())
@@ -290,7 +290,10 @@ pub fn stage_restore(
     let pending_database = config.pending_restore_database_path();
     let pending_temp = pending_database.with_extension("sqlite3.tmp");
     fs::copy(&extracted.database_path, &pending_temp)?;
-    File::open(&pending_temp)?.sync_all()?;
+    File::options()
+        .write(true)
+        .open(&pending_temp)?
+        .sync_all()?;
     fs::rename(&pending_temp, &pending_database)?;
     fs::remove_dir_all(&extracted.directory)?;
 
@@ -398,7 +401,7 @@ pub fn create_automatic_if_due(
 }
 
 fn validate_request(request: &CreateBackupRequest) -> Result<()> {
-    match request.kind {
+    match &request.kind {
         BackupKind::Recovery => validate_passphrase(request.passphrase.as_deref())?,
         _ => ensure!(
             request.passphrase.as_deref().unwrap_or_default().is_empty(),
@@ -463,7 +466,8 @@ fn decryption_key(
 }
 
 fn derive_passphrase_key(passphrase: &str, salt: &[u8; 16]) -> Result<[u8; 32]> {
-    let params = Params::new(65_536, 3, 1, Some(32))?;
+    let params = Params::new(65_536, 3, 1, Some(32))
+        .map_err(|error| anyhow::anyhow!("invalid Argon2id parameters: {error}"))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut key = [0_u8; 32];
     argon2
@@ -523,7 +527,10 @@ fn create_sqlite_snapshot(source: &Connection, destination_path: &Path) -> Resul
     database::configure_connection(&destination)?;
     database::health_check(&destination)?;
     destination.close().map_err(|(_, error)| error)?;
-    File::open(destination_path)?.sync_all()?;
+    File::options()
+        .write(true)
+        .open(destination_path)?
+        .sync_all()?;
     Ok(())
 }
 
@@ -578,7 +585,7 @@ fn decrypt_and_extract(
         .decode(&header.nonce_base64)
         .context("backup nonce is invalid")?;
     ensure!(nonce.len() == 12, "backup nonce is invalid");
-    let cipher = Aes256Gcm::new_from_slice(&key)
+    let cipher = Aes256Gcm::new_from_slice(key.as_ref())
         .map_err(|_| anyhow::anyhow!("unable to initialize backup decryption"))?;
     let archive = cipher
         .decrypt(Nonce::from_slice(&nonce), ciphertext)

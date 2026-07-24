@@ -100,7 +100,7 @@ impl AppState {
 
     fn backup_catalog(&self) -> Result<BackupCatalog> {
         database::backup_catalog(
-            &self.connection()?,
+            &*self.connection()?,
             self.config.pending_restore_plan_path().exists(),
         )
     }
@@ -108,7 +108,7 @@ impl AppState {
     fn create_backup(&self, request: CreateBackupRequest) -> Result<BackupActionResult> {
         match &request.kind {
             BackupKind::Manual | BackupKind::Recovery => {
-                backup::create_backup(&self.connection()?, &self.config, request)
+                backup::create_backup(&*self.connection()?, &self.config, request)
             }
             BackupKind::Automatic | BackupKind::PreUpdate => {
                 bail!("backup kind is reserved for internal HomeServer operations")
@@ -117,15 +117,15 @@ impl AppState {
     }
 
     fn verify_backup(&self, request: BackupReferenceRequest) -> Result<BackupActionResult> {
-        backup::verify_backup(&self.connection()?, &self.config, request)
+        backup::verify_backup(&*self.connection()?, &self.config, request)
     }
 
     fn stage_restore(&self, request: BackupReferenceRequest) -> Result<BackupActionResult> {
-        backup::stage_restore(&self.connection()?, &self.config, request)
+        backup::stage_restore(&*self.connection()?, &self.config, request)
     }
 
     fn create_automatic_backup_if_due(&self) -> Result<()> {
-        if let Some(record) = backup::create_automatic_if_due(&self.connection()?, &self.config)? {
+        if let Some(record) = backup::create_automatic_if_due(&*self.connection()?, &self.config)? {
             info!(backup_id = %record.backup_id, "scheduled encrypted backup created");
         }
         Ok(())
