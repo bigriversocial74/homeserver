@@ -49,7 +49,16 @@ jobs:
         run: cargo clippy --package microgifter-homeserver-core --package microgifter-homeserver-service --all-targets -- -D warnings
 
       - name: Build NSIS installer
-        run: npm run tauri:build
+        shell: pwsh
+        run: |
+          npm run tauri:build *> tauri-build.log
+          $buildCode = $LASTEXITCODE
+          if ($buildCode -ne 0) {
+            Write-Host "Tauri/NSIS diagnostic tail:"
+            Get-Content tauri-build.log -Tail 140
+            exit $buildCode
+          }
+          Get-Content tauri-build.log -Tail 40
 
       - name: Normalize installer filename
         shell: pwsh
