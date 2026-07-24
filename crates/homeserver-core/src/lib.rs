@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub const PRODUCT_NAME: &str = "Microgifter HomeServer";
 pub const SERVICE_NAME: &str = "MicrogifterHomeServer";
@@ -18,6 +19,76 @@ pub enum ServiceState {
     Offline,
     NeedsAttention,
     Stopped,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudConnectionState {
+    NotPaired,
+    Pairing,
+    Connected,
+    Degraded,
+    Revoked,
+}
+
+impl CloudConnectionState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NotPaired => "not_paired",
+            Self::Pairing => "pairing",
+            Self::Connected => "connected",
+            Self::Degraded => "degraded",
+            Self::Revoked => "revoked",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CloudConnectionSnapshot {
+    pub state: CloudConnectionState,
+    pub cloud_base_url: Option<String>,
+    pub device_id: Option<String>,
+    pub scopes: Vec<String>,
+    pub paired_at_utc: Option<String>,
+    pub last_success_utc: Option<String>,
+    pub last_error: Option<String>,
+}
+
+impl Default for CloudConnectionSnapshot {
+    fn default() -> Self {
+        Self {
+            state: CloudConnectionState::NotPaired,
+            cloud_base_url: None,
+            device_id: None,
+            scopes: Vec::new(),
+            paired_at_utc: None,
+            last_success_utc: None,
+            last_error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PairCloudRequest {
+    pub cloud_base_url: String,
+    pub pairing_code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EnqueueSyncRequest {
+    pub operation_type: String,
+    #[serde(default)]
+    pub payload: Value,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SyncRunSnapshot {
+    pub processed: u64,
+    pub accepted: u64,
+    pub rejected: u64,
+    pub review: u64,
+    pub pending: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -46,6 +117,11 @@ impl HealthSnapshot {
 
     pub fn offline(reason: impl Into<String>) -> Self {
         Self::new(PRODUCT_NAME, ServiceState::Offline, false, reason)
+    }
+
+    pub fn with_cloud(mut self, cloud: &CloudConnectionSnapshot) -> Self {
+        self.cloud = cloud.state.as_str().to_owned();
+        self
     }
 
     fn new(
@@ -92,5 +168,19 @@ mod tests {
         assert_eq!(snapshot.state, ServiceState::NeedsAttention);
         assert!(snapshot.api_available);
         assert_eq!(snapshot.database, "integrity_check_failed");
+    }
+
+    #[test]
+    fn cloud_state_updates_health_snapshot() {
+        let cloud = CloudConnectionSnapshot {
+            state: CloudConnectionState::Connected,
+            ..CloudConnectionSnapshot::default()
+        };
+        assert_eq!(
+            HealthSnapshot::running(PRODUCT_NAME, "ready")
+                .with_cloud(&cloud)
+                .cloud,
+            "connected"
+        );
     }
 }
