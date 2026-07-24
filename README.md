@@ -26,13 +26,17 @@ Phase 3A adds:
 - Automatic encrypted SQLite backups.
 - Manual protected backups.
 - Portable passphrase-encrypted recovery packages.
+- Native Control Center export and import dialogs.
+- Streamed package transfer through the loopback-only service API.
+- Fresh-install recovery from an exported `.mghbackup` package.
 - Package, hash, archive, and database integrity verification.
+- Failed-import cleanup with no residual catalog record or managed package.
 - Retention controls.
 - Staged restore on service restart.
 - Preservation of the current database for rollback.
 - Automatic rollback when a restored database fails integrity checks.
 
-Recovery passphrases are never stored. Device backup keys are stored in the operating-system credential vault.
+Recovery passphrases are never stored. Automatic and manual backup keys are saved as a Windows DPAPI-protected key file under the HomeServer data directory and can only be decrypted by the Windows account that protected them. Portable recovery packages use an independent Argon2id-derived passphrase key so they can be imported after reinstalling HomeServer or moving to another Windows installation.
 
 ## Development
 
