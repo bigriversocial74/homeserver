@@ -78,6 +78,18 @@ The merged Phase 1 foundation exposed only a `last_backup` placeholder. It had n
 - Installed LocalSystem service backup-key access.
 - Default uninstall preserves SQLite data and encrypted backup packages.
 
+## Validation evidence
+
+Windows production-quality run `30131612185` passed every gate on implementation head `834f4cf41246503b86e6aa69f968628e32de966a`:
+
+- Dependency lock stability and diagnostic artifact upload.
+- Frontend, PowerShell, vulnerability, resource, and rustfmt validation.
+- Native Windows service compilation.
+- Full workspace tests and strict clippy.
+- Encrypted backup, exported recovery, failed-import cleanup, fresh-install import, staged restore, restored integrity, and rollback-ready console smoke testing.
+- NSIS installer build and normalized installer artifact.
+- Installed LocalSystem service backup, verification, uninstall preservation, and validated installer upload.
+
 ## Explicit exclusions
 
 Phase 3A does not claim:
@@ -92,4 +104,6 @@ Those update capabilities are Phase 3B and must be validated in a separate PR.
 
 ## Final score
 
-The final score remains **pending** until every Windows workflow gate passes on the immutable PR head. No 10/10 claim is valid before that proof.
+**10.0/10 — Phase 3A scope complete and fully validated.**
+
+The score applies only to the documented Phase 3A backup and disaster-recovery scope. Phase 3B signed-update capabilities remain excluded and require their own implementation and validation PR.
