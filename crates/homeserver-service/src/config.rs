@@ -15,6 +15,7 @@ pub struct AppConfig {
     pub recovery_dir: PathBuf,
     pub restore_dir: PathBuf,
     pub staging_dir: PathBuf,
+    pub imports_dir: PathBuf,
     pub server_name: String,
 }
 
@@ -42,6 +43,7 @@ impl AppConfig {
         let recovery_dir = data_dir.join("recovery-packages");
         let restore_dir = data_dir.join("restore");
         let staging_dir = data_dir.join("staging");
+        let imports_dir = staging_dir.join("recovery-imports");
         for directory in [
             &data_dir,
             &logs_dir,
@@ -49,6 +51,7 @@ impl AppConfig {
             &recovery_dir,
             &restore_dir,
             &staging_dir,
+            &imports_dir,
         ] {
             std::fs::create_dir_all(directory)
                 .with_context(|| format!("unable to create {}", directory.display()))?;
@@ -66,6 +69,7 @@ impl AppConfig {
             recovery_dir,
             restore_dir,
             staging_dir,
+            imports_dir,
             server_name,
         })
     }
@@ -76,6 +80,11 @@ impl AppConfig {
 
     pub fn pending_restore_database_path(&self) -> PathBuf {
         self.restore_dir.join("pending-restore.sqlite3")
+    }
+
+    pub fn new_import_path(&self) -> PathBuf {
+        self.imports_dir
+            .join(format!("recovery-import-{}.mghbackup", uuid::Uuid::new_v4().simple()))
     }
 }
 
