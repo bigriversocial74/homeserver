@@ -1,0 +1,184 @@
+name: Phase 3A Security Canonicalization
+
+on:
+  push:
+    branches:
+      - feature/phase-3-backup-recovery-updates-20260724
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-3-backup-recovery-updates-20260724
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+
+      - name: Apply security corrections
+        shell: python
+        run: |
+          from pathlib import Path
+
+          backup_path = Path('crates/homeserver-service/src/backup.rs')
+          text = backup_path.read_text()
+          replacements = [
+              ('use rusqlite::{backup::Backup, Connection};', 'use rusqlite::{backup::Backup, Connection, OpenFlags};'),
+              ('use zeroize::Zeroize;', 'use zeroize::Zeroizing;'),
+              ('''        let (mut key, salt) = encryption_key(&installation_id, &kind, passphrase)?;
+          let mut nonce_bytes = [0_u8; 12];''', '''        let key = Zeroizing::new(encryption_key(&installation_id, &kind, passphrase)?.0);
+          let salt = if kind == BackupKind::Recovery {
+              let mut salt = [0_u8; 16];
+              OsRng.fill_bytes(&mut salt);
+              Some(salt)
+          } else {
+              None
+          };
+          let key = if let Some(salt) = salt.as_ref() {
+              Zeroizing::new(derive_passphrase_key(passphrase.unwrap_or_default(), salt)?)
+          } else {
+              key
+          };
+          let mut nonce_bytes = [0_u8; 12];'''),
+          ('        key.zeroize();\n\n        let header = PackageHeader {', '        let header = PackageHeader {'),
+              ('    let mut key = decryption_key(&installation_id, &header, passphrase)?;', '    let key = Zeroizing::new(decryption_key(&installation_id, &header, passphrase)?);'),
+              ('    key.zeroize();\n    ensure!(', '    ensure!('),
+              ('''            let _ = fs::rename(&config.database_path, failed_path);
+              if let Some(rollback_path) = rollback_path {''', '''            let _ = fs::rename(&config.database_path, failed_path);
+              remove_sqlite_sidecars(&config.database_path);
+              if let Some(rollback_path) = rollback_path {'''),
+              ('''fn load_or_create_device_key(installation_id: &str) -> Result<[u8; 32]> {
+              match load_device_key(installation_id) {
+                  Ok(key) => Ok(key),
+                  Err(_) => {
+                      let mut key = [0_u8; 32];
+                      OsRng.fill_bytes(&mut key);
+                      device_key_entry(installation_id)?
+                          .set_password(&URL_SAFE_NO_PAD.encode(key))
+                          .context("unable to save the HomeServer backup encryption key")?;
+                      Ok(key)
+                  }
+              }
+          }
+
+          fn load_device_key(installation_id: &str) -> Result<[u8; 32]> {
+              let encoded = device_key_entry(installation_id)?
+                  .get_password()
+                  .context("HomeServer backup encryption key is unavailable")?;
+              let decoded = URL_SAFE_NO_PAD
+                  .decode(encoded)
+                  .context("HomeServer backup encryption key is invalid")?;
+              ensure!(
+                  decoded.len() == 32,
+                  "HomeServer backup encryption key is invalid"
+              );
+              let mut key = [0_u8; 32];
+              key.copy_from_slice(&decoded);
+              Ok(key)
+          }''', '''fn load_or_create_device_key(installation_id: &str) -> Result<[u8; 32]> {
+              let entry = device_key_entry(installation_id)?;
+              match entry.get_password() {
+                  Ok(encoded) => decode_device_key(&encoded),
+                  Err(keyring::Error::NoEntry) => {
+                      let mut key = [0_u8; 32];
+                      OsRng.fill_bytes(&mut key);
+                      entry
+                          .set_password(&URL_SAFE_NO_PAD.encode(key))
+                          .context("unable to save the HomeServer backup encryption key")?;
+                      Ok(key)
+                  }
+                  Err(error) => Err(error).context("HomeServer backup encryption key is unavailable"),
+              }
+          }
+
+          fn load_device_key(installation_id: &str) -> Result<[u8; 32]> {
+              let encoded = device_key_entry(installation_id)?
+                  .get_password()
+                  .context("HomeServer backup encryption key is unavailable")?;
+              decode_device_key(&encoded)
+          }
+
+          fn decode_device_key(encoded: &str) -> Result<[u8; 32]> {
+              let decoded = URL_SAFE_NO_PAD
+                  .decode(encoded)
+                  .context("HomeServer backup encryption key is invalid")?;
+              ensure!(
+                  decoded.len() == 32,
+                  "HomeServer backup encryption key is invalid"
+              );
+              let mut key = [0_u8; 32];
+              key.copy_from_slice(&decoded);
+              Ok(key)
+          }'''),
+              ('''fn verify_sqlite_database(path: &Path) -> Result<()> {
+              let connection = Connection::open(path)?;
+              database::configure_connection(&connection)?;
+              database::health_check(&connection)
+          }''', '''fn verify_sqlite_database(path: &Path) -> Result<()> {
+              let connection = Connection::open_with_flags(
+                  path,
+                  OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+              )?;
+              database::health_check(&connection)
+          }'''),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'expected backup pattern not found: {old[:80]!r}')
+              text = text.replace(old, new, 1)
+          backup_path.write_text(text)
+
+          main_path = Path('crates/homeserver-service/src/main.rs')
+          text = main_path.read_text()
+          old = '''use microgifter_homeserver_core::{
+              BackupActionResult, BackupCatalog, BackupReferenceRequest, BackupState, CreateBackupRequest,
+              HealthSnapshot, SERVICE_NAME,
+          };'''
+          new = '''use microgifter_homeserver_core::{
+              BackupActionResult, BackupCatalog, BackupKind, BackupReferenceRequest, BackupState,
+              CreateBackupRequest, HealthSnapshot, SERVICE_NAME,
+          };'''
+          if old not in text:
+              raise SystemExit('expected main import pattern not found')
+          text = text.replace(old, new, 1)
+          old = '''    fn create_backup(&self, request: CreateBackupRequest) -> Result<BackupActionResult> {
+              backup::create_backup(&self.connection()?, &self.config, request)
+          }'''
+          new = '''    fn create_backup(&self, request: CreateBackupRequest) -> Result<BackupActionResult> {
+              match request.kind {
+                  BackupKind::Manual | BackupKind::Recovery => {
+                      backup::create_backup(&self.connection()?, &self.config, request)
+                  }
+                  BackupKind::Automatic | BackupKind::PreUpdate => {
+                      bail!("backup kind is reserved for internal HomeServer operations")
+                  }
+              }
+          }'''
+          if old not in text:
+              raise SystemExit('expected create_backup pattern not found')
+          main_path.write_text(text.replace(old, new, 1))
+
+      - name: Canonicalize dependency lock and formatting
+        run: |
+          cargo generate-lockfile
+          cargo fmt --all
+
+      - name: Commit canonical security corrections
+        shell: bash
+        run: |
+          git add Cargo.lock crates/homeserver-core crates/homeserver-service
+          if git diff --cached --quiet; then
+            echo "No security corrections required."
+            exit 0
+          fi
+          git config user.name "Microgifter Build Bot"
+          git config user.email "buildbot@microgifter.local"
+          git commit -m "Harden Phase 3A backup keys and request secrets"
+          git push origin HEAD:feature/phase-3-backup-recovery-updates-20260724
