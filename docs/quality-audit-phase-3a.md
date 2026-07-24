@@ -29,7 +29,7 @@ The merged Phase 1 foundation exposed only a `last_backup` placeholder. It had n
 - Automatic rollback when a staged database fails integrity validation.
 - Invalid staged-restore quarantine to prevent a restart loop.
 - Streamed recovery-package export from cataloged managed storage.
-- Streamed recovery-package import into managed staging without accepting filesystem paths through the API.
+- Streamed recovery-package import into managed staging using bounded `tokio-util` readers without accepting filesystem paths through the API.
 - Import registration becomes externally visible only after package decryption, archive verification, database verification, and catalog validation succeed.
 - Failed first-time imports leave no catalog record and no managed package.
 - Native Tauri Open and Save dialogs with bounded streaming I/O.
