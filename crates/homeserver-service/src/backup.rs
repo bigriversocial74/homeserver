@@ -259,12 +259,8 @@ pub fn verify_backup(
     request: BackupReferenceRequest,
 ) -> Result<BackupActionResult> {
     let record = database::backup_by_id(connection, &request.backup_id)?;
-    let extracted = decrypt_and_extract(
-        connection,
-        config,
-        &record,
-        request.passphrase.as_deref(),
-    )?;
+    let extracted =
+        decrypt_and_extract(connection, config, &record, request.passphrase.as_deref())?;
     fs::remove_dir_all(&extracted.directory)?;
     database::mark_backup_verified(connection, &record.backup_id)?;
     Ok(BackupActionResult {
@@ -289,12 +285,8 @@ pub fn stage_restore(
         "another HomeServer restore is already staged"
     );
     let record = database::backup_by_id(connection, &request.backup_id)?;
-    let extracted = decrypt_and_extract(
-        connection,
-        config,
-        &record,
-        request.passphrase.as_deref(),
-    )?;
+    let extracted =
+        decrypt_and_extract(connection, config, &record, request.passphrase.as_deref())?;
     let restore_id = Uuid::new_v4().to_string();
     let pending_database = config.pending_restore_database_path();
     let pending_temp = pending_database.with_extension("sqlite3.tmp");
@@ -337,7 +329,10 @@ pub fn apply_pending_restore(config: &AppConfig) -> Result<Option<RestoreOutcome
         "staged restore format is unsupported"
     );
     let pending_database = config.pending_restore_database_path();
-    ensure!(pending_database.exists(), "staged restore database is missing");
+    ensure!(
+        pending_database.exists(),
+        "staged restore database is missing"
+    );
     verify_sqlite_database(&pending_database)?;
 
     remove_sqlite_sidecars(&config.database_path);
@@ -383,7 +378,10 @@ pub fn apply_pending_restore(config: &AppConfig) -> Result<Option<RestoreOutcome
     }
 }
 
-pub fn create_automatic_if_due(connection: &Connection, config: &AppConfig) -> Result<Option<BackupRecord>> {
+pub fn create_automatic_if_due(
+    connection: &Connection,
+    config: &AppConfig,
+) -> Result<Option<BackupRecord>> {
     if !database::automatic_backup_due(connection, Utc::now())? {
         return Ok(None);
     }
@@ -500,7 +498,10 @@ fn load_device_key(installation_id: &str) -> Result<[u8; 32]> {
     let decoded = URL_SAFE_NO_PAD
         .decode(encoded)
         .context("HomeServer backup encryption key is invalid")?;
-    ensure!(decoded.len() == 32, "HomeServer backup encryption key is invalid");
+    ensure!(
+        decoded.len() == 32,
+        "HomeServer backup encryption key is invalid"
+    );
     let mut key = [0_u8; 32];
     key.copy_from_slice(&decoded);
     Ok(key)
@@ -520,7 +521,11 @@ fn create_sqlite_snapshot(source: &Connection, destination_path: &Path) -> Resul
     Ok(())
 }
 
-fn create_archive(database_path: &Path, archive_path: &Path, manifest: &BackupManifest) -> Result<()> {
+fn create_archive(
+    database_path: &Path,
+    archive_path: &Path,
+    manifest: &BackupManifest,
+) -> Result<()> {
     let output = File::create(archive_path)?;
     let encoder = GzEncoder::new(output, Compression::default());
     let mut builder = Builder::new(encoder);
@@ -547,11 +552,20 @@ fn decrypt_and_extract(
     let package_size = fs::metadata(&package_path)
         .with_context(|| format!("backup package {} is unavailable", package_path.display()))?
         .len();
-    ensure!(package_size <= MAX_PACKAGE_BYTES, "backup package exceeds the size limit");
+    ensure!(
+        package_size <= MAX_PACKAGE_BYTES,
+        "backup package exceeds the size limit"
+    );
     let package = fs::read(&package_path)?;
     let (header, ciphertext) = parse_package(&package)?;
-    ensure!(header.backup_id == record.backup_id, "backup identity does not match its catalog record");
-    ensure!(header.kind == record.kind, "backup kind does not match its catalog record");
+    ensure!(
+        header.backup_id == record.backup_id,
+        "backup identity does not match its catalog record"
+    );
+    ensure!(
+        header.kind == record.kind,
+        "backup kind does not match its catalog record"
+    );
     let installation_id = database::installation_id(connection)?;
     let mut key = decryption_key(&installation_id, &header, passphrase)?;
     let nonce = URL_SAFE_NO_PAD
@@ -562,7 +576,9 @@ fn decrypt_and_extract(
         .map_err(|_| anyhow::anyhow!("unable to initialize backup decryption"))?;
     let archive = cipher
         .decrypt(Nonce::from_slice(&nonce), ciphertext)
-        .map_err(|_| anyhow::anyhow!("backup passphrase, device key, or package integrity is invalid"))?;
+        .map_err(|_| {
+            anyhow::anyhow!("backup passphrase, device key, or package integrity is invalid")
+        })?;
     key.zeroize();
     ensure!(
         sha256_bytes(&archive) == header.archive_sha256,
@@ -587,13 +603,19 @@ fn decrypt_and_extract(
 
 fn parse_package(package: &[u8]) -> Result<(PackageHeader, &[u8])> {
     ensure!(package.len() >= 12, "backup package is truncated");
-    ensure!(&package[..8] == PACKAGE_MAGIC, "backup package magic is invalid");
+    ensure!(
+        &package[..8] == PACKAGE_MAGIC,
+        "backup package magic is invalid"
+    );
     let header_length = u32::from_be_bytes(package[8..12].try_into()?) as usize;
     ensure!(
         header_length > 0 && header_length <= MAX_HEADER_BYTES,
         "backup package header length is invalid"
     );
-    ensure!(package.len() > 12 + header_length, "backup package is truncated");
+    ensure!(
+        package.len() > 12 + header_length,
+        "backup package is truncated"
+    );
     let header: PackageHeader = serde_json::from_slice(&package[12..12 + header_length])?;
     ensure!(
         header.format_version == PACKAGE_VERSION,
@@ -615,7 +637,10 @@ fn extract_archive(archive: &[u8], directory: &Path, header: &PackageHeader) -> 
             "manifest.json" => {
                 let mut bytes = Vec::new();
                 entry.read_to_end(&mut bytes)?;
-                ensure!(bytes.len() <= MAX_HEADER_BYTES, "backup manifest is too large");
+                ensure!(
+                    bytes.len() <= MAX_HEADER_BYTES,
+                    "backup manifest is too large"
+                );
                 manifest = Some(serde_json::from_slice(&bytes)?);
             }
             "homeserver.sqlite3" => {
@@ -631,9 +656,18 @@ fn extract_archive(archive: &[u8], directory: &Path, header: &PackageHeader) -> 
 
     let manifest = manifest.context("backup manifest is missing")?;
     ensure!(database_written, "backup database is missing");
-    ensure!(manifest.format_version == PACKAGE_VERSION, "backup manifest version is unsupported");
-    ensure!(manifest.backup_id == header.backup_id, "backup manifest identity does not match");
-    ensure!(manifest.kind == header.kind, "backup manifest kind does not match");
+    ensure!(
+        manifest.format_version == PACKAGE_VERSION,
+        "backup manifest version is unsupported"
+    );
+    ensure!(
+        manifest.backup_id == header.backup_id,
+        "backup manifest identity does not match"
+    );
+    ensure!(
+        manifest.kind == header.kind,
+        "backup manifest kind does not match"
+    );
     ensure!(
         manifest.database_sha256 == header.database_sha256,
         "backup database hash contract does not match"
@@ -774,8 +808,11 @@ mod tests {
         let directory = tempdir().expect("temporary directory");
         let config = config(directory.path());
         fs::write(config.pending_restore_plan_path(), b"{}" as &[u8]).expect("plan");
-        fs::write(config.pending_restore_database_path(), b"not sqlite" as &[u8])
-            .expect("invalid database");
+        fs::write(
+            config.pending_restore_database_path(),
+            b"not sqlite" as &[u8],
+        )
+        .expect("invalid database");
         assert!(apply_pending_restore(&config).is_err());
     }
 }

@@ -1,8 +1,6 @@
 use anyhow::{bail, ensure, Context, Result};
 use chrono::{DateTime, Duration, Utc};
-use microgifter_homeserver_core::{
-    BackupCatalog, BackupKind, BackupRecord, BackupState,
-};
+use microgifter_homeserver_core::{BackupCatalog, BackupKind, BackupRecord, BackupState};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -158,7 +156,11 @@ pub fn mark_backup_verified(connection: &Connection, backup_id: &str) -> Result<
     Ok(())
 }
 
-pub fn mark_backup_failed(connection: &Connection, backup_id: &str, failure_code: &str) -> Result<()> {
+pub fn mark_backup_failed(
+    connection: &Connection,
+    backup_id: &str,
+    failure_code: &str,
+) -> Result<()> {
     connection.execute(
         "UPDATE backup_records SET state='failed',failure_code=?1,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE backup_id=?2",
         params![failure_code.chars().take(120).collect::<String>(), backup_id],
@@ -292,7 +294,10 @@ pub fn retention_candidates(connection: &Connection) -> Result<Vec<(String, Path
     )?;
     let rows = statement
         .query_map(params![retention_count as i64], |row| {
-            Ok((row.get::<_, String>(0)?, PathBuf::from(row.get::<_, String>(1)?)))
+            Ok((
+                row.get::<_, String>(0)?,
+                PathBuf::from(row.get::<_, String>(1)?),
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
@@ -307,7 +312,10 @@ pub fn delete_backup_record(connection: &Connection, backup_id: &str) -> Result<
     if staged > 0 {
         bail!("backup is referenced by a pending restore");
     }
-    connection.execute("DELETE FROM backup_records WHERE backup_id=?1", params![backup_id])?;
+    connection.execute(
+        "DELETE FROM backup_records WHERE backup_id=?1",
+        params![backup_id],
+    )?;
     Ok(())
 }
 
@@ -368,7 +376,10 @@ fn to_sql_error(error: anyhow::Error) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(
         0,
         rusqlite::types::Type::Text,
-        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())),
+        Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            error.to_string(),
+        )),
     )
 }
 
@@ -420,8 +431,7 @@ mod tests {
             Some("test"),
         )
         .expect("insert backup");
-        mark_backup_ready(&connection, "backup-1", 100, "archive", "database")
-            .expect("mark ready");
+        mark_backup_ready(&connection, "backup-1", 100, "archive", "database").expect("mark ready");
 
         let catalog = backup_catalog(&connection, false).expect("catalog");
         assert_eq!(catalog.backups.len(), 1);

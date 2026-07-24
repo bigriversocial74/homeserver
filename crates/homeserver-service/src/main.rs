@@ -118,9 +118,7 @@ impl AppState {
     }
 
     fn create_automatic_backup_if_due(&self) -> Result<()> {
-        if let Some(record) =
-            backup::create_automatic_if_due(&self.connection()?, &self.config)?
-        {
+        if let Some(record) = backup::create_automatic_if_due(&self.connection()?, &self.config)? {
             info!(backup_id = %record.backup_id, "scheduled encrypted backup created");
         }
         Ok(())
