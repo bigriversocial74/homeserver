@@ -1,13 +1,17 @@
 mod app;
+mod backup;
 mod config;
 mod database;
 mod http;
 
 use anyhow::{anyhow, bail, Context, Result};
 use config::AppConfig;
-use microgifter_homeserver_core::{HealthSnapshot, SERVICE_NAME};
+use microgifter_homeserver_core::{
+    BackupActionResult, BackupCatalog, BackupReferenceRequest, BackupState, CreateBackupRequest,
+    HealthSnapshot, SERVICE_NAME,
+};
 use rusqlite::Connection;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -26,8 +30,14 @@ impl AppState {
         }
     }
 
+    fn connection(&self) -> Result<MutexGuard<'_, Connection>> {
+        self.connection
+            .lock()
+            .map_err(|error| anyhow!("HomeServer database lock was poisoned: {error}"))
+    }
+
     fn snapshot(&self) -> HealthSnapshot {
-        let connection = match self.connection.lock() {
+        let connection = match self.connection() {
             Ok(connection) => connection,
             Err(error) => {
                 error!(?error, "HomeServer database lock was poisoned");
@@ -56,7 +66,64 @@ impl AppState {
                 0
             }
         };
+
+        match database::backup_catalog(
+            &connection,
+            self.config.pending_restore_plan_path().exists(),
+        ) {
+            Ok(catalog) => {
+                snapshot.restore_pending = catalog.restore_pending;
+                snapshot.last_backup = catalog
+                    .backups
+                    .first()
+                    .map(|record| record.created_at_utc.to_rfc3339());
+                snapshot.backup = if catalog.restore_pending {
+                    "restore_staged".to_owned()
+                } else if catalog
+                    .backups
+                    .iter()
+                    .any(|record| record.state == BackupState::Failed)
+                {
+                    "needs_attention".to_owned()
+                } else {
+                    "ready".to_owned()
+                };
+            }
+            Err(error) => {
+                warn!(?error, "unable to read backup catalog");
+                snapshot.state = microgifter_homeserver_core::ServiceState::NeedsAttention;
+                snapshot.backup = "catalog_failed".to_owned();
+            }
+        }
         snapshot
+    }
+
+    fn backup_catalog(&self) -> Result<BackupCatalog> {
+        database::backup_catalog(
+            &self.connection()?,
+            self.config.pending_restore_plan_path().exists(),
+        )
+    }
+
+    fn create_backup(&self, request: CreateBackupRequest) -> Result<BackupActionResult> {
+        backup::create_backup(&self.connection()?, &self.config, request)
+    }
+
+    fn verify_backup(&self, request: BackupReferenceRequest) -> Result<BackupActionResult> {
+        backup::verify_backup(&self.connection()?, &self.config, request)
+    }
+
+    fn stage_restore(&self, request: BackupReferenceRequest) -> Result<BackupActionResult> {
+        backup::stage_restore(&self.connection()?, &self.config, request)
+    }
+
+    fn create_automatic_backup_if_due(&self) -> Result<()> {
+        if let Some(record) =
+            backup::create_automatic_if_due(&self.connection()?, &self.config)?
+        {
+            info!(backup_id = %record.backup_id, "scheduled encrypted backup created");
+        }
+        Ok(())
     }
 }
 
