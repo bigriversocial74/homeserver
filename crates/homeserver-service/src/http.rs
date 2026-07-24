@@ -1,23 +1,33 @@
 use crate::AppState;
 use axum::{
-    extract::{DefaultBodyLimit, State},
-    http::{header, HeaderValue, StatusCode},
+    body::Body,
+    extract::{DefaultBodyLimit, Path, State},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    response::Response,
     routing::{get, post},
     Json, Router,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use futures_util::StreamExt;
 use microgifter_homeserver_core::{
     BackupActionResult, BackupCatalog, BackupReferenceRequest, CreateBackupRequest, HealthSnapshot,
     ServiceState,
 };
 use serde::Serialize;
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
+use tokio_util::io::ReaderStream;
 use tower_http::{
     catch_panic::CatchPanicLayer, set_header::SetResponseHeaderLayer, trace::TraceLayer,
 };
+use zeroize::Zeroizing;
 
 const MAX_CONTROL_BODY_BYTES: usize = 64 * 1024;
+const MAX_IMPORT_BODY_BYTES: usize = 320 * 1024 * 1024;
+const PASSPHRASE_HEADER: &str = "x-mg-recovery-passphrase";
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
+type ResponseResult = Result<Response, (StatusCode, Json<ApiError>)>;
 
 #[derive(Debug, Serialize)]
 struct ApiError {
@@ -27,14 +37,25 @@ struct ApiError {
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
-    Router::new()
+    let control_routes = Router::new()
         .route("/healthz", get(healthz))
         .route("/v1/status", get(status))
         .route("/v1/backups", get(backups))
         .route("/v1/backups/create", post(create_backup))
         .route("/v1/backups/verify", post(verify_backup))
         .route("/v1/backups/stage-restore", post(stage_restore))
-        .layer(DefaultBodyLimit::max(MAX_CONTROL_BODY_BYTES))
+        .layer(DefaultBodyLimit::max(MAX_CONTROL_BODY_BYTES));
+    let transfer_routes = Router::new()
+        .route("/v1/backups/import", post(import_recovery_package))
+        .route(
+            "/v1/backups/{backup_id}/package",
+            get(export_recovery_package),
+        )
+        .layer(DefaultBodyLimit::max(MAX_IMPORT_BODY_BYTES));
+
+    Router::new()
+        .merge(control_routes)
+        .merge(transfer_routes)
         .layer(SetResponseHeaderLayer::if_not_present(
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
@@ -100,6 +121,141 @@ async fn stage_restore(
         .map_err(|error| action_error("restore_stage_failed", error))
 }
 
+async fn import_recovery_package(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Body,
+) -> ApiResult<BackupActionResult> {
+    let passphrase = decode_passphrase(&headers)?;
+    let temporary_path = state.new_import_path();
+    let mut output = tokio::fs::File::create(&temporary_path)
+        .await
+        .map_err(|error| internal_error("recovery_import_staging_failed", error.into()))?;
+    let mut stream = body.into_data_stream();
+    let mut total_bytes = 0_usize;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk
+            .map_err(|error| action_error("recovery_import_stream_failed", error.into()))?;
+        total_bytes = total_bytes
+            .checked_add(chunk.len())
+            .ok_or_else(|| action_error("recovery_import_too_large", anyhow::anyhow!("recovery package size overflow")))?;
+        if total_bytes > MAX_IMPORT_BODY_BYTES {
+            let _ = tokio::fs::remove_file(&temporary_path).await;
+            return Err(action_error(
+                "recovery_import_too_large",
+                anyhow::anyhow!("recovery package exceeds the import size limit"),
+            ));
+        }
+        output
+            .write_all(&chunk)
+            .await
+            .map_err(|error| internal_error("recovery_import_write_failed", error.into()))?;
+    }
+    output
+        .sync_all()
+        .await
+        .map_err(|error| internal_error("recovery_import_sync_failed", error.into()))?;
+    drop(output);
+    if total_bytes <= 12 {
+        let _ = tokio::fs::remove_file(&temporary_path).await;
+        return Err(action_error(
+            "recovery_import_invalid",
+            anyhow::anyhow!("recovery package is empty or truncated"),
+        ));
+    }
+
+    let imported_path = temporary_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        state.import_recovery_package(imported_path, passphrase.to_string())
+    })
+    .await
+    .map_err(task_error)?;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temporary_path).await;
+    }
+    result
+        .map(Json)
+        .map_err(|error| action_error("recovery_import_failed", error))
+}
+
+async fn export_recovery_package(
+    State(state): State<Arc<AppState>>,
+    Path(backup_id): Path<String>,
+) -> ResponseResult {
+    let package = tokio::task::spawn_blocking(move || state.recovery_package_for_export(&backup_id))
+        .await
+        .map_err(task_error)?
+        .map_err(|error| action_error("recovery_export_failed", error))?;
+    let file = tokio::fs::File::open(&package.path)
+        .await
+        .map_err(|error| internal_error("recovery_export_open_failed", error.into()))?;
+    let file_name: String = package
+        .file_name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || ".-_".contains(character) {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(
+            header::CONTENT_TYPE,
+            "application/vnd.microgifter.homeserver-backup",
+        )
+        .header(header::CONTENT_LENGTH, package.size_bytes.to_string())
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{file_name}\""),
+        )
+        .body(Body::from_stream(ReaderStream::new(file)))
+        .map_err(|error| internal_error("recovery_export_response_failed", error.into()))
+}
+
+fn decode_passphrase(
+    headers: &HeaderMap,
+) -> Result<Zeroizing<String>, (StatusCode, Json<ApiError>)> {
+    let encoded = headers
+        .get(PASSPHRASE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| {
+            action_error(
+                "recovery_passphrase_required",
+                anyhow::anyhow!("recovery passphrase is required"),
+            )
+        })?;
+    if encoded.len() > 1024 {
+        return Err(action_error(
+            "recovery_passphrase_invalid",
+            anyhow::anyhow!("recovery passphrase header is too large"),
+        ));
+    }
+    let bytes = URL_SAFE_NO_PAD.decode(encoded).map_err(|_| {
+        action_error(
+            "recovery_passphrase_invalid",
+            anyhow::anyhow!("recovery passphrase encoding is invalid"),
+        )
+    })?;
+    let passphrase = String::from_utf8(bytes).map_err(|_| {
+        action_error(
+            "recovery_passphrase_invalid",
+            anyhow::anyhow!("recovery passphrase must be UTF-8"),
+        )
+    })?;
+    let count = passphrase.chars().count();
+    if !(12..=256).contains(&count) {
+        return Err(action_error(
+            "recovery_passphrase_invalid",
+            anyhow::anyhow!("recovery passphrase must contain between 12 and 256 characters"),
+        ));
+    }
+    Ok(Zeroizing::new(passphrase))
+}
+
 fn task_error(error: tokio::task::JoinError) -> (StatusCode, Json<ApiError>) {
     api_error(
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -116,7 +272,12 @@ fn action_error(code: &'static str, error: anyhow::Error) -> (StatusCode, Json<A
         || text.contains("unsupported")
         || text.contains("already staged")
         || text.contains("does not match")
-        || text.contains("integrity is invalid")
+        || text.contains("invalid")
+        || text.contains("conflict")
+        || text.contains("outside managed")
+        || text.contains("only portable")
+        || text.contains("not ready")
+        || text.contains("size limit")
     {
         StatusCode::UNPROCESSABLE_ENTITY
     } else {
