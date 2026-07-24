@@ -1,0 +1,63 @@
+name: Phase 3A Compiler Repair
+
+on:
+  push:
+    branches:
+      - feature/phase-3-backup-recovery-updates-20260724
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-3-backup-recovery-updates-20260724
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+
+      - name: Apply exact compiler and durability repairs
+        shell: python {0}
+        run: |
+          from pathlib import Path
+
+          backup_path = Path("crates/homeserver-service/src/backup.rs")
+          text = backup_path.read_text()
+
+          replacements = {
+              "Aes256Gcm::new_from_slice(&key)": "Aes256Gcm::new_from_slice(key.as_ref())",
+              "let params = Params::new(65_536, 3, 1, Some(32))?;": "let params = Params::new(65_536, 3, 1, Some(32))\n        .map_err(|error| anyhow::anyhow!(\"invalid Argon2id parameters: {error}\"))?;",
+              "match request.kind {": "match &request.kind {",
+              "File::open(&pending_temp)?.sync_all()?;": "File::options().write(true).open(&pending_temp)?.sync_all()?;",
+              "File::open(destination_path)?.sync_all()?;": "File::options().write(true).open(destination_path)?.sync_all()?;",
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f"expected backup repair pattern not found: {old}")
+              text = text.replace(old, new)
+          backup_path.write_text(text)
+
+          main_path = Path("crates/homeserver-service/src/main.rs")
+          text = main_path.read_text()
+          count = text.count("&self.connection()?")
+          if count != 5:
+              raise SystemExit(f"expected five database guard reborrows, found {count}")
+          main_path.write_text(text.replace("&self.connection()?", "&*self.connection()?"))
+
+      - name: Canonicalize formatting
+        run: cargo fmt --all
+
+      - name: Commit repairs
+        shell: bash
+        run: |
+          git add crates/homeserver-service/src/backup.rs crates/homeserver-service/src/main.rs
+          git config user.name "Microgifter Build Bot"
+          git config user.email "buildbot@microgifter.local"
+          git commit -m "Repair Phase 3A Windows compilation and durability"
+          git push origin HEAD:feature/phase-3-backup-recovery-updates-20260724
