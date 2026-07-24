@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 pub const PRODUCT_NAME: &str = "Microgifter HomeServer";
 pub const SERVICE_NAME: &str = "MicrogifterHomeServer";
@@ -78,18 +79,34 @@ pub struct BackupCatalog {
     pub restore_pending: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateBackupRequest {
     pub kind: BackupKind,
     pub passphrase: Option<String>,
     pub note: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+impl Drop for CreateBackupRequest {
+    fn drop(&mut self) {
+        if let Some(passphrase) = &mut self.passphrase {
+            passphrase.zeroize();
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
 pub struct BackupReferenceRequest {
     pub backup_id: String,
     pub passphrase: Option<String>,
     pub confirmation: Option<String>,
+}
+
+impl Drop for BackupReferenceRequest {
+    fn drop(&mut self) {
+        if let Some(passphrase) = &mut self.passphrase {
+            passphrase.zeroize();
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
