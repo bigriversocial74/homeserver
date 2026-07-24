@@ -16,5 +16,6 @@ tauri-build = { version = "2", features = [] }
 microgifter-homeserver-core = { path = "../crates/homeserver-core" }
 reqwest.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tauri = { version = "2", features = [] }
 tokio.workspace = true
