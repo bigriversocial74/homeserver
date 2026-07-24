@@ -11,6 +11,7 @@ body { margin: 0; min-width: 960px; min-height: 100vh; background: #f4f6f4; }
 button, input { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .58; }
+code { padding: 2px 5px; border-radius: 5px; background: #eaf0ec; color: #315445; font-size: .92em; }
 
 .shell { min-height: 100vh; display: grid; grid-template-columns: 250px minmax(0, 1fr); }
 .sidebar { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; padding: 26px 20px; background: #102a21; color: white; }
@@ -67,6 +68,9 @@ h2, h3 { letter-spacing: -.035em; }
 .backup-tool-card p { min-height: 42px; margin-bottom: 16px; color: #6f7b75; font-size: 13px; line-height: 1.55; }
 .backup-tool-card form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 9px; }
 .backup-tool-card input { min-width: 0; padding: 10px 11px; border: 1px solid #d5ddd8; border-radius: 9px; background: white; }
+.backup-tool-card.import-card { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, .8fr); align-items: center; gap: 24px; }
+.backup-tool-card.import-card p { min-height: 0; margin-bottom: 0; }
+.backup-tool-card .import-recovery-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
 .backup-policy { display: flex; flex-wrap: wrap; gap: 9px; padding: 11px 0 16px; color: #68746f; font-size: 12px; }
 .backup-policy span { padding: 7px 9px; border-radius: 999px; background: #f0f4f1; }
 .backup-list { display: grid; }
@@ -78,7 +82,7 @@ h2, h3 { letter-spacing: -.035em; }
 .backup-copy small { display: block; color: #7a8580; font-size: 11px; line-height: 1.5; }
 .backup-copy .backup-note { color: #52625a; }
 .backup-copy .failure-text { color: #9b3628; }
-.backup-actions { display: flex; gap: 8px; }
+.backup-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; max-width: 240px; }
 .backup-actions button { padding: 8px 11px; font-size: 12px; }
 .empty-state { padding: 28px; border: 1px dashed #cfd8d2; border-radius: 14px; text-align: center; }
 .empty-state p { margin: 6px 0 0; color: #7a8580; font-size: 13px; }
@@ -102,6 +106,8 @@ footer { display: flex; justify-content: space-between; padding: 18px 4px 0; col
   .hero-meta { margin-top: 22px; min-width: 0; }
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
   .backup-tools { grid-template-columns: 1fr; }
+  .backup-tool-card.import-card { grid-column: auto; grid-template-columns: 1fr; gap: 12px; }
   .backup-tool-card form { grid-template-columns: 1fr 1fr; }
   .backup-tool-card form button { grid-column: 1 / -1; }
+  .backup-tool-card .import-recovery-form { grid-template-columns: 1fr; }
 }
