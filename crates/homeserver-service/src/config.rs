@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+#[cfg(not(windows))]
 use directories::ProjectDirs;
 use std::path::PathBuf;
 
