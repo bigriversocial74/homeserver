@@ -2,11 +2,14 @@ use crate::{config::AppConfig, database, http, AppState};
 use anyhow::{Context, Result};
 use microgifter_homeserver_core::{API_HOST, API_PORT};
 use std::{net::SocketAddr, sync::Arc};
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 use tracing::info;
 
-pub async fn run(shutdown: watch::Receiver<bool>) -> Result<()> {
-    let config = AppConfig::load()?;
+pub async fn run(
+    config: AppConfig,
+    shutdown: watch::Receiver<bool>,
+    ready: Option<oneshot::Sender<()>>,
+) -> Result<()> {
     info!(data_dir = %config.data_dir.display(), "starting HomeServer service");
 
     let connection = database::initialize(&config.database_path)?;
@@ -17,6 +20,10 @@ pub async fn run(shutdown: watch::Receiver<bool>) -> Result<()> {
         .with_context(|| format!("unable to bind local API at {address}"))?;
 
     info!(%address, "HomeServer local API ready");
+    if let Some(ready) = ready {
+        let _ = ready.send(());
+    }
+
     axum::serve(listener, http::router(state))
         .with_graceful_shutdown(wait_for_shutdown(shutdown))
         .await?;
