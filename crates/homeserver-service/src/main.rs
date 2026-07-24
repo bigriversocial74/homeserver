@@ -77,9 +77,7 @@ fn configure_logging(config: &AppConfig, service_mode: bool) -> Option<WorkerGua
             .try_init();
         Some(guard)
     } else {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .try_init();
+        let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
         None
     }
 }

@@ -37,8 +37,8 @@ impl AppConfig {
         std::fs::create_dir_all(&logs_dir)
             .with_context(|| format!("unable to create {}", logs_dir.display()))?;
 
-        let raw_server_name = std::env::var("MG_HOMESERVER_NAME")
-            .unwrap_or_else(|_| DEFAULT_SERVER_NAME.to_owned());
+        let raw_server_name =
+            std::env::var("MG_HOMESERVER_NAME").unwrap_or_else(|_| DEFAULT_SERVER_NAME.to_owned());
         let server_name = sanitize_server_name(&raw_server_name);
 
         Ok(Self {
@@ -82,6 +82,9 @@ mod tests {
     #[test]
     fn server_name_is_length_bounded() {
         let long_name = "x".repeat(MAX_SERVER_NAME_CHARS + 20);
-        assert_eq!(sanitize_server_name(&long_name).chars().count(), MAX_SERVER_NAME_CHARS);
+        assert_eq!(
+            sanitize_server_name(&long_name).chars().count(),
+            MAX_SERVER_NAME_CHARS
+        );
     }
 }

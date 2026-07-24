@@ -37,24 +37,11 @@ pub struct HealthSnapshot {
 
 impl HealthSnapshot {
     pub fn running(server_name: impl Into<String>, database: impl Into<String>) -> Self {
-        Self::new(
-            server_name,
-            ServiceState::Running,
-            true,
-            database,
-        )
+        Self::new(server_name, ServiceState::Running, true, database)
     }
 
-    pub fn needs_attention(
-        server_name: impl Into<String>,
-        database: impl Into<String>,
-    ) -> Self {
-        Self::new(
-            server_name,
-            ServiceState::NeedsAttention,
-            true,
-            database,
-        )
+    pub fn needs_attention(server_name: impl Into<String>, database: impl Into<String>) -> Self {
+        Self::new(server_name, ServiceState::NeedsAttention, true, database)
     }
 
     pub fn offline(reason: impl Into<String>) -> Self {

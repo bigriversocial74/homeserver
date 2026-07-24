@@ -35,14 +35,20 @@ pub fn initialize(path: &Path) -> Result<Connection> {
 pub fn health_check(connection: &Connection) -> Result<()> {
     let quick_check: String =
         connection.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
-    ensure!(quick_check == "ok", "SQLite quick_check returned '{quick_check}'");
+    ensure!(
+        quick_check == "ok",
+        "SQLite quick_check returned '{quick_check}'"
+    );
 
     let migration_count: i64 = connection.query_row(
         "SELECT COUNT(*) FROM schema_migrations WHERE migration_key = ?1",
         params![INITIAL_MIGRATION_KEY],
         |row| row.get(0),
     )?;
-    ensure!(migration_count == 1, "initial migration is not registered exactly once");
+    ensure!(
+        migration_count == 1,
+        "initial migration is not registered exactly once"
+    );
 
     Ok(())
 }
