@@ -148,7 +148,10 @@ async fn homeserver_import_recovery_package(
     let encoded_passphrase = Zeroizing::new(URL_SAFE_NO_PAD.encode(passphrase.as_bytes()));
     let response = client()?
         .post(format!("{}/v1/backups/import", api_base_url()))
-        .header(reqwest::header::CONTENT_TYPE, "application/vnd.microgifter.homeserver-backup")
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/vnd.microgifter.homeserver-backup",
+        )
         .header(reqwest::header::CONTENT_LENGTH, metadata.len())
         .header(PASSPHRASE_HEADER, encoded_passphrase.as_str())
         .body(reqwest::Body::wrap_stream(ReaderStream::new(input)))
@@ -184,7 +187,9 @@ async fn homeserver_export_recovery_package(
         .await
         .map_err(|error| error.to_string())?;
     if !response.status().is_success() {
-        return decode_json::<serde_json::Value>(response).await.map(|_| None);
+        return decode_json::<serde_json::Value>(response)
+            .await
+            .map(|_| None);
     }
 
     let destination_path = destination.path().to_path_buf();

@@ -13,7 +13,10 @@ use microgifter_homeserver_core::{
     CreateBackupRequest, HealthSnapshot, SERVICE_NAME,
 };
 use rusqlite::Connection;
-use std::{path::PathBuf, sync::{Mutex, MutexGuard}};
+use std::{
+    path::PathBuf,
+    sync::{Mutex, MutexGuard},
+};
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;

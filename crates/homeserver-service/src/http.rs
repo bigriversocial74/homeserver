@@ -136,8 +136,8 @@ async fn import_recovery_package(
     let mut total_bytes = 0_usize;
 
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk
-            .map_err(|error| action_error("recovery_import_stream_failed", error.into()))?;
+        let chunk =
+            chunk.map_err(|error| action_error("recovery_import_stream_failed", error.into()))?;
         total_bytes = total_bytes.checked_add(chunk.len()).ok_or_else(|| {
             action_error(
                 "recovery_import_too_large",
@@ -187,10 +187,11 @@ async fn export_recovery_package(
     State(state): State<Arc<AppState>>,
     Path(backup_id): Path<String>,
 ) -> ResponseResult {
-    let package = tokio::task::spawn_blocking(move || state.recovery_package_for_export(&backup_id))
-        .await
-        .map_err(task_error)?
-        .map_err(|error| action_error("recovery_export_failed", error))?;
+    let package =
+        tokio::task::spawn_blocking(move || state.recovery_package_for_export(&backup_id))
+            .await
+            .map_err(task_error)?
+            .map_err(|error| action_error("recovery_export_failed", error))?;
     let file = tokio::fs::File::open(&package.path)
         .await
         .map_err(|error| internal_error("recovery_export_open_failed", error.into()))?;
@@ -341,6 +342,6 @@ mod tests {
 
         let error = decode_passphrase(&headers).expect_err("oversized header should be rejected");
         assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
-        assert_eq!(error.1.0.error, "recovery_passphrase_invalid");
+        assert_eq!(error.1 .0.error, "recovery_passphrase_invalid");
     }
 }

@@ -83,8 +83,10 @@ impl AppConfig {
     }
 
     pub fn new_import_path(&self) -> PathBuf {
-        self.imports_dir
-            .join(format!("recovery-import-{}.mghbackup", uuid::Uuid::new_v4().simple()))
+        self.imports_dir.join(format!(
+            "recovery-import-{}.mghbackup",
+            uuid::Uuid::new_v4().simple()
+        ))
     }
 }
 
