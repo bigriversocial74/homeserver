@@ -1,0 +1,86 @@
+name: Phase 3A DPAPI Repair
+
+on:
+  push:
+    branches:
+      - feature/phase-3-backup-recovery-updates-20260724
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-3-backup-recovery-updates-20260724
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+
+      - name: Switch the backup engine to DPAPI storage
+        shell: python {0}
+        run: |
+          from pathlib import Path
+
+          path = Path("crates/homeserver-service/src/backup.rs")
+          text = path.read_text()
+          replacements = [
+              (
+                  "use crate::{config::AppConfig, database};",
+                  "use crate::{backup_key, config::AppConfig, database};",
+              ),
+              ("use keyring::Entry;\n", ""),
+              ('const DEVICE_KEY_SERVICE: &str = "MicrogifterHomeServerBackup";\n', ""),
+              (
+                  "        let (key, salt) = encryption_key(&installation_id, &kind, passphrase)?;",
+                  "        let (key, salt) = encryption_key(config, &installation_id, &kind, passphrase)?;",
+              ),
+              (
+                  "    let key = Zeroizing::new(decryption_key(&installation_id, &header, passphrase)?);",
+                  "    let key = Zeroizing::new(decryption_key(config, &installation_id, &header, passphrase)?);",
+              ),
+              (
+                  "fn encryption_key(\n    installation_id: &str,",
+                  "fn encryption_key(\n    config: &AppConfig,\n    installation_id: &str,",
+              ),
+              (
+                  "        Ok((load_or_create_device_key(installation_id)?, None))",
+                  "        Ok((backup_key::load_or_create(config, installation_id)?, None))",
+              ),
+              (
+                  "fn decryption_key(\n    installation_id: &str,",
+                  "fn decryption_key(\n    config: &AppConfig,\n    installation_id: &str,",
+              ),
+              (
+                  '        "device_key_aes256gcm" => load_device_key(installation_id),',
+                  '        "device_key_aes256gcm" => backup_key::load(config, installation_id),',
+              ),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f"expected DPAPI repair pattern not found: {old[:100]!r}")
+              text = text.replace(old, new, 1)
+
+          start = text.index("fn device_key_entry")
+          end = text.index("fn create_sqlite_snapshot", start)
+          text = text[:start] + text[end:]
+          path.write_text(text)
+
+      - name: Canonicalize lockfile and formatting
+        run: |
+          cargo generate-lockfile
+          cargo fmt --all
+
+      - name: Commit DPAPI repair
+        shell: bash
+        run: |
+          git add Cargo.lock Cargo.toml crates/homeserver-service
+          git config user.name "Microgifter Build Bot"
+          git config user.email "buildbot@microgifter.local"
+          git commit -m "Store backup keys with Windows DPAPI"
+          git push origin HEAD:feature/phase-3-backup-recovery-updates-20260724
