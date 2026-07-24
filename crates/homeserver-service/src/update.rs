@@ -5,8 +5,8 @@ use chrono::{Duration as ChronoDuration, Utc};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures_util::StreamExt;
 use microgifter_homeserver_core::{
-    SignedUpdateManifest, UpdateApplicationResult, UpdateManifestPayload, PRODUCT_NAME,
-    UPDATE_KEY_ID, UPDATE_MANIFEST_SCHEMA_VERSION,
+    SignedUpdateManifest, UpdateApplicationResult, UpdateManifestPayload, UpdateRecord,
+    UpdateState, PRODUCT_NAME, UPDATE_KEY_ID, UPDATE_MANIFEST_SCHEMA_VERSION,
 };
 use semver::Version;
 use sha2::{Digest, Sha256};
@@ -356,37 +356,6 @@ if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate) { exit 
 #[cfg(not(windows))]
 pub fn verify_authenticode(_path: &Path, _expected_thumbprint: &str) -> Result<()> {
     bail!("Authenticode verification is only supported on Windows")
-}
-
-#[cfg(windows)]
-fn launch_detached(updater: &Path, plan_path: &Path) -> Result<()> {
-    use std::os::windows::process::CommandExt;
-    use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
-    Command::new(updater)
-        .arg("apply")
-        .arg(plan_path)
-        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
-        .spawn()
-        .context("unable to launch the HomeServer updater helper")?;
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn launch_detached(_updater: &Path, _plan_path: &Path) -> Result<()> {
-    bail!("HomeServer update application is only supported on Windows")
-}
-
-fn atomic_write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let temporary = path.with_extension("tmp");
-    fs::write(&temporary, serde_json::to_vec_pretty(value)?)?;
-    if path.exists() {
-        fs::remove_file(path)?;
-    }
-    fs::rename(temporary, path)?;
-    Ok(())
 }
 
 fn valid_sha256(value: &str) -> bool {
