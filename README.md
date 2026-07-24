@@ -19,6 +19,21 @@ The dedicated repository is now the implementation authority. The blueprint is m
 - NSIS per-machine installer.
 - Docker retained for later Linux, NAS, development, and appliance deployments.
 
+## Backup and recovery
+
+Phase 3A adds:
+
+- Automatic encrypted SQLite backups.
+- Manual protected backups.
+- Portable passphrase-encrypted recovery packages.
+- Package, hash, archive, and database integrity verification.
+- Retention controls.
+- Staged restore on service restart.
+- Preservation of the current database for rollback.
+- Automatic rollback when a restored database fails integrity checks.
+
+Recovery passphrases are never stored. Device backup keys are stored in the operating-system credential vault.
+
 ## Development
 
 On Windows with Node.js, Rust, and the Tauri prerequisites installed:
@@ -35,4 +50,9 @@ Build the service, tests, Control Center, and NSIS installer:
 
 ## Status
 
-Phase 1 installable foundation is under development. No production installer has been released or code signed.
+- Phase 1 installable foundation: merged and validated.
+- Phase 2 cloud pairing and synchronization: active draft PR, coordinated with a separate Microgifter cloud PR.
+- Phase 3A backup and recovery: active scoped branch.
+- Phase 3B signed updates: planned after Phase 3A.
+
+No public production installer has been released or code signed.
