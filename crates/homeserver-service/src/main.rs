@@ -4,6 +4,7 @@ mod backup_key;
 mod config;
 mod database;
 mod http;
+mod recovery_transfer;
 
 use anyhow::{anyhow, bail, Context, Result};
 use config::AppConfig;
@@ -12,7 +13,7 @@ use microgifter_homeserver_core::{
     CreateBackupRequest, HealthSnapshot, SERVICE_NAME,
 };
 use rusqlite::Connection;
-use std::sync::{Mutex, MutexGuard};
+use std::{path::PathBuf, sync::{Mutex, MutexGuard}};
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -130,6 +131,30 @@ impl AppState {
             info!(backup_id = %record.backup_id, "scheduled encrypted backup created");
         }
         Ok(())
+    }
+
+    fn new_import_path(&self) -> PathBuf {
+        self.config.new_import_path()
+    }
+
+    fn import_recovery_package(
+        &self,
+        temporary_path: PathBuf,
+        passphrase: String,
+    ) -> Result<BackupActionResult> {
+        recovery_transfer::import_recovery_package(
+            &*self.connection()?,
+            &self.config,
+            &temporary_path,
+            passphrase,
+        )
+    }
+
+    fn recovery_package_for_export(
+        &self,
+        backup_id: &str,
+    ) -> Result<recovery_transfer::ExportPackage> {
+        recovery_transfer::package_for_export(&*self.connection()?, &self.config, backup_id)
     }
 }
 
