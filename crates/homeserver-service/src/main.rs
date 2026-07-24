@@ -5,16 +5,19 @@ mod config;
 mod database;
 mod http;
 mod recovery_transfer;
+mod update;
+mod update_store;
 
 use anyhow::{anyhow, bail, Context, Result};
 use config::AppConfig;
 use microgifter_homeserver_core::{
-    BackupActionResult, BackupCatalog, BackupKind, BackupReferenceRequest, BackupState,
-    CreateBackupRequest, HealthSnapshot, SERVICE_NAME,
+    ApplyUpdateRequest, BackupActionResult, BackupCatalog, BackupKind, BackupReferenceRequest,
+    BackupState, CreateBackupRequest, HealthSnapshot, SERVICE_NAME, UpdateActionResult,
+    UpdateState, UpdateStatus,
 };
 use rusqlite::Connection;
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Mutex, MutexGuard},
 };
 use tokio::sync::watch;
@@ -60,6 +63,13 @@ impl AppState {
                 "integrity_check_failed",
             );
         }
+        if let Err(error) = update_store::health_check(&connection) {
+            error!(?error, "HomeServer update database health check failed");
+            return HealthSnapshot::needs_attention(
+                &self.config.server_name,
+                "update_integrity_check_failed",
+            );
+        }
 
         let mut snapshot = HealthSnapshot::running(&self.config.server_name, "ready");
         snapshot.pending_sync = match database::pending_sync_count(&connection) {
@@ -98,6 +108,22 @@ impl AppState {
                 warn!(?error, "unable to read backup catalog");
                 snapshot.state = microgifter_homeserver_core::ServiceState::NeedsAttention;
                 snapshot.backup = "catalog_failed".to_owned();
+            }
+        }
+
+        match update_store::status(
+            &connection,
+            &self.config.update_manifest_url,
+            self.config.update_plan_path().exists(),
+        ) {
+            Ok(status) => {
+                snapshot.update = status.state.as_str().to_owned();
+                snapshot.update_version = status.update.map(|record| record.version);
+            }
+            Err(error) => {
+                warn!(?error, "unable to read signed update state");
+                snapshot.state = microgifter_homeserver_core::ServiceState::NeedsAttention;
+                snapshot.update = "status_failed".to_owned();
             }
         }
         snapshot
@@ -159,6 +185,171 @@ impl AppState {
     ) -> Result<recovery_transfer::ExportPackage> {
         recovery_transfer::package_for_export(&*self.connection()?, &self.config, backup_id)
     }
+
+    fn update_status(&self) -> Result<UpdateStatus> {
+        update_store::status(
+            &*self.connection()?,
+            &self.config.update_manifest_url,
+            self.config.update_plan_path().exists(),
+        )
+    }
+
+    async fn check_for_updates(&self) -> Result<UpdateActionResult> {
+        update_store::begin_check(&*self.connection()?)?;
+        let verified = match update::fetch_and_verify_manifest(
+            &self.config,
+            env!("CARGO_PKG_VERSION"),
+        )
+        .await
+        {
+            Ok(verified) => verified,
+            Err(error) => {
+                let _ = update_store::record_check_failure(
+                    &*self.connection()?,
+                    &public_update_failure(&error),
+                );
+                return Err(error);
+            }
+        };
+
+        if !update::manifest_is_newer(&verified, env!("CARGO_PKG_VERSION"))? {
+            update_store::record_current(&*self.connection()?)?;
+            return Ok(UpdateActionResult {
+                status: self.update_status()?,
+                message: "Microgifter HomeServer is current.".to_owned(),
+                restart_required: false,
+            });
+        }
+
+        update_store::save_available(
+            &*self.connection()?,
+            &verified.update_id,
+            &self.config.update_manifest_url,
+            &verified.manifest,
+        )?;
+        Ok(UpdateActionResult {
+            status: self.update_status()?,
+            message: format!(
+                "Microgifter HomeServer {} is available and its release manifest is valid.",
+                verified.manifest.payload.version
+            ),
+            restart_required: false,
+        })
+    }
+
+    async fn download_update(&self) -> Result<UpdateActionResult> {
+        let stored = {
+            let connection = self.connection()?;
+            let available = update_store::latest_in_state(&connection, UpdateState::Available)?;
+            update_store::mark_downloading(&connection, &available.record.update_id)?
+        };
+        let path = match update::download_and_verify_installer(
+            &self.config,
+            &stored.record,
+            &stored.manifest,
+        )
+        .await
+        {
+            Ok(path) => path,
+            Err(error) => {
+                let _ = update_store::mark_failure(
+                    &*self.connection()?,
+                    &stored.record.update_id,
+                    &public_update_failure(&error),
+                );
+                return Err(error);
+            }
+        };
+        let staged = update_store::mark_staged(
+            &*self.connection()?,
+            &stored.record.update_id,
+            &path,
+        )?;
+        Ok(UpdateActionResult {
+            status: self.update_status()?,
+            message: format!(
+                "HomeServer {} was downloaded, hashed, and Authenticode-verified.",
+                staged.record.version
+            ),
+            restart_required: false,
+        })
+    }
+
+    fn apply_update(&self, request: ApplyUpdateRequest) -> Result<UpdateActionResult> {
+        ensure_update_confirmation(&request.confirmation)?;
+        let stored = update_store::latest_in_state(&*self.connection()?, UpdateState::Staged)?;
+        let installer_path = stored
+            .installer_path
+            .as_deref()
+            .context("staged update installer path is unavailable")?;
+        update::verify_staged_installer_at(&stored.record, installer_path)?;
+
+        let backup_result = backup::create_backup(
+            &*self.connection()?,
+            &self.config,
+            CreateBackupRequest {
+                kind: BackupKind::PreUpdate,
+                passphrase: None,
+                note: Some(format!("Before update to {}", stored.record.version)),
+            },
+        )?;
+        info!(
+            backup_id = %backup_result.backup.backup_id,
+            update_id = %stored.record.update_id,
+            "pre-update encrypted backup created"
+        );
+
+        let rollback_path = self.config.update_rollback_dir.join(&stored.record.update_id);
+        update_store::mark_applying(
+            &*self.connection()?,
+            &stored.record.update_id,
+            &rollback_path,
+        )?;
+        if let Err(error) = update::prepare_and_launch_updater_at(
+            &self.config,
+            &stored.record,
+            installer_path,
+        ) {
+            let _ = update_store::mark_failure(
+                &*self.connection()?,
+                &stored.record.update_id,
+                &public_update_failure(&error),
+            );
+            return Err(error);
+        }
+
+        Ok(UpdateActionResult {
+            status: self.update_status()?,
+            message: "The verified updater was launched. HomeServer will restart and report success or automatic rollback."
+                .to_owned(),
+            restart_required: true,
+        })
+    }
+}
+
+fn ensure_update_confirmation(value: &str) -> Result<()> {
+    if value != "UPDATE" {
+        bail!("type UPDATE to apply the staged HomeServer release");
+    }
+    Ok(())
+}
+
+fn public_update_failure(error: &anyhow::Error) -> String {
+    let text = error.to_string().to_lowercase();
+    if text.contains("signature") || text.contains("signing key") {
+        "manifest_signature_failed"
+    } else if text.contains("https") || text.contains("redirect") {
+        "update_transport_rejected"
+    } else if text.contains("authenticode") {
+        "authenticode_verification_failed"
+    } else if text.contains("sha-256") || text.contains("size") || text.contains("truncated") {
+        "installer_integrity_failed"
+    } else if text.contains("version") {
+        "update_version_rejected"
+    } else {
+        "update_operation_failed"
+    }
+    .to_owned()
 }
 
 fn configure_logging(config: &AppConfig, service_mode: bool) -> Option<WorkerGuard> {
@@ -279,7 +470,7 @@ fn windows_service_runtime() -> Result<()> {
     });
 
     let result: Result<()> = runtime.block_on(async {
-        let (ready_tx, ready_rx) = oneshot::channel();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         let app_handle = tokio::spawn(app::run(config, shutdown_rx, Some(ready_tx)));
 
         match tokio::time::timeout(Duration::from_secs(15), ready_rx).await {
@@ -330,4 +521,16 @@ fn windows_service_runtime() -> Result<()> {
 
     info!("HomeServer Windows service stopped");
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_application_requires_exact_confirmation() {
+        assert!(ensure_update_confirmation("UPDATE").is_ok());
+        assert!(ensure_update_confirmation("update").is_err());
+        assert!(ensure_update_confirmation(" UPDATE ").is_err());
+    }
 }
