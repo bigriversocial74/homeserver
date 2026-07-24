@@ -77,7 +77,16 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Full workspace tests
-        run: cargo test --workspace --locked
+        shell: pwsh
+        run: |
+          cargo test --workspace --locked *> cargo-test.log
+          $testCode = $LASTEXITCODE
+          if ($testCode -ne 0) {
+            Write-Host "Cargo test diagnostic tail:"
+            Get-Content cargo-test.log -Tail 180
+            exit $testCode
+          }
+          Get-Content cargo-test.log -Tail 30
 
       - name: Full workspace lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
