@@ -24,7 +24,6 @@ chrono = { version = "0.4", features = ["serde"] }
 directories = "6"
 flate2 = "1"
 hex = "0.4"
-keyring = "3"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.37", features = ["backup", "bundled"] }
@@ -39,4 +38,5 @@ tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["serde", "v4"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Memory"] }
 zeroize = "1"
