@@ -82,11 +82,19 @@ jobs:
           cargo test --workspace --locked *> cargo-test.log
           $testCode = $LASTEXITCODE
           if ($testCode -ne 0) {
-            Write-Host "Cargo test diagnostic tail:"
-            Get-Content cargo-test.log -Tail 180
+            Write-Host "Full workspace tests failed. The complete log is attached as a workflow artifact."
             exit $testCode
           }
           Get-Content cargo-test.log -Tail 30
+
+      - name: Upload workspace test log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cargo-test-log
+          path: cargo-test.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Full workspace lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
