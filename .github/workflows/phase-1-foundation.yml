@@ -76,6 +76,13 @@ jobs:
       - name: Rust formatting
         run: cargo fmt --all --check
 
+      - name: Build Windows service resource
+        run: cargo build --release --package microgifter-homeserver-service --locked
+
+      - name: Stage Windows service for desktop targets
+        shell: pwsh
+        run: Copy-Item target/release/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
+
       - name: Full workspace tests
         shell: pwsh
         run: |
@@ -99,16 +106,9 @@ jobs:
       - name: Full workspace lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - name: Build Windows service
-        run: cargo build --release --package microgifter-homeserver-service --locked
-
       - name: Native service console smoke test
         shell: pwsh
         run: ./scripts/smoke-test-service.ps1
-
-      - name: Stage Windows service for Tauri
-        shell: pwsh
-        run: Copy-Item target/release/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
 
       - name: Build NSIS installer
         shell: pwsh
