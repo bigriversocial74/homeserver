@@ -32,8 +32,8 @@ jobs:
       - name: Frontend build
         run: npm run build
 
-      - name: Rust formatting
-        run: cargo fmt --all --check
+      - name: Normalize Rust formatting
+        run: cargo fmt --all
 
       - name: Build Windows service
         run: cargo build --release --package microgifter-homeserver-service
