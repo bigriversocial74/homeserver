@@ -1,0 +1,52 @@
+name: Phase 3A Apply Lock Patch
+
+on:
+  push:
+    branches:
+      - feature/phase-3-backup-recovery-updates-20260724
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-3-backup-recovery-updates-20260724
+          fetch-depth: 0
+
+      - name: Reconstruct and apply exact generated lock patch
+        shell: pwsh
+        run: |
+          $parts = @(
+            ".github/lock-patch/part1.diff",
+            ".github/lock-patch/part2.diff",
+            ".github/lock-patch/part3.diff",
+            ".github/lock-patch/part4.diff"
+          )
+          Get-Content $parts | Set-Content generated-lock.patch -Encoding utf8NoBOM
+          git apply --check generated-lock.patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git apply generated-lock.patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $blob = (git hash-object Cargo.lock).Trim()
+          Write-Host "Generated Cargo.lock blob: $blob"
+          if (-not $blob.StartsWith("150f81b")) {
+            throw "Cargo.lock did not match the expected generated target"
+          }
+          git rm @parts
+          git rm .github/workflows/phase3a-apply-lock-patch.yml
+
+      - name: Commit patched dependency lock
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock .github/lock-patch .github/workflows/phase3a-apply-lock-patch.yml
+          git diff --cached --stat
+          git commit -m "Apply exact recovery transfer Cargo lock"
+          git push origin HEAD:feature/phase-3-backup-recovery-updates-20260724
