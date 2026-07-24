@@ -3,6 +3,7 @@ dist/
 target/
 src-tauri/target/
 src-tauri/resources/microgifter-homeserver-service.exe
+src-tauri/icons/icon.ico
 *.log
 .env
 .env.*
