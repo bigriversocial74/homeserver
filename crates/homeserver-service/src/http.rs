@@ -35,6 +35,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/connection/pair", post(pair))
         .route("/v1/sync/enqueue", post(enqueue_sync))
         .route("/v1/sync/run", post(run_sync))
+        .route(
+            "/v1/diagnostics/credential-vault",
+            post(credential_vault_diagnostic),
+        )
         .layer(DefaultBodyLimit::max(MAX_CONTROL_BODY_BYTES))
         .layer(SetResponseHeaderLayer::if_not_present(
             header::CACHE_CONTROL,
@@ -101,6 +105,13 @@ async fn run_sync(State(state): State<Arc<AppState>>) -> ApiResult<SyncRunSnapsh
         .await
         .map(Json)
         .map_err(|error| gateway_error("sync_failed", error))
+}
+
+async fn credential_vault_diagnostic(State(state): State<Arc<AppState>>) -> ApiResult<Value> {
+    state
+        .credential_vault_self_test()
+        .map(|()| Json(json!({ "ok": true, "credential_vault": "ready" })))
+        .map_err(|error| internal_error("credential_vault_failed", error))
 }
 
 fn validation_error(code: &'static str, error: anyhow::Error) -> (StatusCode, Json<ApiError>) {
