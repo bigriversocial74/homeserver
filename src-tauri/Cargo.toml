@@ -13,8 +13,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+base64.workspace = true
+futures-util.workspace = true
 microgifter-homeserver-core = { path = "../crates/homeserver-core" }
 reqwest.workspace = true
+rfd.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tauri = { version = "2", features = [] }
 tokio.workspace = true
+tokio-util.workspace = true
+zeroize.workspace = true

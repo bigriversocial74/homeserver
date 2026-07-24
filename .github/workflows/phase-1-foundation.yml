@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - feature/phase-3-backup-recovery-updates-20260724
 
 concurrency:
   group: homeserver-quality-${{ github.ref }}
@@ -16,7 +17,7 @@ permissions:
 jobs:
   validate:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
@@ -42,9 +43,32 @@ jobs:
       - name: Verify dependency lock stability
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $false
           npm install --package-lock-only --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo generate-lockfile
-          git diff --exit-code -- Cargo.lock package-lock.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force generated-locks | Out-Null
+          Copy-Item Cargo.lock generated-locks/Cargo.lock -Force
+          Copy-Item package-lock.json generated-locks/package-lock.json -Force
+          git diff -- Cargo.lock package-lock.json | Set-Content dependency-lock-diff.log
+          git diff --quiet -- Cargo.lock package-lock.json
+          $lockExit = $LASTEXITCODE
+          if ($lockExit -ne 0) {
+            Get-Content dependency-lock-diff.log -Tail 200
+            exit $lockExit
+          }
+
+      - name: Upload dependency lock diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dependency-lock-diagnostics
+          path: |
+            dependency-lock-diff.log
+            generated-locks
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Install frontend dependencies
         run: npm ci
@@ -77,7 +101,24 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Build Windows service resource
-        run: cargo build --release --package microgifter-homeserver-service --locked
+        shell: pwsh
+        run: |
+          cargo build --release --package microgifter-homeserver-service --locked *> service-build.log
+          $buildCode = $LASTEXITCODE
+          if ($buildCode -ne 0) {
+            Get-Content service-build.log -Tail 160
+            exit $buildCode
+          }
+          Get-Content service-build.log -Tail 20
+
+      - name: Upload Windows service compiler log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: service-build-log
+          path: service-build.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Stage Windows service for desktop targets
         shell: pwsh
@@ -89,10 +130,10 @@ jobs:
           cargo test --workspace --locked *> cargo-test.log
           $testCode = $LASTEXITCODE
           if ($testCode -ne 0) {
-            Write-Host "Full workspace tests failed. The complete log is attached as a workflow artifact."
+            Get-Content cargo-test.log -Tail 180
             exit $testCode
           }
-          Get-Content cargo-test.log -Tail 30
+          Get-Content cargo-test.log -Tail 40
 
       - name: Upload workspace test log
         if: always()
@@ -104,11 +145,44 @@ jobs:
           retention-days: 7
 
       - name: Full workspace lint
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-
-      - name: Native service console smoke test
         shell: pwsh
-        run: ./scripts/smoke-test-service.ps1
+        run: |
+          cargo clippy --workspace --all-targets --locked -- -D warnings *> cargo-clippy.log
+          $lintCode = $LASTEXITCODE
+          if ($lintCode -ne 0) {
+            Get-Content cargo-clippy.log -Tail 180
+            exit $lintCode
+          }
+          Get-Content cargo-clippy.log -Tail 30
+
+      - name: Upload workspace lint log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cargo-clippy-log
+          path: cargo-clippy.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Encrypted backup and restore console smoke test
+        shell: pwsh
+        run: |
+          & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-service.ps1 *> service-smoke.log
+          $smokeCode = $LASTEXITCODE
+          if ($smokeCode -ne 0) {
+            Get-Content service-smoke.log -Tail 180
+            exit $smokeCode
+          }
+          Get-Content service-smoke.log -Tail 40
+
+      - name: Upload backup and restore smoke log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: service-smoke-log
+          path: service-smoke.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Build NSIS installer
         shell: pwsh
@@ -116,7 +190,7 @@ jobs:
           npm run tauri:build *> tauri-build.log
           $buildCode = $LASTEXITCODE
           if ($buildCode -ne 0) {
-            Write-Host "Tauri/NSIS build failed. Full log is attached as a workflow artifact."
+            Get-Content tauri-build.log -Tail 180
             exit $buildCode
           }
 
@@ -137,7 +211,7 @@ jobs:
           if (-not $installer) { throw "NSIS installer was not produced" }
           Copy-Item $installer.FullName "$bundle/Microgifter-HomeServer-Setup.exe" -Force
 
-      - name: Installed application smoke test
+      - name: Installed LocalSystem backup and uninstall smoke test
         shell: pwsh
         run: ./scripts/smoke-test-installer.ps1 -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Setup.exe
 
