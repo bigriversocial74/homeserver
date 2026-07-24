@@ -336,6 +336,7 @@ async function applyUpdate() {
   try {
     const result = await invoke("homeserver_apply_update", { request: { confirmation } });
     notice = { kind: "success", message: result.message };
+    window.setTimeout(() => loadAll(false), 15000);
   } catch (error) {
     notice = { kind: "warning", message: String(error) };
   } finally {

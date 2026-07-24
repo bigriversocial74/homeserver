@@ -5,26 +5,25 @@ use chrono::{Duration as ChronoDuration, Utc};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures_util::StreamExt;
 use microgifter_homeserver_core::{
-    SignedUpdateManifest, UpdateApplicationPlan, UpdateApplicationResult, UpdateManifestPayload,
-    UpdateRecord, UpdateState, PRODUCT_NAME, UPDATE_KEY_ID, UPDATE_MANIFEST_SCHEMA_VERSION,
+    SignedUpdateManifest, UpdateApplicationResult, UpdateManifestPayload, PRODUCT_NAME,
+    UPDATE_KEY_ID, UPDATE_MANIFEST_SCHEMA_VERSION,
 };
 use semver::Version;
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::Read,
     path::{Path, PathBuf},
     process::Command,
     time::Duration,
 };
 use url::Url;
 
-const PINNED_UPDATE_PUBLIC_KEY_BASE64: &str = "nzuIihsgbLnkpjq217CZZm6v8eD9YKBMrLOOTC3jeRc=";
+const DEFAULT_PINNED_UPDATE_PUBLIC_KEY_BASE64: &str =
+    "nzuIihsgbLnkpjq217CZZm6v8eD9YKBMrLOOTC3jeRc=";
 const MAX_MANIFEST_BYTES: usize = 256 * 1024;
 const MAX_INSTALLER_BYTES: u64 = 1024 * 1024 * 1024;
 const MIN_INSTALLER_BYTES: u64 = 1_000_000;
 const MAX_RELEASE_NOTES_CHARS: usize = 20_000;
-const UPDATER_RESOURCE_NAME: &str = "microgifter-homeserver-updater.exe";
 
 #[derive(Debug, Clone)]
 pub struct VerifiedUpdate {
@@ -73,16 +72,22 @@ pub fn verify_manifest(
     current_version: &str,
 ) -> Result<VerifiedUpdate> {
     let public_key = decode_pinned_public_key()?;
-    verify_manifest_with_key(manifest, current_version, &public_key)
+    verify_manifest_with_key_id(
+        manifest,
+        current_version,
+        &public_key,
+        compiled_update_key_id(),
+    )
 }
 
-fn verify_manifest_with_key(
+fn verify_manifest_with_key_id(
     manifest: &SignedUpdateManifest,
     current_version: &str,
     public_key: &VerifyingKey,
+    expected_key_id: &str,
 ) -> Result<VerifiedUpdate> {
     ensure!(
-        manifest.key_id == UPDATE_KEY_ID,
+        manifest.key_id == expected_key_id,
         "update manifest signing key is not trusted"
     );
     let signature_bytes = URL_SAFE_NO_PAD
@@ -301,38 +306,23 @@ fn secure_https_url(value: &str, label: &str) -> Result<Url> {
     Ok(url)
 }
 
+fn compiled_update_key_id() -> &'static str {
+    option_env!("MG_HOMESERVER_RELEASE_KEY_ID").unwrap_or(UPDATE_KEY_ID)
+}
+
+fn compiled_update_public_key_base64() -> &'static str {
+    option_env!("MG_HOMESERVER_RELEASE_PUBLIC_KEY_BASE64")
+        .unwrap_or(DEFAULT_PINNED_UPDATE_PUBLIC_KEY_BASE64)
+}
+
 fn decode_pinned_public_key() -> Result<VerifyingKey> {
     let bytes = base64::engine::general_purpose::STANDARD
-        .decode(PINNED_UPDATE_PUBLIC_KEY_BASE64)
+        .decode(compiled_update_public_key_base64())
         .context("pinned update public key is invalid")?;
     let bytes: [u8; 32] = bytes
         .try_into()
         .map_err(|_| anyhow::anyhow!("pinned update public key length is invalid"))?;
     VerifyingKey::from_bytes(&bytes).context("pinned update public key is invalid")
-}
-
-fn verify_file(path: &Path, expected_size: u64, expected_sha256: &str) -> Result<()> {
-    let metadata = fs::metadata(path)?;
-    ensure!(metadata.is_file(), "staged installer is not a regular file");
-    ensure!(
-        metadata.len() == expected_size,
-        "staged installer size does not match the signed manifest"
-    );
-    let mut file = fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 128 * 1024];
-    loop {
-        let count = file.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    ensure!(
-        hex::encode(hasher.finalize()).eq_ignore_ascii_case(expected_sha256),
-        "staged installer SHA-256 does not match the signed manifest"
-    );
-    Ok(())
 }
 
 #[cfg(windows)]
@@ -445,7 +435,8 @@ mod tests {
     #[test]
     fn valid_signed_manifest_is_accepted() {
         let (manifest, public_key) = signed_manifest("0.2.0");
-        let verified = verify_manifest_with_key(&manifest, "0.1.0", &public_key).unwrap();
+        let verified =
+            verify_manifest_with_key_id(&manifest, "0.1.0", &public_key, UPDATE_KEY_ID).unwrap();
         assert_eq!(verified.manifest.payload.version, "0.2.0");
         assert!(manifest_is_newer(&verified, "0.1.0").unwrap());
     }
@@ -454,7 +445,9 @@ mod tests {
     fn tampered_manifest_is_rejected() {
         let (mut manifest, public_key) = signed_manifest("0.2.0");
         manifest.payload.version = "9.9.9".to_owned();
-        assert!(verify_manifest_with_key(&manifest, "0.1.0", &public_key).is_err());
+        assert!(
+            verify_manifest_with_key_id(&manifest, "0.1.0", &public_key, UPDATE_KEY_ID).is_err()
+        );
     }
 
     #[test]
@@ -466,6 +459,8 @@ mod tests {
             key.sign(&serde_json::to_vec(&manifest.payload).unwrap())
                 .to_bytes(),
         );
-        assert!(verify_manifest_with_key(&manifest, "0.1.0", &public_key).is_err());
+        assert!(
+            verify_manifest_with_key_id(&manifest, "0.1.0", &public_key, UPDATE_KEY_ID).is_err()
+        );
     }
 }

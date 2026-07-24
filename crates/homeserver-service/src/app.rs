@@ -107,13 +107,21 @@ async fn run_backup_scheduler(state: Arc<AppState>, mut shutdown: watch::Receive
 }
 
 async fn run_update_scheduler(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>) {
-    let start = tokio::time::Instant::now() + Duration::from_secs(5 * 60);
-    let mut interval = tokio::time::interval_at(start, Duration::from_secs(6 * 60 * 60));
+    let check_start = tokio::time::Instant::now() + Duration::from_secs(5 * 60);
+    let mut check_interval =
+        tokio::time::interval_at(check_start, Duration::from_secs(6 * 60 * 60));
+    let result_start = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut result_interval = tokio::time::interval_at(result_start, Duration::from_secs(15));
     loop {
         tokio::select! {
-            _ = interval.tick() => {
+            _ = check_interval.tick() => {
                 if let Err(error) = state.check_for_updates().await {
                     warn!(?error, "scheduled HomeServer update check failed");
+                }
+            }
+            _ = result_interval.tick() => {
+                if let Err(error) = state.consume_update_result_if_present() {
+                    warn!(?error, "unable to consume HomeServer updater result");
                 }
             }
             changed = shutdown.changed() => {

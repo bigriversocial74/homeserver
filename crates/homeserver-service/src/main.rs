@@ -187,7 +187,21 @@ impl AppState {
         recovery_transfer::package_for_export(&*self.connection()?, &self.config, backup_id)
     }
 
+    fn consume_update_result_if_present(&self) -> Result<()> {
+        let connection = self.connection()?;
+        if let Some(result) = update::consume_application_result(&self.config)? {
+            update_store::record_application_result(&connection, &result)?;
+            info!(
+                update_id = %result.update_id,
+                state = %result.state.as_str(),
+                "HomeServer updater result consumed"
+            );
+        }
+        Ok(())
+    }
+
     fn update_status(&self) -> Result<UpdateStatus> {
+        self.consume_update_result_if_present()?;
         update_store::status(
             &*self.connection()?,
             &self.config.update_manifest_url,
