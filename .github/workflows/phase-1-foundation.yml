@@ -122,7 +122,25 @@ jobs:
           retention-days: 7
 
       - name: Full workspace lint
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        shell: pwsh
+        run: |
+          cargo clippy --workspace --all-targets --locked -- -D warnings *> cargo-clippy.log
+          $lintCode = $LASTEXITCODE
+          if ($lintCode -ne 0) {
+            Write-Host "Strict workspace lint failed. The complete log is attached."
+            Get-Content cargo-clippy.log -Tail 120
+            exit $lintCode
+          }
+          Get-Content cargo-clippy.log -Tail 20
+
+      - name: Upload workspace lint log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cargo-clippy-log
+          path: cargo-clippy.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Native service console smoke test
         shell: pwsh
