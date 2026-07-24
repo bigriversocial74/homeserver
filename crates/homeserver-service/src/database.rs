@@ -23,7 +23,6 @@ pub struct QueuedOperation {
 #[derive(Debug, Clone)]
 pub struct CloudConnectionRecord {
     pub snapshot: CloudConnectionSnapshot,
-    pub public_key_base64: String,
 }
 
 #[derive(Debug, Clone)]
@@ -108,7 +107,7 @@ pub fn pending_sync_count(connection: &Connection) -> Result<u64> {
 pub fn cloud_connection(connection: &Connection) -> Result<CloudConnectionRecord> {
     let row = connection
         .query_row(
-            "SELECT cloud_base_url,device_id,public_key_base64,state,scopes_json,paired_at_utc,last_success_utc,last_error FROM cloud_connection WHERE singleton_id=1",
+            "SELECT cloud_base_url,device_id,state,scopes_json,paired_at_utc,last_success_utc,last_error FROM cloud_connection WHERE singleton_id=1",
             [],
             |row| {
                 Ok((
@@ -117,28 +116,17 @@ pub fn cloud_connection(connection: &Connection) -> Result<CloudConnectionRecord
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(5)?,
                     row.get::<_, Option<String>>(6)?,
-                    row.get::<_, Option<String>>(7)?,
                 ))
             },
         )
         .optional()?;
 
-    let Some((
-        base_url,
-        device_id,
-        public_key,
-        state,
-        scopes_json,
-        paired_at,
-        last_success,
-        last_error,
-    )) = row
+    let Some((base_url, device_id, state, scopes_json, paired_at, last_success, last_error)) = row
     else {
         return Ok(CloudConnectionRecord {
             snapshot: CloudConnectionSnapshot::default(),
-            public_key_base64: String::new(),
         });
     };
     let state = match state.as_str() {
@@ -159,7 +147,6 @@ pub fn cloud_connection(connection: &Connection) -> Result<CloudConnectionRecord
             last_success_utc: last_success,
             last_error,
         },
-        public_key_base64: public_key,
     })
 }
 
