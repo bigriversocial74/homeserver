@@ -68,7 +68,8 @@ impl AppState {
                     ..CloudConnectionSnapshot::default()
                 }
             });
-        let mut snapshot = HealthSnapshot::running(&self.config.server_name, "ready").with_cloud(&cloud);
+        let mut snapshot =
+            HealthSnapshot::running(&self.config.server_name, "ready").with_cloud(&cloud);
         snapshot.pending_sync = match database::pending_sync_count(&connection) {
             Ok(count) => count,
             Err(error) => {
@@ -159,7 +160,7 @@ impl AppState {
             "device.heartbeat",
             &json!({
                 "installation_id": installation_id,
-                "server_name": self.config.server_name,
+                "server_name": &self.config.server_name,
                 "version": env!("CARGO_PKG_VERSION"),
             }),
         )?;
@@ -170,15 +171,21 @@ impl AppState {
         let (record, installation_id, operations) = {
             let mut connection = self.connection()?;
             let record = database::cloud_connection(&connection)?;
-            if record.snapshot.state == CloudConnectionState::NotPaired {
-                let pending = database::pending_sync_count(&connection)?;
-                return Ok(SyncRunSnapshot {
-                    processed: 0,
-                    accepted: 0,
-                    rejected: 0,
-                    review: 0,
-                    pending,
-                });
+            match record.snapshot.state {
+                CloudConnectionState::NotPaired => {
+                    let pending = database::pending_sync_count(&connection)?;
+                    return Ok(SyncRunSnapshot {
+                        processed: 0,
+                        accepted: 0,
+                        rejected: 0,
+                        review: 0,
+                        pending,
+                    });
+                }
+                CloudConnectionState::Revoked => {
+                    bail!("HomeServer cloud credentials were revoked; pair the device again");
+                }
+                _ => {}
             }
             let installation_id = database::installation_id(&connection)?;
             let operations = database::claim_due_sync(&mut connection, 25)?;
@@ -231,7 +238,12 @@ impl AppState {
                 return Err(error);
             }
         };
-        validate_receipts(&operations, &receipts)?;
+        if let Err(error) = validate_receipts(&operations, &receipts) {
+            let connection = self.connection()?;
+            database::retry_operations(&connection, &operations)?;
+            database::mark_cloud_error(&connection, "invalid_receipt_set", false)?;
+            return Err(error);
+        }
 
         let mut accepted = 0;
         let mut rejected = 0;
@@ -279,16 +291,22 @@ fn validate_receipts(
         bail!("Microgifter returned an incomplete synchronization receipt set");
     }
     for operation in operations {
-        let matches = receipts
+        let matching = receipts
             .iter()
-            .filter(|receipt| receipt.idempotency_key == operation.idempotency_key)
+            .filter(|receipt| {
+                receipt.idempotency_key == operation.idempotency_key
+                    && receipt.operation_type == operation.operation_type
+            })
             .count();
-        if matches != 1 {
+        if matching != 1 {
             bail!("Microgifter returned an invalid synchronization receipt set");
         }
     }
     for receipt in receipts {
-        if !matches!(receipt.disposition.as_str(), "accepted" | "rejected" | "review") {
+        if !matches!(
+            receipt.disposition.as_str(),
+            "accepted" | "rejected" | "review"
+        ) {
             bail!("Microgifter returned an unsupported synchronization disposition");
         }
     }
