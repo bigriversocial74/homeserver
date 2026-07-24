@@ -19,7 +19,6 @@ chrono.workspace = true
 directories.workspace = true
 flate2.workspace = true
 hex.workspace = true
-keyring.workspace = true
 microgifter-homeserver-core = { path = "../homeserver-core" }
 rand.workspace = true
 rusqlite.workspace = true
@@ -40,3 +39,4 @@ tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8"
+windows-sys.workspace = true
