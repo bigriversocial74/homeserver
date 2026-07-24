@@ -1,4 +1,5 @@
 use crate::AppState;
+use microgifter_homeserver_core::CloudConnectionState;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::watch;
 use tracing::{info, warn};
@@ -25,7 +26,7 @@ pub async fn run(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>) {
                         continue;
                     }
                 };
-                if connection.state == microgifter_homeserver_core::CloudConnectionState::NotPaired {
+                if matches!(connection.state, CloudConnectionState::NotPaired | CloudConnectionState::Revoked) {
                     continue;
                 }
                 if let Err(error) = state.enqueue_heartbeat() {
