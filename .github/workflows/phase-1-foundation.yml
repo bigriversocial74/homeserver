@@ -19,6 +19,15 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: windows-cargo-
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -54,11 +63,18 @@ jobs:
           npm run tauri:build *> tauri-build.log
           $buildCode = $LASTEXITCODE
           if ($buildCode -ne 0) {
-            Write-Host "Tauri/NSIS diagnostic tail:"
-            Get-Content tauri-build.log -Tail 140
+            Write-Host "Tauri/NSIS build failed. Full log is attached as a workflow artifact."
             exit $buildCode
           }
-          Get-Content tauri-build.log -Tail 40
+
+      - name: Upload Tauri build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-build-log
+          path: tauri-build.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Normalize installer filename
         shell: pwsh
