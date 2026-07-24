@@ -40,13 +40,17 @@ impl AppState {
 fn configure_logging() {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("microgifter_homeserver_service=info,tower_http=info"));
-    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .try_init();
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     configure_logging();
-    let command = std::env::args().nth(1).unwrap_or_else(|| "console".to_owned());
+    let command = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "console".to_owned());
 
     match command.as_str() {
         "console" => run_console().await,
@@ -94,7 +98,10 @@ fn service_main(_arguments: Vec<std::ffi::OsString>) {
 fn windows_service_runtime() -> Result<()> {
     use std::{sync::mpsc, time::Duration};
     use windows_service::{
-        service::{ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType},
+        service::{
+            ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
+            ServiceType,
+        },
         service_control_handler::{self, ServiceControlHandlerResult},
     };
 
@@ -119,7 +126,9 @@ fn windows_service_runtime() -> Result<()> {
         process_id: None,
     })?;
 
-    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     std::thread::spawn(move || {
         let _ = stop_rx.recv();
@@ -131,7 +140,11 @@ fn windows_service_runtime() -> Result<()> {
         service_type: ServiceType::OWN_PROCESS,
         current_state: ServiceState::Stopped,
         controls_accepted: ServiceControlAccept::empty(),
-        exit_code: if result.is_ok() { ServiceExitCode::Win32(0) } else { ServiceExitCode::Win32(1) },
+        exit_code: if result.is_ok() {
+            ServiceExitCode::Win32(0)
+        } else {
+            ServiceExitCode::Win32(1)
+        },
         checkpoint: 0,
         wait_hint: Duration::default(),
         process_id: None,
