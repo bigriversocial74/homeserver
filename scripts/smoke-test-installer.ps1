@@ -9,13 +9,14 @@ $installer = (Resolve-Path $InstallerPath).Path
 $dataDirectory = Join-Path $env:ProgramData "Microgifter\HomeServer"
 $markerPath = Join-Path $dataDirectory "ci-preservation-marker.txt"
 $uninstallerPath = $null
+$apiBase = "http://127.0.0.1:47831"
 
 function Wait-ForHomeServerHealth {
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         try {
             $service = Get-Service -Name $serviceName -ErrorAction Stop
             if ($service.Status -eq "Running") {
-                $health = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:47831/healthz" -TimeoutSec 2
+                $health = Invoke-WebRequest -UseBasicParsing -Uri "$apiBase/healthz" -TimeoutSec 2
                 if ($health.StatusCode -eq 204) {
                     return
                 }
@@ -64,9 +65,14 @@ try {
     }
 
     Wait-ForHomeServerHealth
-    $status = Invoke-RestMethod -Uri "http://127.0.0.1:47831/v1/status" -TimeoutSec 3
+    $status = Invoke-RestMethod -Uri "$apiBase/v1/status" -TimeoutSec 3
     if ($status.state -ne "running" -or $status.database -ne "ready") {
         throw "Installed HomeServer reported state '$($status.state)' and database '$($status.database)'"
+    }
+
+    $vault = Invoke-RestMethod -Method Post -Uri "$apiBase/v1/diagnostics/credential-vault" -ContentType "application/json" -Body "{}" -TimeoutSec 5
+    if (-not $vault.ok -or $vault.credential_vault -ne "ready") {
+        throw "Installed LocalSystem HomeServer service could not use the operating-system credential vault"
     }
 
     if (-not (Test-Path (Join-Path $dataDirectory "homeserver.sqlite3"))) {
@@ -99,7 +105,7 @@ try {
         throw "HomeServer data was removed during default uninstall"
     }
 
-    Write-Host "HomeServer installer, service, health, logging, data-preservation, and uninstall smoke tests passed."
+    Write-Host "HomeServer installer, LocalSystem credential vault, service, health, logging, data-preservation, and uninstall smoke tests passed."
 }
 finally {
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
