@@ -1,0 +1,66 @@
+name: Phase 2 Coordinated Cloud Contract
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homeserver-phase2-cloud-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cloud-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact Microgifter cloud contract
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: bigriversocial74/contactform
+          ref: 50d7d00eb22951d416397f0ff12f47cb21b8487f
+          path: cloud
+          fetch-depth: 1
+
+      - name: Verify PHP runtime and sodium
+        shell: bash
+        run: |
+          php -v
+          composer --version
+          php -r "if (!extension_loaded('sodium')) { fwrite(STDERR, 'sodium extension missing\n'); exit(1); }"
+
+      - name: Validate Composer metadata and locked dependencies
+        working-directory: cloud
+        run: |
+          composer validate --strict
+          composer audit --locked --no-interaction
+
+      - name: Lint HomeServer cloud PHP surface
+        working-directory: cloud
+        shell: bash
+        run: |
+          find api/homeserver -type f -name '*.php' -print0 | xargs -0 -n1 php -l
+          php -l config/migrations.php
+          php -l scripts/validate_homeserver_pairing_sync_v1.php
+
+      - name: Validate signed pairing and synchronization protocol
+        working-directory: cloud
+        run: php scripts/validate_homeserver_pairing_sync_v1.php
+
+      - name: Validate migration manifest and canonical upgrade
+        working-directory: cloud
+        shell: bash
+        run: |
+          php scripts/validate_migration_manifest.php
+          mkdir -p build
+          php scripts/build_full_upgrade_sql.php build/microgifter_full_upgrade.sql
+          test -s build/microgifter_full_upgrade.sql
+
+      - name: Verify exact coordinated cloud commit
+        working-directory: cloud
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "50d7d00eb22951d416397f0ff12f47cb21b8487f"
