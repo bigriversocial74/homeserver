@@ -2,7 +2,7 @@ use crate::AppState;
 use axum::{
     extract::{DefaultBodyLimit, State},
     http::{header, HeaderValue, StatusCode},
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use microgifter_homeserver_core::{
