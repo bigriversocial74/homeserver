@@ -1,6 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 use zeroize::Zeroize;
 
 const CREDENTIAL_SERVICE: &str = "MicrogifterHomeServer";
@@ -42,4 +43,31 @@ pub fn delete(installation_id: &str) -> Result<()> {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(error) => Err(error).context("unable to delete HomeServer cloud credentials"),
     }
+}
+
+pub fn self_test(installation_id: &str) -> Result<()> {
+    let diagnostic_user = format!("{installation_id}:diagnostic:{}", Uuid::new_v4().simple());
+    let diagnostic_entry = Entry::new(CREDENTIAL_SERVICE, &diagnostic_user)
+        .context("unable to open a diagnostic operating-system credential entry")?;
+    let mut secret = format!("homeserver-vault-test:{}", Uuid::new_v4().simple());
+
+    let result = (|| -> Result<()> {
+        diagnostic_entry
+            .set_password(&secret)
+            .context("unable to write a diagnostic operating-system credential")?;
+        let stored = diagnostic_entry
+            .get_password()
+            .context("unable to read the diagnostic operating-system credential")?;
+        if stored != secret {
+            bail!("operating-system credential vault returned mismatched data");
+        }
+        Ok(())
+    })();
+
+    let delete_result = match diagnostic_entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error).context("unable to delete the diagnostic credential"),
+    };
+    secret.zeroize();
+    result.and(delete_result)
 }
