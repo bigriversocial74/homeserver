@@ -30,11 +30,10 @@ jobs:
           cargo fmt --all
           git diff --check
 
-      - name: Restore production validation and commit
+      - name: Commit hardened updater source
         run: |
-          git show c45a91f1986100bb84371dd65dbe6b4023260e42:.github/workflows/phase-1-foundation.yml > .github/workflows/phase-1-foundation.yml
           git rm scripts/phase3b_rollback_hardening.py scripts/phase3b_rollback_hardening_runner.py
-          git add crates/homeserver-updater/src/main.rs .github/workflows/phase-1-foundation.yml
+          git add crates/homeserver-updater/src/main.rs
           git config user.name "Microgifter Build Bot"
           git config user.email "buildbot@microgifter.local"
           git commit -m "Harden Phase 3B installed rollback lifecycle"
