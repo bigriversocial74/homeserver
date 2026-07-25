@@ -1,7 +1,6 @@
 name: Phase 3B Rollback Hardening
 
 on:
-  pull_request:
   push:
     branches:
       - feature/phase-3b-signed-updates-20260724
@@ -10,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: phase3b-rollback-hardening-${{ github.ref }}
+  group: phase3b-rollback-hardening
   cancel-in-progress: true
 
 jobs:
@@ -21,6 +20,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: feature/phase-3b-signed-updates-20260724
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
@@ -28,14 +28,15 @@ jobs:
 
       - name: Apply rollback and diagnostic hardening
         run: |
-          python scripts/phase3b_rollback_hardening_runner.py
+          python scripts/phase3b_rollback_hardening.py
           cargo fmt --all
           git diff --check
 
-      - name: Commit hardened rollback path
+      - name: Restore production validation and commit
         run: |
+          git show c45a91f1986100bb84371dd65dbe6b4023260e42:.github/workflows/phase-1-foundation.yml > .github/workflows/phase-1-foundation.yml
           git rm scripts/phase3b_rollback_hardening.py scripts/phase3b_rollback_hardening_runner.py
-          git add crates/homeserver-updater/src/main.rs scripts/smoke-test-updater.ps1 .github/workflows/phase-1-foundation.yml
+          git add crates/homeserver-updater/src/main.rs .github/workflows/phase-1-foundation.yml
           git config user.name "Microgifter Build Bot"
           git config user.email "buildbot@microgifter.local"
           git commit -m "Harden Phase 3B installed rollback lifecycle"
