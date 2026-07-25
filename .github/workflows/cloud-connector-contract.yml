@@ -61,3 +61,31 @@ jobs:
 
       - name: Validate cross-repository connector contract
         run: python homeserver/scripts/validate-cloud-connector-contract.py --homeserver-root homeserver --cloud-root cloud
+
+  fix-audit-lint:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'audit/full-production-hardening-20260725' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: audit/full-production-hardening-20260725
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+      - name: Apply strict Clippy correction
+        shell: bash
+        run: |
+          python -c "from pathlib import Path; p=Path('crates/homeserver-service/src/main.rs'); t=p.read_text(); old='    candidates.sort_by(|left, right| right.0.cmp(&left.0));'; new='    candidates.sort_by_key(|right| std::cmp::Reverse(right.0));'; assert old in t; p.write_text(t.replace(old,new,1))"
+          cargo fmt --all
+      - name: Commit strict lint correction
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates
+          git commit -m "Resolve strict HomeServer lint gate"
+          git push origin HEAD:audit/full-production-hardening-20260725
