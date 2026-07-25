@@ -10,6 +10,7 @@ $dataDirectory = Join-Path $env:ProgramData "Microgifter\HomeServer"
 $markerPath = Join-Path $dataDirectory "ci-preservation-marker.txt"
 $uninstallerPath = $null
 $apiBase = "http://127.0.0.1:47831"
+$controlHeaders = @{ "X-MG-Local-Client" = "microgifter-control-center-v1" }
 $backupPath = $null
 
 function Wait-ForHomeServerHealth {
@@ -66,13 +67,48 @@ try {
     }
 
     Wait-ForHomeServerHealth
-    $status = Invoke-RestMethod -Uri "$apiBase/v1/status" -TimeoutSec 3
+    $status = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/status" -TimeoutSec 3
     if ($status.state -ne "running" -or $status.database -ne "ready" -or $status.backup -ne "ready") {
         throw "Installed HomeServer reported state '$($status.state)', database '$($status.database)', and backup '$($status.backup)'"
     }
 
     if (-not (Test-Path (Join-Path $dataDirectory "homeserver.sqlite3"))) {
         throw "Installed HomeServer did not create its SQLite database"
+    }
+
+    $dataAcl = Get-Acl -LiteralPath $dataDirectory
+    if (-not $dataAcl.AreAccessRulesProtected) {
+        throw "HomeServer data directory still inherits broad parent permissions"
+    }
+    $broadLocalSids = @("S-1-1-0", "S-1-5-11", "S-1-5-32-545")
+    $requiredFullControlSids = @("S-1-5-18", "S-1-5-32-544")
+    $fullControlFound = @{}
+    foreach ($sid in $requiredFullControlSids) { $fullControlFound[$sid] = $false }
+    $writeRights = [int][System.Security.AccessControl.FileSystemRights]::WriteData -bor
+        [int][System.Security.AccessControl.FileSystemRights]::CreateFiles -bor
+        [int][System.Security.AccessControl.FileSystemRights]::CreateDirectories -bor
+        [int][System.Security.AccessControl.FileSystemRights]::Modify -bor
+        [int][System.Security.AccessControl.FileSystemRights]::FullControl
+    foreach ($rule in $dataAcl.Access) {
+        $sid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+        if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow) {
+            if ($broadLocalSids -contains $sid -and (([int]$rule.FileSystemRights -band $writeRights) -ne 0)) {
+                throw "HomeServer data directory grants broad write access to $sid"
+            }
+            if ($requiredFullControlSids -contains $sid -and $rule.FileSystemRights.HasFlag([System.Security.AccessControl.FileSystemRights]::FullControl)) {
+                $fullControlFound[$sid] = $true
+            }
+        }
+    }
+    foreach ($sid in $requiredFullControlSids) {
+        if (-not $fullControlFound[$sid]) {
+            throw "HomeServer data directory is missing required full control for $sid"
+        }
+    }
+
+    $vault = Invoke-RestMethod -Method Post -Headers $controlHeaders -Uri "$apiBase/v1/cloud/vault-self-test" -ContentType "application/json" -Body "{}" -TimeoutSec 30
+    if (-not $vault.ok) {
+        throw "Installed LocalSystem machine-scoped credential vault self-test failed"
     }
 
     $logFiles = Get-ChildItem (Join-Path $dataDirectory "logs") -Filter "microgifter-homeserver-service.log*" -ErrorAction SilentlyContinue
@@ -85,7 +121,7 @@ try {
         passphrase = $null
         note = "Installed LocalSystem backup validation"
     } | ConvertTo-Json -Compress
-    $backup = Invoke-RestMethod -Method Post -Uri "$apiBase/v1/backups/create" -ContentType "application/json" -Body $backupBody -TimeoutSec 90
+    $backup = Invoke-RestMethod -Method Post -Headers $controlHeaders -Uri "$apiBase/v1/backups/create" -ContentType "application/json" -Body $backupBody -TimeoutSec 90
     if ($backup.backup.state -ne "ready" -or $backup.backup.encryption -ne "device_key_aes256gcm") {
         throw "Installed LocalSystem service did not create a device-key encrypted backup"
     }
@@ -99,7 +135,7 @@ try {
         passphrase = $null
         confirmation = $null
     } | ConvertTo-Json -Compress
-    $verified = Invoke-RestMethod -Method Post -Uri "$apiBase/v1/backups/verify" -ContentType "application/json" -Body $verifyBody -TimeoutSec 90
+    $verified = Invoke-RestMethod -Method Post -Headers $controlHeaders -Uri "$apiBase/v1/backups/verify" -ContentType "application/json" -Body $verifyBody -TimeoutSec 90
     if ($verified.backup.state -ne "verified") {
         throw "Installed LocalSystem service could not decrypt and verify its backup"
     }

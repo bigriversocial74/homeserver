@@ -287,29 +287,43 @@ pub fn stage_restore(
     let restore_id = Uuid::new_v4().to_string();
     let pending_database = config.pending_restore_database_path();
     let pending_temp = pending_database.with_extension("sqlite3.tmp");
-    fs::copy(&extracted.database_path, &pending_temp)?;
-    File::options()
-        .write(true)
-        .open(&pending_temp)?
-        .sync_all()?;
-    fs::rename(&pending_temp, &pending_database)?;
-    fs::remove_dir_all(&extracted.directory)?;
-
+    let plan_path = config.pending_restore_plan_path();
     let plan = RestorePlan {
         format_version: PACKAGE_VERSION,
         restore_id: restore_id.clone(),
         backup_id: record.backup_id.clone(),
         staged_at_utc: Utc::now(),
     };
-    write_json_atomic(&config.pending_restore_plan_path(), &plan)?;
-    database::create_restore_request(
-        connection,
-        &restore_id,
-        &record.backup_id,
-        &pending_database,
-        "RESTORE",
-    )?;
-    database::mark_backup_restore_staged(connection, &record.backup_id)?;
+
+    let staging_result = (|| -> Result<()> {
+        if pending_temp.exists() {
+            fs::remove_file(&pending_temp)?;
+        }
+        fs::copy(&extracted.database_path, &pending_temp)?;
+        File::options()
+            .write(true)
+            .open(&pending_temp)?
+            .sync_all()?;
+        fs::rename(&pending_temp, &pending_database)?;
+        write_json_atomic(&plan_path, &plan)?;
+        database::create_restore_request(
+            connection,
+            &restore_id,
+            &record.backup_id,
+            &pending_database,
+            "RESTORE",
+        )?;
+        database::mark_backup_restore_staged(connection, &record.backup_id)?;
+        Ok(())
+    })();
+    let _ = fs::remove_dir_all(&extracted.directory);
+    if let Err(error) = staging_result {
+        let _ = fs::remove_file(&pending_temp);
+        let _ = fs::remove_file(&pending_database);
+        let _ = fs::remove_file(&plan_path);
+        let _ = database::delete_restore_request(connection, &restore_id);
+        return Err(error).context("unable to persist the staged HomeServer restore");
+    }
 
     Ok(BackupActionResult {
         backup: database::backup_by_id(connection, &record.backup_id)?,
@@ -335,20 +349,12 @@ pub fn apply_pending_restore(config: &AppConfig) -> Result<Option<RestoreOutcome
     );
     verify_sqlite_database(&pending_database)?;
 
-    remove_sqlite_sidecars(&config.database_path);
-    let rollback_path = if config.database_path.exists() {
-        let path = config.restore_dir.join(format!(
-            "rollback-{}-{}.sqlite3",
-            Utc::now().format("%Y%m%dT%H%M%SZ"),
-            &plan.restore_id[..8]
-        ));
-        fs::rename(&config.database_path, &path)?;
-        Some(path)
-    } else {
-        None
-    };
-
-    fs::rename(&pending_database, &config.database_path)?;
+    let rollback_path = activate_staged_database(
+        &config.database_path,
+        &pending_database,
+        &config.restore_dir,
+        &plan.restore_id,
+    )?;
     match verify_sqlite_database(&config.database_path) {
         Ok(()) => {
             fs::remove_file(&plan_path)?;
@@ -377,6 +383,38 @@ pub fn apply_pending_restore(config: &AppConfig) -> Result<Option<RestoreOutcome
             }))
         }
     }
+}
+
+fn activate_staged_database(
+    current_database: &Path,
+    pending_database: &Path,
+    restore_directory: &Path,
+    restore_id: &str,
+) -> Result<Option<PathBuf>> {
+    remove_sqlite_sidecars(current_database);
+    let rollback_path = if current_database.exists() {
+        let path = restore_directory.join(format!(
+            "rollback-{}-{}.sqlite3",
+            Utc::now().format("%Y%m%dT%H%M%SZ"),
+            &restore_id[..8]
+        ));
+        fs::rename(current_database, &path)?;
+        Some(path)
+    } else {
+        None
+    };
+
+    if let Err(activation_error) = fs::rename(pending_database, current_database) {
+        if let Some(rollback_path) = rollback_path.as_ref() {
+            fs::rename(rollback_path, current_database).with_context(|| {
+                format!(
+                    "unable to reactivate the previous HomeServer database after restore activation failed: {activation_error}"
+                )
+            })?;
+        }
+        return Err(activation_error).context("unable to activate the staged HomeServer database");
+    }
+    Ok(rollback_path)
 }
 
 pub fn create_automatic_if_due(
@@ -605,14 +643,29 @@ fn extract_archive(archive: &[u8], directory: &Path, header: &PackageHeader) -> 
     let mut tar = Archive::new(decoder);
     let mut manifest: Option<BackupManifest> = None;
     let mut database_written = false;
+    let mut entry_count = 0_u8;
 
     for entry in tar.entries()? {
+        entry_count = entry_count
+            .checked_add(1)
+            .context("backup archive contains too many entries")?;
+        ensure!(entry_count <= 2, "backup archive contains unexpected entries");
         let mut entry = entry?;
+        ensure!(
+            entry.header().entry_type().is_file(),
+            "backup archive entries must be regular files"
+        );
         let path = entry.path()?.into_owned();
         match path.to_string_lossy().as_ref() {
             "manifest.json" => {
-                let mut bytes = Vec::new();
-                entry.read_to_end(&mut bytes)?;
+                ensure!(manifest.is_none(), "backup archive contains duplicate manifests");
+                ensure!(
+                    entry.size() <= MAX_HEADER_BYTES as u64,
+                    "backup manifest is too large"
+                );
+                let mut bytes = Vec::with_capacity(entry.size() as usize);
+                let mut limited = entry.take(MAX_HEADER_BYTES as u64 + 1);
+                limited.read_to_end(&mut bytes)?;
                 ensure!(
                     bytes.len() <= MAX_HEADER_BYTES,
                     "backup manifest is too large"
@@ -620,9 +673,24 @@ fn extract_archive(archive: &[u8], directory: &Path, header: &PackageHeader) -> 
                 manifest = Some(serde_json::from_slice(&bytes)?);
             }
             "homeserver.sqlite3" => {
+                ensure!(
+                    !database_written,
+                    "backup archive contains duplicate databases"
+                );
+                ensure!(
+                    entry.size() <= MAX_DATABASE_BYTES,
+                    "backup database exceeds the size limit"
+                );
                 let destination = directory.join("homeserver.sqlite3");
                 let mut output = File::create(&destination)?;
-                std::io::copy(&mut entry, &mut output)?;
+                let copied = std::io::copy(
+                    &mut entry.take(MAX_DATABASE_BYTES + 1),
+                    &mut output,
+                )?;
+                ensure!(
+                    copied <= MAX_DATABASE_BYTES,
+                    "backup database exceeds the size limit"
+                );
                 output.sync_all()?;
                 database_written = true;
             }
@@ -630,6 +698,7 @@ fn extract_archive(archive: &[u8], directory: &Path, header: &PackageHeader) -> 
         }
     }
 
+    ensure!(entry_count == 2, "backup archive is incomplete");
     let manifest = manifest.context("backup manifest is missing")?;
     ensure!(database_written, "backup database is missing");
     ensure!(
@@ -667,6 +736,18 @@ fn verify_sqlite_database(path: &Path) -> Result<()> {
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     database::health_check(&connection)
+}
+
+pub fn enforce_pre_update_retention(connection: &Connection) -> Result<()> {
+    for (backup_id, path) in database::unreferenced_pre_update_backups(connection)? {
+        if path.exists() {
+            fs::remove_file(&path).with_context(|| {
+                format!("unable to remove expired pre-update backup {}", path.display())
+            })?;
+        }
+        database::delete_backup_record(connection, &backup_id)?;
+    }
+    Ok(())
 }
 
 fn enforce_retention(connection: &Connection) -> Result<()> {
@@ -805,4 +886,27 @@ mod tests {
         .expect("invalid database");
         assert!(apply_pending_restore(&config).is_err());
     }
+    #[test]
+    fn failed_restore_activation_reinstates_the_previous_database() {
+        let directory = tempdir().expect("temporary directory");
+        let current = directory.path().join("homeserver.sqlite3");
+        let missing_pending = directory.path().join("missing.sqlite3");
+        fs::write(&current, b"original database").expect("current database fixture");
+
+        let error = activate_staged_database(
+            &current,
+            &missing_pending,
+            directory.path(),
+            "12345678-1234-1234-1234-123456789012",
+        )
+        .expect_err("activation should fail when the pending database is missing");
+
+        assert!(error.to_string().contains("activate the staged"));
+        assert_eq!(
+            fs::read(&current).expect("previous database should be restored"),
+            b"original database"
+        );
+    }
+
+
 }

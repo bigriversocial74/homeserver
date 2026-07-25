@@ -18,8 +18,9 @@ use microgifter_homeserver_core::{
 };
 use rusqlite::Connection;
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Mutex, MutexGuard},
+    time::{Duration as StdDuration, SystemTime},
 };
 use tokio::sync::watch;
 use tracing::{error, info, warn};
@@ -156,6 +157,22 @@ impl AppState {
         backup::stage_restore(&*self.connection()?, &self.config, request)
     }
 
+    fn prune_logs(&self) -> Result<()> {
+        prune_old_service_logs(&self.config.logs_dir, SystemTime::now())
+    }
+
+    fn maintain_runtime_history(&self) -> Result<()> {
+        {
+            let connection = self.connection()?;
+            database::maintain_history(&connection)?;
+            update_store::maintain_history(&connection)?;
+            backup::enforce_pre_update_retention(&connection)?;
+        }
+        prune_artifact_generations(&self.config.update_rollback_dir, 3, true)?;
+        prune_artifact_generations(&self.config.update_installed_dir, 3, false)?;
+        Ok(())
+    }
+
     fn create_automatic_backup_if_due(&self) -> Result<()> {
         if let Some(record) = backup::create_automatic_if_due(&*self.connection()?, &self.config)? {
             info!(backup_id = %record.backup_id, "scheduled encrypted backup created");
@@ -188,16 +205,18 @@ impl AppState {
     }
 
     fn consume_update_result_if_present(&self) -> Result<()> {
-        let connection = self.connection()?;
         if let Some(result) = update::consume_application_result(&self.config)? {
-            update_store::record_application_result(&connection, &result)?;
+            {
+                let connection = self.connection()?;
+                update_store::record_application_result(&connection, &result)?;
+            }
             info!(
                 update_id = %result.update_id,
                 state = %result.state.as_str(),
                 "HomeServer updater result consumed"
             );
         }
-        Ok(())
+        self.maintain_runtime_history()
     }
 
     fn update_status(&self) -> Result<UpdateStatus> {
@@ -366,11 +385,41 @@ fn public_update_failure(error: &anyhow::Error) -> String {
     .to_owned()
 }
 
+fn prune_artifact_generations(root: &Path, retain: usize, directories: bool) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+    let mut candidates = Vec::new();
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        let metadata = std::fs::symlink_metadata(entry.path())?;
+        if metadata.file_type().is_symlink()
+            || (directories && !metadata.is_dir())
+            || (!directories && !metadata.is_file())
+        {
+            continue;
+        }
+        candidates.push((metadata.modified()?, entry.path()));
+    }
+    candidates.sort_by(|left, right| right.0.cmp(&left.0));
+    for (_, path) in candidates.into_iter().skip(retain) {
+        if directories {
+            std::fs::remove_dir_all(path)?;
+        } else {
+            std::fs::remove_file(path)?;
+        }
+    }
+    Ok(())
+}
+
 fn configure_logging(config: &AppConfig, service_mode: bool) -> Option<WorkerGuard> {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("microgifter_homeserver_service=info,tower_http=info"));
 
     if service_mode {
+        if let Err(error) = prune_old_service_logs(&config.logs_dir, SystemTime::now()) {
+            eprintln!("unable to prune old HomeServer service logs: {error:#}");
+        }
         let appender = tracing_appender::rolling::daily(
             &config.logs_dir,
             "microgifter-homeserver-service.log",
@@ -386,6 +435,27 @@ fn configure_logging(config: &AppConfig, service_mode: bool) -> Option<WorkerGua
         let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
         None
     }
+}
+
+fn prune_old_service_logs(directory: &Path, now: SystemTime) -> Result<()> {
+    const RETENTION: StdDuration = StdDuration::from_secs(30 * 24 * 60 * 60);
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if !file_name.starts_with("microgifter-homeserver-service.log") {
+            continue;
+        }
+        let metadata = entry.metadata()?;
+        if !metadata.is_file() {
+            continue;
+        }
+        let modified = metadata.modified()?;
+        if now.duration_since(modified).unwrap_or_default() > RETENTION {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -541,9 +611,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn update_artifact_retention_keeps_only_newest_generations() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        for index in 0..5 {
+            let path = directory.path().join(format!("artifact-{index}.exe"));
+            std::fs::write(&path, index.to_string()).expect("artifact fixture");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        prune_artifact_generations(directory.path(), 3, false)
+            .expect("prune update artifacts");
+        let remaining = std::fs::read_dir(directory.path())
+            .expect("artifact directory")
+            .count();
+        assert_eq!(remaining, 3);
+    }
+
+    #[test]
     fn update_application_requires_exact_confirmation() {
         assert!(ensure_update_confirmation("UPDATE").is_ok());
         assert!(ensure_update_confirmation("update").is_err());
         assert!(ensure_update_confirmation(" UPDATE ").is_err());
+    }
+
+    #[test]
+    fn log_pruning_ignores_unrelated_files() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let unrelated = directory.path().join("keep.txt");
+        std::fs::write(&unrelated, b"keep").expect("fixture");
+        prune_old_service_logs(directory.path(), SystemTime::now()).expect("prune logs");
+        assert!(unrelated.exists());
     }
 }

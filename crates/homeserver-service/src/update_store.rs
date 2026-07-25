@@ -26,7 +26,8 @@ pub fn initialize(connection: &Connection) -> Result<()> {
     if applied == 0 {
         connection.execute_batch(UPDATE_MIGRATION)?;
     }
-    health_check(connection)
+    health_check(connection)?;
+    maintain_history(connection)
 }
 
 pub fn health_check(connection: &Connection) -> Result<()> {
@@ -48,6 +49,28 @@ pub fn health_check(connection: &Connection) -> Result<()> {
         runtime_count == 1,
         "signed update runtime state is unavailable"
     );
+    Ok(())
+}
+
+pub fn maintain_history(connection: &Connection) -> Result<()> {
+    let transaction = connection.unchecked_transaction()?;
+    transaction.execute(
+        "DELETE FROM update_events WHERE created_at_utc < strftime('%Y-%m-%dT%H:%M:%fZ','now','-365 days')",
+        [],
+    )?;
+    transaction.execute(
+        "DELETE FROM update_events WHERE event_id NOT IN (SELECT event_id FROM update_events ORDER BY created_at_utc DESC,event_id DESC LIMIT 5000)",
+        [],
+    )?;
+    transaction.execute(
+        "UPDATE update_records SET installer_path=NULL,rollback_path=NULL,pre_update_backup_id=NULL,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE state IN ('succeeded','failed','rolled_back') AND update_id NOT IN (SELECT update_id FROM update_records WHERE state IN ('succeeded','failed','rolled_back') ORDER BY updated_at_utc DESC,update_id DESC LIMIT 3)",
+        [],
+    )?;
+    transaction.execute(
+        "DELETE FROM update_records WHERE state IN ('succeeded','failed','rolled_back') AND update_id NOT IN (SELECT update_id FROM update_records WHERE state IN ('succeeded','failed','rolled_back') ORDER BY updated_at_utc DESC,update_id DESC LIMIT 100)",
+        [],
+    )?;
+    transaction.commit()?;
     Ok(())
 }
 
@@ -270,7 +293,8 @@ pub fn record_application_result(
             "failure_code": result.failure_code.as_deref(),
         })
         .to_string(),
-    )
+    )?;
+    maintain_history(connection)
 }
 
 pub fn latest_update(connection: &Connection) -> Result<Option<StoredUpdate>> {

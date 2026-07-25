@@ -249,15 +249,13 @@ pub async fn download_and_verify_installer(
         &temporary,
         &manifest.payload.installer.authenticode_thumbprint,
     )?;
-    if destination.exists() {
-        fs::remove_file(&destination)?;
-    }
-    fs::rename(&temporary, &destination)?;
+    replace_file_preserving_previous(&temporary, &destination)?;
     Ok(destination)
 }
 
 pub fn consume_application_result(config: &AppConfig) -> Result<Option<UpdateApplicationResult>> {
     let path = config.update_result_path();
+    recover_replaced_file(&path)?;
     if !path.exists() {
         return Ok(None);
     }
@@ -272,8 +270,43 @@ pub fn consume_application_result(config: &AppConfig) -> Result<Option<UpdateApp
         result.schema_version == UPDATE_MANIFEST_SCHEMA_VERSION,
         "unsupported update result schema"
     );
-    fs::remove_file(path)?;
+    fs::remove_file(&path)?;
+    let backup = path.with_extension("replace-backup");
+    if backup.exists() {
+        fs::remove_file(backup)?;
+    }
     Ok(Some(result))
+}
+
+fn replace_file_preserving_previous(temporary: &Path, destination: &Path) -> Result<()> {
+    let backup = destination.with_extension("replace-backup");
+    recover_replaced_file(destination)?;
+    if backup.exists() {
+        fs::remove_file(&backup)?;
+    }
+    if destination.exists() {
+        fs::rename(destination, &backup)?;
+    }
+    if let Err(error) = fs::rename(temporary, destination) {
+        if backup.exists() {
+            let _ = fs::rename(&backup, destination);
+        }
+        return Err(error.into());
+    }
+    if backup.exists() {
+        fs::remove_file(backup)?;
+    }
+    Ok(())
+}
+
+fn recover_replaced_file(path: &Path) -> Result<()> {
+    let backup = path.with_extension("replace-backup");
+    if !path.exists() && backup.exists() {
+        fs::rename(backup, path)?;
+    } else if path.exists() && backup.exists() {
+        fs::remove_file(backup)?;
+    }
+    Ok(())
 }
 
 fn secure_client(timeout: Duration) -> Result<reqwest::Client> {

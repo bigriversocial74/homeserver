@@ -20,6 +20,13 @@
   Pop $0
   Sleep 1500
 
+  DetailPrint "Hardening Microgifter HomeServer data permissions"
+  CreateDirectory "$COMMONAPPDATA\Microgifter\HomeServer"
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONAPPDATA\Microgifter\HomeServer" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C'
+  !insertmacro MG_REQUIRE_SUCCESS "Unable to secure the HomeServer data directory"
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONAPPDATA\Microgifter\HomeServer" /setowner "*S-1-5-18" /T /C'
+  !insertmacro MG_REQUIRE_SUCCESS "Unable to set the HomeServer data directory owner"
+
   nsExec::ExecToLog '"$SYSDIR\sc.exe" create "${MG_SERVICE_NAME}" binPath= "\"$INSTDIR\resources\microgifter-homeserver-service.exe\" service" start= auto DisplayName= "${MG_SERVICE_DISPLAY}"'
   !insertmacro MG_REQUIRE_SUCCESS "Unable to register the Microgifter HomeServer service"
 

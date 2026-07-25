@@ -6,12 +6,17 @@ param(
     [string]$UpdateInstallerPath,
 
     [Parameter(Mandatory = $true)]
-    [string]$SignerThumbprint
+    [string]$SignerThumbprint,
+
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [string]$ExpectedVersion
 )
 
 $ErrorActionPreference = "Stop"
 $serviceName = "MicrogifterHomeServer"
 $apiBase = "http://127.0.0.1:47831"
+$controlHeaders = @{ "X-MG-Local-Client" = "microgifter-control-center-v1" }
 $installer = (Resolve-Path $InstallerPath).Path
 $updateInstaller = (Resolve-Path $UpdateInstallerPath).Path
 $dataDirectory = Join-Path $env:ProgramData "Microgifter\HomeServer"
@@ -116,7 +121,7 @@ function Wait-ForHomeServerHealth {
             if ($service.Status -eq "Running") {
                 $health = Invoke-WebRequest -UseBasicParsing -Uri "$apiBase/healthz" -TimeoutSec 2
                 if ($health.StatusCode -eq 204) {
-                    $status = Invoke-RestMethod -Uri "$apiBase/v1/status" -TimeoutSec 3
+                    $status = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/status" -TimeoutSec 3
                     if ($status.version -eq $ExpectedVersion -and $status.state -eq "running") {
                         return $status
                     }
@@ -270,7 +275,7 @@ try {
     if ($install.ExitCode -ne 0) {
         throw "HomeServer installer failed with exit code $($install.ExitCode)"
     }
-    $initialStatus = Wait-ForHomeServerHealth -ExpectedVersion "0.1.0"
+    $initialStatus = Wait-ForHomeServerHealth -ExpectedVersion $ExpectedVersion
     $currentVersion = $initialStatus.version
 
     $rollbackPlan = New-UpdatePlan -UpdateId "ci-rollback-$([guid]::NewGuid().ToString('N'))" -CurrentVersion $currentVersion -TargetVersion "9.9.9"

@@ -67,6 +67,9 @@ pub async fn run(
     }
 
     let state = Arc::new(AppState::new(config, connection));
+    if let Err(error) = state.maintain_runtime_history() {
+        warn!(?error, "HomeServer runtime history retention failed during startup");
+    }
     let address: SocketAddr = format!("{API_HOST}:{API_PORT}").parse()?;
     let listener = tokio::net::TcpListener::bind(address)
         .await
@@ -80,7 +83,7 @@ pub async fn run(
         let _ = ready.send(());
     }
 
-    let router = http::router(state.clone()).merge(cloud_connector::router(state));
+    let router = http::secure(http::router(state.clone()).merge(cloud_connector::router(state)));
     let result = axum::serve(listener, router)
         .with_graceful_shutdown(wait_for_shutdown(shutdown))
         .await;
@@ -98,7 +101,15 @@ async fn run_backup_scheduler(state: Arc<AppState>, mut shutdown: watch::Receive
         tokio::select! {
             _ = interval.tick() => {
                 let scheduled_state = state.clone();
-                match tokio::task::spawn_blocking(move || scheduled_state.create_automatic_backup_if_due()).await {
+                match tokio::task::spawn_blocking(move || {
+                    if let Err(error) = scheduled_state.prune_logs() {
+                        warn!(?error, "scheduled HomeServer log retention failed");
+                    }
+                    if let Err(error) = scheduled_state.maintain_runtime_history() {
+                        warn!(?error, "scheduled HomeServer runtime retention failed");
+                    }
+                    scheduled_state.create_automatic_backup_if_due()
+                }).await {
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => error!(?error, "scheduled HomeServer backup failed"),
                     Err(error) => error!(?error, "scheduled HomeServer backup task failed"),

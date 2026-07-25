@@ -5,6 +5,7 @@ use futures_util::StreamExt;
 use microgifter_homeserver_core::{
     api_base_url, ApplyUpdateRequest, BackupActionResult, BackupCatalog, BackupReferenceRequest,
     CreateBackupRequest, HealthSnapshot, UpdateActionResult, UpdateStatus,
+    LOCAL_CLIENT_HEADER, LOCAL_CLIENT_VALUE,
 };
 use rfd::AsyncFileDialog;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -14,6 +15,7 @@ use tokio_util::io::ReaderStream;
 use zeroize::Zeroizing;
 
 const MAX_RECOVERY_PACKAGE_BYTES: u64 = 320 * 1024 * 1024;
+const MAX_LOCAL_JSON_BYTES: usize = 2 * 1024 * 1024;
 const PASSPHRASE_HEADER: &str = "x-mg-recovery-passphrase";
 
 #[derive(Debug, Deserialize)]
@@ -22,7 +24,13 @@ struct ApiErrorPayload {
 }
 
 fn client() -> Result<reqwest::Client, String> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::HeaderName::from_static(LOCAL_CLIENT_HEADER),
+        reqwest::header::HeaderValue::from_static(LOCAL_CLIENT_VALUE),
+    );
     reqwest::Client::builder()
+        .default_headers(headers)
         .connect_timeout(Duration::from_secs(2))
         .timeout(Duration::from_secs(15 * 60))
         .build()
@@ -31,7 +39,25 @@ fn client() -> Result<reqwest::Client, String> {
 
 async fn decode_json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, String> {
     let status = response.status();
-    let bytes = response.bytes().await.map_err(|error| error.to_string())?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_LOCAL_JSON_BYTES as u64)
+    {
+        return Err("HomeServer response exceeds the local JSON size limit.".to_owned());
+    }
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| error.to_string())?;
+        let next_len = bytes
+            .len()
+            .checked_add(chunk.len())
+            .ok_or_else(|| "HomeServer response size overflow.".to_owned())?;
+        if next_len > MAX_LOCAL_JSON_BYTES {
+            return Err("HomeServer response exceeds the local JSON size limit.".to_owned());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
     if status.is_success() {
         return serde_json::from_slice::<T>(&bytes).map_err(|error| error.to_string());
     }

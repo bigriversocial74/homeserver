@@ -1,27 +1,41 @@
 # Microgifter HomeServer
 
-Microgifter HomeServer is the private local edge platform for Microgifter. It provides a Windows-first Control Center, native background services, local data and knowledge, optional local AI, MCP access, synchronization, backup, recovery, diagnostics, and secure updates.
+Microgifter HomeServer is the private Windows edge platform for Microgifter. It provides a native Control Center, a background Windows service, local SQLite storage, cloud pairing and synchronization, encrypted backup and recovery, diagnostics, and a signed-update/rollback foundation.
 
-## Product direction
+The dedicated `bigriversocial74/homeserver` repository is the implementation authority. The approved product and technical blueprint is maintained in `docs/product-technical-blueprint.md`.
 
-The approved HomeServer v1 product and technical blueprint was adopted in `bigriversocial74/contactform` through PR #1341 and merge commit `80055acb325a6e5714f12ce9fd7d1283d20965a3`.
+## Current release line
 
-The dedicated repository is now the implementation authority. The blueprint is maintained under `docs/product-technical-blueprint.md`.
-
-## Primary customer release
-
-`Microgifter-HomeServer-Setup.exe`
-
+- Current installed release: `0.1.2`.
+- Production-hardening candidate: `0.1.3`.
 - Windows 11 x64 first.
 - Tauri 2 Control Center.
-- Native Windows service.
-- Loopback-only local API and embedded SQLite database.
+- Native delayed-auto Windows service with recovery actions.
+- Loopback-only API at `127.0.0.1:47831`.
+- Embedded SQLite database using WAL, foreign keys, and integrity checks.
 - NSIS per-machine installer.
-- Docker retained for later Linux, NAS, development, and appliance deployments.
+- No public production-code-signed installer has been released yet.
+
+The customer-facing installer artifact is versioned as:
+
+`Microgifter-HomeServer-v<version>-Setup.exe`
+
+## Security boundaries
+
+- The service does not expose a LAN, public database, model, or MCP listener.
+- Browser-originated local API requests are rejected.
+- State-changing local API calls require the trusted Control Center marker.
+- Cloud requests use HTTPS, bearer credentials, Ed25519 request signatures, timestamps, and nonces.
+- Cloud and backup secrets use Windows machine-scoped DPAPI and fail closed on unsupported platforms.
+- `%ProgramData%\Microgifter\HomeServer` is restricted to LocalSystem and local administrators by the installer.
+- Recovery imports, cloud responses, synchronization queues, logs, and archive extraction are bounded.
+- Update manifests are signed, installers are hash- and Authenticode-verified, and update paths are constrained to canonical managed directories.
+
+See `docs/quality-audit-full-production.md` for the complete repository audit and acceptance rubric.
 
 ## Backup and recovery
 
-Phase 3A adds:
+HomeServer supports:
 
 - Automatic encrypted SQLite backups.
 - Manual protected backups.
@@ -30,15 +44,13 @@ Phase 3A adds:
 - Streamed package transfer through the loopback-only service API.
 - Fresh-install recovery from an exported `.mghbackup` package.
 - Package, hash, archive, and database integrity verification.
-- Failed-import cleanup with no residual catalog record or managed package.
+- Failed-import cleanup with no residual managed package.
 - Retention controls.
 - Staged restore on service restart.
 - Preservation of the current database for rollback.
 - Automatic rollback when a restored database fails integrity checks.
 
-Recovery passphrases are never stored. Automatic and manual backup keys are saved as a Windows DPAPI-protected key file under the HomeServer data directory and can only be decrypted by the Windows account that protected them. Portable recovery packages use an independent Argon2id-derived passphrase key so they can be imported after reinstalling HomeServer or moving to another Windows installation.
-
-The complete Phase 3A threat boundaries, acceptance gates, and fresh-install recovery test matrix are maintained in `docs/quality-audit-phase-3a.md`.
+Recovery passphrases are never stored. Automatic/manual backup keys and cloud credentials are protected with Windows machine-scoped DPAPI. Portable recovery packages use an independent Argon2id-derived passphrase key so they remain importable after reinstalling HomeServer or moving to another Windows installation.
 
 ## Development
 
@@ -54,13 +66,13 @@ Build the service, tests, Control Center, and NSIS installer:
 ./scripts/build-windows.ps1
 ```
 
-The Windows production-quality workflow validates immutable dependency locks, frontend and PowerShell syntax, native compilation, workspace tests, strict clippy, encrypted backup and recovery, fresh-install package import and restore, NSIS packaging, and installed LocalSystem behavior.
+The production-quality workflow validates synchronized release metadata, immutable dependency locks, pinned GitHub Actions, frontend and PowerShell syntax, static security boundaries, npm and RustSec dependency audits, clean native compilation, workspace tests, strict Clippy, encrypted backup/recovery, cloud contract behavior, loopback API defenses, NSIS packaging, installed LocalSystem behavior, ProgramData ACLs, installed binary/API/registry versions, signed updates, health confirmation, and automatic rollback.
 
-## Status
+## Implemented phases
 
-- Phase 1 installable foundation: merged and validated.
-- Phase 2 cloud pairing and synchronization: active draft PR, coordinated with a separate Microgifter cloud PR.
-- Phase 3A backup and recovery: active draft PR #5.
-- Phase 3B signed updates: planned after Phase 3A.
+- Phase 1: installable Windows foundation.
+- Phase 2: cloud pairing and bounded signed synchronization.
+- Phase 3A: encrypted backup, portable recovery, restore, and rollback.
+- Phase 3B foundation: signed update verification, application, health validation, and rollback.
 
-No public production installer has been released or code signed.
+Knowledge Vault, local model management, MCP runtime, and broader Linux/NAS deployment remain future phases and are not represented as complete.

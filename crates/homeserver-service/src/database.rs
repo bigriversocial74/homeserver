@@ -31,12 +31,15 @@ pub fn initialize(path: &Path) -> Result<Connection> {
     transaction.commit()?;
 
     health_check(&connection)?;
+    maintain_history(&connection)?;
     Ok(connection)
 }
 
 pub fn configure_connection(connection: &Connection) -> Result<()> {
     connection.pragma_update(None, "journal_mode", "WAL")?;
-    connection.pragma_update(None, "synchronous", "NORMAL")?;
+    connection.pragma_update(None, "synchronous", "FULL")?;
+    connection.pragma_update(None, "wal_autocheckpoint", 1_000_i64)?;
+    connection.pragma_update(None, "journal_size_limit", 64_i64 * 1024 * 1024)?;
     connection.pragma_update(None, "foreign_keys", "ON")?;
     connection.pragma_update(None, "trusted_schema", "OFF")?;
     connection.pragma_update(None, "busy_timeout", 5_000_i64)?;
@@ -66,6 +69,32 @@ pub fn health_check(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+pub fn maintain_history(connection: &Connection) -> Result<()> {
+    let transaction = connection.unchecked_transaction()?;
+    transaction.execute(
+        "DELETE FROM service_events WHERE created_at_utc < strftime('%Y-%m-%dT%H:%M:%fZ','now','-90 days')",
+        [],
+    )?;
+    transaction.execute(
+        "DELETE FROM service_events WHERE event_id NOT IN (SELECT event_id FROM service_events ORDER BY created_at_utc DESC,event_id DESC LIMIT 5000)",
+        [],
+    )?;
+    transaction.execute(
+        "DELETE FROM restore_requests WHERE state IN ('applied','rolled_back','failed','cancelled') AND restore_id NOT IN (SELECT restore_id FROM restore_requests WHERE state IN ('applied','rolled_back','failed','cancelled') ORDER BY updated_at_utc DESC,restore_id DESC LIMIT 1000)",
+        [],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+pub fn delete_restore_request(connection: &Connection, restore_id: &str) -> Result<()> {
+    connection.execute(
+        "DELETE FROM restore_requests WHERE restore_id=?1 AND state IN ('staging','staged')",
+        params![restore_id],
+    )?;
+    Ok(())
+}
+
 pub fn installation_id(connection: &Connection) -> Result<String> {
     connection
         .query_row(
@@ -78,7 +107,7 @@ pub fn installation_id(connection: &Connection) -> Result<String> {
 
 pub fn pending_sync_count(connection: &Connection) -> Result<u64> {
     let count: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM sync_queue WHERE state = 'pending'",
+        "SELECT COUNT(*) FROM sync_queue WHERE state IN ('pending','processing')",
         [],
         |row| row.get(0),
     )?;
@@ -303,6 +332,23 @@ pub fn retention_candidates(connection: &Connection) -> Result<Vec<(String, Path
     Ok(rows)
 }
 
+pub fn unreferenced_pre_update_backups(
+    connection: &Connection,
+) -> Result<Vec<(String, PathBuf)>> {
+    let mut statement = connection.prepare(
+        "SELECT backup_id,storage_path FROM backup_records WHERE kind='pre_update' AND state IN ('ready','verified','restored','failed') AND backup_id NOT IN (SELECT pre_update_backup_id FROM update_records WHERE pre_update_backup_id IS NOT NULL) ORDER BY created_at_utc DESC,backup_id DESC",
+    )?;
+    statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                PathBuf::from(row.get::<_, String>(1)?),
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 pub fn delete_backup_record(connection: &Connection, backup_id: &str) -> Result<()> {
     let staged: i64 = connection.query_row(
         "SELECT COUNT(*) FROM restore_requests WHERE backup_id=?1 AND state IN ('staging','staged','applying')",
@@ -396,6 +442,10 @@ mod tests {
         let first = initialize(&path).expect("first initialization");
         let first_id = installation_id(&first).expect("first installation id");
         health_check(&first).expect("first database health check");
+        let synchronous: i64 = first
+            .pragma_query_value(None, "synchronous", |row| row.get(0))
+            .expect("synchronous pragma");
+        assert_eq!(synchronous, 2);
         drop(first);
 
         let second = initialize(&path).expect("second initialization");
@@ -440,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_sync_count_tracks_only_pending_work() {
+    fn pending_sync_count_tracks_active_work() {
         let directory = tempdir().expect("temporary directory");
         let path = directory.path().join("homeserver.sqlite3");
         let connection = initialize(&path).expect("database initialization");
@@ -453,11 +503,17 @@ mod tests {
             .expect("pending insert");
         connection
             .execute(
+                "INSERT INTO sync_queue (idempotency_key, operation_type, payload_json, state) VALUES (?1, 'test.processing', '{}', 'processing')",
+                params![Uuid::new_v4().to_string()],
+            )
+            .expect("processing insert");
+        connection
+            .execute(
                 "INSERT INTO sync_queue (idempotency_key, operation_type, payload_json, state) VALUES (?1, 'test.accepted', '{}', 'accepted')",
                 params![Uuid::new_v4().to_string()],
             )
             .expect("accepted insert");
 
-        assert_eq!(pending_sync_count(&connection).expect("pending count"), 1);
+        assert_eq!(pending_sync_count(&connection).expect("pending count"), 2);
     }
 }

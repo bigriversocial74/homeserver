@@ -9,6 +9,7 @@ use axum::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::Utc;
 use ed25519_dalek::{Signer, SigningKey};
+use futures_util::StreamExt;
 use keyring::Entry;
 use rand::rngs::OsRng;
 use reqwest::{Method, StatusCode as CloudStatusCode};
@@ -31,6 +32,10 @@ const PAIR_PATH: &str = "/api/homeserver/pair.php";
 const STATUS_PATH: &str = "/api/homeserver/status.php";
 const SYNC_PATH: &str = "/api/homeserver/sync.php";
 const MAX_CONTROL_BODY_BYTES: usize = 64 * 1024;
+const MAX_SYNC_PAYLOAD_BYTES: usize = 48 * 1024;
+const MAX_CLOUD_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_PENDING_SYNC_OPERATIONS: u64 = 5_000;
+const MAX_SYNC_ATTEMPTS: u32 = 12;
 const SYNC_INTERVAL: Duration = Duration::from_secs(60);
 const ALLOWED_LOCAL_OPERATIONS: &[&str] = &[
     "device.heartbeat",
@@ -405,6 +410,7 @@ pub fn initialize(connection: &Connection) -> Result<()> {
         count == 1,
         "migration '{CLOUD_MIGRATION_KEY}' is not registered exactly once"
     );
+    maintain_sync_history(connection)?;
     Ok(())
 }
 
@@ -529,6 +535,16 @@ impl AppState {
 
     fn enqueue_heartbeat(&self) -> Result<String> {
         let connection = self.connection()?;
+        if let Some(existing) = connection
+            .query_row(
+                "SELECT idempotency_key FROM sync_queue WHERE operation_type='device.heartbeat' AND state IN ('pending','processing') ORDER BY queue_id LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            return Ok(existing);
+        }
         let installation_id = database::installation_id(&connection)?;
         let bucket = Utc::now().timestamp() / 300;
         let key = format!("heartbeat:{installation_id}:{bucket}");
@@ -628,7 +644,7 @@ impl AppState {
                 "accepted" => accepted += 1,
                 "rejected" => rejected += 1,
                 "review" => review += 1,
-                _ => unreachable!("receipt validation rejects unknown dispositions"),
+                other => bail!("unsupported cloud receipt disposition '{other}'"),
             }
         }
         let mut connection = self.connection()?;
@@ -872,6 +888,10 @@ fn enqueue_operation(
     payload: &Value,
 ) -> Result<i64> {
     let payload_json = serde_json::to_string(payload)?;
+    ensure!(
+        payload_json.len() <= MAX_SYNC_PAYLOAD_BYTES,
+        "synchronization payload exceeds the HomeServer size limit"
+    );
     let existing = connection
         .query_row(
             "SELECT queue_id,operation_type,payload_json FROM sync_queue WHERE idempotency_key=?1",
@@ -891,6 +911,11 @@ fn enqueue_operation(
         }
         return Ok(queue_id);
     }
+    let pending = cloud_pending_sync_count(connection)?;
+    ensure!(
+        pending < MAX_PENDING_SYNC_OPERATIONS,
+        "synchronization queue has reached its safety limit"
+    );
     connection.execute(
         "INSERT INTO sync_queue (idempotency_key,operation_type,payload_json,state,attempts,available_at_utc,created_at_utc,updated_at_utc) VALUES (?1,?2,?3,'pending',0,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
         params![idempotency_key, operation_type, payload_json],
@@ -967,11 +992,19 @@ fn apply_receipts(connection: &mut Connection, receipts: &[ReceiptRecord]) -> Re
         )?;
     }
     transaction.commit()?;
+    maintain_sync_history(connection)?;
     Ok(())
 }
 
 fn retry_operations(connection: &Connection, operations: &[QueuedOperation]) -> Result<()> {
     for operation in operations {
+        if operation.attempts >= MAX_SYNC_ATTEMPTS {
+            connection.execute(
+                "UPDATE sync_queue SET state='rejected',updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE queue_id=?1 AND state='processing'",
+                params![operation.queue_id],
+            )?;
+            continue;
+        }
         let delay_seconds = (2_u64.pow(operation.attempts.min(8)) * 5).min(1_800);
         let modifier = format!("+{delay_seconds} seconds");
         connection.execute(
@@ -979,6 +1012,18 @@ fn retry_operations(connection: &Connection, operations: &[QueuedOperation]) -> 
             params![modifier, operation.queue_id],
         )?;
     }
+    Ok(())
+}
+
+fn maintain_sync_history(connection: &Connection) -> Result<()> {
+    connection.execute(
+        "DELETE FROM sync_receipts WHERE received_at_utc < strftime('%Y-%m-%dT%H:%M:%fZ','now','-90 days')",
+        [],
+    )?;
+    connection.execute(
+        "DELETE FROM sync_queue WHERE state IN ('accepted','rejected','review') AND updated_at_utc < strftime('%Y-%m-%dT%H:%M:%fZ','now','-90 days')",
+        [],
+    )?;
     Ok(())
 }
 
@@ -1017,6 +1062,23 @@ fn validate_receipts(operations: &[QueuedOperation], receipts: &[ReceiptRecord])
         ) {
             bail!("Microgifter returned an unsupported synchronization disposition");
         }
+        validate_idempotency_key(&receipt.idempotency_key)?;
+        ensure!(
+            receipt.receipt_id.len() <= 190
+                && receipt
+                    .receipt_id
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || "_.:-".contains(character)),
+            "Microgifter returned an invalid synchronization receipt identity"
+        );
+        ensure!(
+            receipt.reason_code.as_deref().map_or(true, |value| value.len() <= 120),
+            "Microgifter returned an oversized synchronization reason"
+        );
+        ensure!(
+            serde_json::to_vec(&receipt.response)?.len() <= MAX_SYNC_PAYLOAD_BYTES,
+            "Microgifter returned an oversized synchronization receipt"
+        );
     }
     Ok(())
 }
@@ -1041,11 +1103,27 @@ fn canonical_request(
 
 async fn decode_response<T: DeserializeOwned>(response: reqwest::Response) -> Result<T> {
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .context("unable to read Microgifter response")?;
-    let envelope: ApiEnvelope<T> = serde_json::from_str(&text).with_context(|| {
+    if let Some(length) = response.content_length() {
+        ensure!(
+            length <= MAX_CLOUD_RESPONSE_BYTES as u64,
+            "Microgifter response exceeds the HomeServer size limit"
+        );
+    }
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("unable to read Microgifter response")?;
+        let next_len = bytes
+            .len()
+            .checked_add(chunk.len())
+            .context("Microgifter response size overflow")?;
+        ensure!(
+            next_len <= MAX_CLOUD_RESPONSE_BYTES,
+            "Microgifter response exceeds the HomeServer size limit"
+        );
+        bytes.extend_from_slice(&chunk);
+    }
+    let envelope: ApiEnvelope<T> = serde_json::from_slice(&bytes).with_context(|| {
         format!(
             "Microgifter returned an invalid response ({})",
             status.as_u16()
@@ -1222,4 +1300,15 @@ mod tests {
         assert!(ALLOWED_LOCAL_OPERATIONS.contains(&"device.heartbeat"));
         assert!(!ALLOWED_LOCAL_OPERATIONS.contains(&"commerce.order.create"));
     }
+    #[test]
+    fn synchronization_payload_and_identifier_limits_are_enforced() {
+        assert!(validate_idempotency_key("valid:key-1").is_ok());
+        assert!(validate_idempotency_key(&"x".repeat(191)).is_err());
+        let oversized = json!({"value": "x".repeat(MAX_SYNC_PAYLOAD_BYTES)});
+        let temp = tempdir().unwrap();
+        let connection = database::initialize(&temp.path().join("queue.sqlite3")).unwrap();
+        initialize(&connection).unwrap();
+        assert!(enqueue_operation(&connection, "oversized", "cache.refresh.request", &oversized).is_err());
+    }
+
 }

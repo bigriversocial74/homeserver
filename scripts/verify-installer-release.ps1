@@ -10,6 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 $serviceName = "MicrogifterHomeServer"
 $apiBase = "http://127.0.0.1:47831"
+$controlHeaders = @{ "X-MG-Local-Client" = "microgifter-control-center-v1" }
 $installer = (Resolve-Path $InstallerPath).Path
 $installDirectory = Join-Path $env:ProgramFiles "Microgifter HomeServer"
 $serviceBinary = Join-Path $installDirectory "resources\microgifter-homeserver-service.exe"
@@ -89,7 +90,7 @@ try {
         throw "Installed service version mismatch. Expected '$expectedBinaryVersion' but received '$binaryVersion'."
     }
 
-    $status = Invoke-RestMethod -Uri "$apiBase/v1/status" -TimeoutSec 5
+    $status = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/status" -TimeoutSec 5
     if ($status.version -ne $ExpectedVersion) {
         throw "Installed API version mismatch. Expected '$ExpectedVersion' but received '$($status.version)'."
     }
