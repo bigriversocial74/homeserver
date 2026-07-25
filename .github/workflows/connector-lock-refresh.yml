@@ -1,0 +1,44 @@
+name: Connector Lock Refresh
+
+on:
+  push:
+    branches:
+      - feature/cloud-connector-v2-20260724
+    paths:
+      - Cargo.toml
+      - crates/homeserver-service/Cargo.toml
+      - .github/workflows/connector-lock-refresh.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: connector-lock-refresh
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/cloud-connector-v2-20260724
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+
+      - name: Generate exact dependency lock
+        run: cargo generate-lockfile
+
+      - name: Commit generated lock when changed
+        shell: bash
+        run: |
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "Update connector dependency lock"
+          git push origin HEAD:feature/cloud-connector-v2-20260724
