@@ -10,8 +10,8 @@ use axum::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use futures_util::StreamExt;
 use microgifter_homeserver_core::{
-    BackupActionResult, BackupCatalog, BackupReferenceRequest, CreateBackupRequest, HealthSnapshot,
-    ServiceState,
+    ApplyUpdateRequest, BackupActionResult, BackupCatalog, BackupReferenceRequest,
+    CreateBackupRequest, HealthSnapshot, ServiceState, UpdateActionResult, UpdateStatus,
 };
 use serde::Serialize;
 use std::sync::Arc;
@@ -45,6 +45,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/backups/create", post(create_backup))
         .route("/v1/backups/verify", post(verify_backup))
         .route("/v1/backups/stage-restore", post(stage_restore))
+        .route("/v1/updates", get(update_status))
+        .route("/v1/updates/check", post(check_updates))
+        .route("/v1/updates/download", post(download_update))
+        .route("/v1/updates/apply", post(apply_update))
         .layer(DefaultBodyLimit::max(MAX_CONTROL_BODY_BYTES));
     let transfer_routes = Router::new()
         .route("/v1/backups/import", post(import_recovery_package))
@@ -120,6 +124,41 @@ async fn stage_restore(
         .map_err(task_error)?
         .map(Json)
         .map_err(|error| action_error("restore_stage_failed", error))
+}
+
+async fn update_status(State(state): State<Arc<AppState>>) -> ApiResult<UpdateStatus> {
+    tokio::task::spawn_blocking(move || state.update_status())
+        .await
+        .map_err(task_error)?
+        .map(Json)
+        .map_err(|error| internal_error("update_status_failed", error))
+}
+
+async fn check_updates(State(state): State<Arc<AppState>>) -> ApiResult<UpdateActionResult> {
+    state
+        .check_for_updates()
+        .await
+        .map(Json)
+        .map_err(|error| action_error("update_check_failed", error))
+}
+
+async fn download_update(State(state): State<Arc<AppState>>) -> ApiResult<UpdateActionResult> {
+    state
+        .download_update()
+        .await
+        .map(Json)
+        .map_err(|error| action_error("update_download_failed", error))
+}
+
+async fn apply_update(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ApplyUpdateRequest>,
+) -> ApiResult<UpdateActionResult> {
+    tokio::task::spawn_blocking(move || state.apply_update(request))
+        .await
+        .map_err(task_error)?
+        .map(Json)
+        .map_err(|error| action_error("update_apply_failed", error))
 }
 
 async fn import_recovery_package(
@@ -264,7 +303,7 @@ fn decode_passphrase(
 fn task_error(error: tokio::task::JoinError) -> (StatusCode, Json<ApiError>) {
     api_error(
         StatusCode::INTERNAL_SERVER_ERROR,
-        "backup_task_failed",
+        "homeserver_task_failed",
         anyhow::anyhow!(error),
     )
 }
@@ -282,9 +321,15 @@ fn action_error(code: &'static str, error: anyhow::Error) -> (StatusCode, Json<A
         || text.contains("outside managed")
         || text.contains("only portable")
         || text.contains("not ready")
+        || text.contains("not available")
+        || text.contains("not staged")
         || text.contains("size limit")
+        || text.contains("requires a newer")
+        || text.contains("type update")
     {
         StatusCode::UNPROCESSABLE_ENTITY
+    } else if text.contains("request was rejected") {
+        StatusCode::BAD_GATEWAY
     } else {
         StatusCode::INTERNAL_SERVER_ERROR
     };
@@ -313,6 +358,15 @@ fn api_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absent_verified_update_is_a_validation_error() {
+        let error = action_error(
+            "update_download_failed",
+            anyhow::anyhow!("update is not available in the available state"),
+        );
+        assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
+    }
 
     #[test]
     fn accepts_maximum_multibyte_passphrase_header() {

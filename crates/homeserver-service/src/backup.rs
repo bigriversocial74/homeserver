@@ -729,6 +729,12 @@ mod tests {
             imports_dir: data_dir.join("imports"),
             restore_dir: data_dir.join("restore"),
             staging_dir: data_dir.join("staging"),
+            updates_dir: data_dir.join("updates"),
+            update_staging_dir: data_dir.join("updates/staging"),
+            update_rollback_dir: data_dir.join("updates/rollback"),
+            update_installed_dir: data_dir.join("updates/installed"),
+            update_manifest_url: "https://updates.microgifter.com/homeserver/stable/manifest.json"
+                .to_owned(),
             data_dir,
             server_name: "Test HomeServer".to_owned(),
         };
@@ -739,6 +745,10 @@ mod tests {
             &config.imports_dir,
             &config.restore_dir,
             &config.staging_dir,
+            &config.updates_dir,
+            &config.update_staging_dir,
+            &config.update_rollback_dir,
+            &config.update_installed_dir,
         ] {
             fs::create_dir_all(path).expect("test directory");
         }

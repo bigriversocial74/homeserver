@@ -5,7 +5,7 @@ on:
   push:
     branches:
       - main
-      - feature/phase-3-backup-recovery-updates-20260724
+      - feature/phase-3b-signed-updates-20260724
 
 concurrency:
   group: homeserver-quality-${{ github.ref }}
@@ -17,7 +17,7 @@ permissions:
 jobs:
   validate:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
@@ -55,7 +55,7 @@ jobs:
           git diff --quiet -- Cargo.lock package-lock.json
           $lockExit = $LASTEXITCODE
           if ($lockExit -ne 0) {
-            Get-Content dependency-lock-diff.log -Tail 200
+            Get-Content dependency-lock-diff.log -Tail 240
             exit $lockExit
           }
 
@@ -100,29 +100,40 @@ jobs:
       - name: Rust formatting
         run: cargo fmt --all --check
 
-      - name: Build Windows service resource
+      - name: Build updater and Windows service resources
         shell: pwsh
         run: |
-          cargo build --release --package microgifter-homeserver-service --locked *> service-build.log
-          $buildCode = $LASTEXITCODE
-          if ($buildCode -ne 0) {
-            Get-Content service-build.log -Tail 160
-            exit $buildCode
+          cargo build --release --package microgifter-homeserver-updater --locked *> updater-build.log
+          $updaterCode = $LASTEXITCODE
+          if ($updaterCode -ne 0) {
+            Get-Content updater-build.log -Tail 180
+            exit $updaterCode
           }
+          cargo build --release --package microgifter-homeserver-service --locked *> service-build.log
+          $serviceCode = $LASTEXITCODE
+          if ($serviceCode -ne 0) {
+            Get-Content service-build.log -Tail 180
+            exit $serviceCode
+          }
+          Get-Content updater-build.log -Tail 20
           Get-Content service-build.log -Tail 20
 
-      - name: Upload Windows service compiler log
+      - name: Upload native compiler logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: service-build-log
-          path: service-build.log
+          name: native-build-logs
+          path: |
+            updater-build.log
+            service-build.log
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Stage Windows service for desktop targets
+      - name: Stage native resources for desktop targets
         shell: pwsh
-        run: Copy-Item target/release/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
+        run: |
+          Copy-Item target/release/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
+          Copy-Item target/release/microgifter-homeserver-updater.exe src-tauri/resources/microgifter-homeserver-updater.exe -Force
 
       - name: Full workspace tests
         shell: pwsh
@@ -130,10 +141,10 @@ jobs:
           cargo test --workspace --locked *> cargo-test.log
           $testCode = $LASTEXITCODE
           if ($testCode -ne 0) {
-            Get-Content cargo-test.log -Tail 180
+            Get-Content cargo-test.log -Tail 220
             exit $testCode
           }
-          Get-Content cargo-test.log -Tail 40
+          Get-Content cargo-test.log -Tail 50
 
       - name: Upload workspace test log
         if: always()
@@ -150,10 +161,10 @@ jobs:
           cargo clippy --workspace --all-targets --locked -- -D warnings *> cargo-clippy.log
           $lintCode = $LASTEXITCODE
           if ($lintCode -ne 0) {
-            Get-Content cargo-clippy.log -Tail 180
+            Get-Content cargo-clippy.log -Tail 220
             exit $lintCode
           }
-          Get-Content cargo-clippy.log -Tail 30
+          Get-Content cargo-clippy.log -Tail 40
 
       - name: Upload workspace lint log
         if: always()
@@ -170,17 +181,30 @@ jobs:
           & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-service.ps1 *> service-smoke.log
           $smokeCode = $LASTEXITCODE
           if ($smokeCode -ne 0) {
-            Get-Content service-smoke.log -Tail 180
+            Get-Content service-smoke.log -Tail 220
             exit $smokeCode
           }
-          Get-Content service-smoke.log -Tail 40
+          Get-Content service-smoke.log -Tail 50
 
-      - name: Upload backup and restore smoke log
+      - name: Signed update loopback API smoke test
+        shell: pwsh
+        run: |
+          & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-update-api.ps1 *> update-api-smoke.log
+          $smokeCode = $LASTEXITCODE
+          if ($smokeCode -ne 0) {
+            Get-Content update-api-smoke.log -Tail 180
+            exit $smokeCode
+          }
+          Get-Content update-api-smoke.log -Tail 40
+
+      - name: Upload service smoke logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: service-smoke-log
-          path: service-smoke.log
+          name: service-smoke-logs
+          path: |
+            service-smoke.log
+            update-api-smoke.log
           if-no-files-found: warn
           retention-days: 7
 
@@ -190,7 +214,7 @@ jobs:
           npm run tauri:build *> tauri-build.log
           $buildCode = $LASTEXITCODE
           if ($buildCode -ne 0) {
-            Get-Content tauri-build.log -Tail 180
+            Get-Content tauri-build.log -Tail 220
             exit $buildCode
           }
 
@@ -214,6 +238,64 @@ jobs:
       - name: Installed LocalSystem backup and uninstall smoke test
         shell: pwsh
         run: ./scripts/smoke-test-installer.ps1 -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Setup.exe
+
+      - name: Create trusted CI Authenticode update installer
+        id: sign_update
+        shell: pwsh
+        run: |
+          $bundle = "target/release/bundle/nsis"
+          $source = "$bundle/Microgifter-HomeServer-Setup.exe"
+          $signed = "$bundle/Microgifter-HomeServer-Update-Test.exe"
+          Copy-Item $source $signed -Force
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Microgifter CI Update Test" -CertStoreLocation "Cert:\CurrentUser\My" -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 -KeyExportPolicy Exportable -NotAfter (Get-Date).AddDays(2)
+          Export-Certificate -Cert $cert -FilePath "$bundle/Microgifter-CI-Update-Test.cer" | Out-Null
+          Import-Certificate -FilePath "$bundle/Microgifter-CI-Update-Test.cer" -CertStoreLocation "Cert:\LocalMachine\Root" | Out-Null
+          Import-Certificate -FilePath "$bundle/Microgifter-CI-Update-Test.cer" -CertStoreLocation "Cert:\LocalMachine\TrustedPublisher" | Out-Null
+          $signedResult = Set-AuthenticodeSignature -FilePath $signed -Certificate $cert -HashAlgorithm SHA256
+          if ($signedResult.Status -ne "Valid") { throw "Unable to create a trusted CI Authenticode installer: $($signedResult.StatusMessage)" }
+          $cert.Thumbprint | Set-Content update-test-thumbprint.txt -NoNewline
+          "thumbprint=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Installed signed update and rollback smoke test
+        shell: pwsh
+        run: |
+          Import-Module Microsoft.PowerShell.Security -Force
+          $env:PSModulePath = @(
+            (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\Modules")
+            (Join-Path $env:ProgramFiles "WindowsPowerShell\Modules")
+          ) -join [System.IO.Path]::PathSeparator
+          Write-Host "Updater Windows PowerShell module path: $env:PSModulePath"
+          ./scripts/smoke-test-updater.ps1 `
+            -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Setup.exe `
+            -UpdateInstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Update-Test.exe `
+            -SignerThumbprint "${{ steps.sign_update.outputs.thumbprint }}" *> updater-smoke.log
+          $log = Get-Content updater-smoke.log -Raw
+          Get-Content updater-smoke.log -Tail 260
+          $successMarker = "HomeServer signed update, Authenticode verification, health confirmation, automatic rollback, installer preservation, and cleanup smoke tests passed."
+          if ($log -match "HomeServer updater smoke failure:" -or -not $log.Contains($successMarker)) {
+            exit 1
+          }
+          exit 0
+
+      - name: Upload updater smoke log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: updater-smoke-log
+          path: updater-smoke.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Remove CI Authenticode trust material
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path update-test-thumbprint.txt) {
+            $thumbprint = (Get-Content update-test-thumbprint.txt -Raw).Trim()
+            Remove-Item "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
+            Remove-Item "Cert:\LocalMachine\Root\$thumbprint" -Force -ErrorAction SilentlyContinue
+            Remove-Item "Cert:\LocalMachine\TrustedPublisher\$thumbprint" -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Upload validated installer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
