@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - fix/release-packaging-version-v012-20260725
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
