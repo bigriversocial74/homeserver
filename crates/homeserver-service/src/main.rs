@@ -401,7 +401,7 @@ fn prune_artifact_generations(root: &Path, retain: usize, directories: bool) -> 
         }
         candidates.push((metadata.modified()?, entry.path()));
     }
-    candidates.sort_by(|left, right| right.0.cmp(&left.0));
+    candidates.sort_by_key(|right| std::cmp::Reverse(right.0));
     for (_, path) in candidates.into_iter().skip(retain) {
         if directories {
             std::fs::remove_dir_all(path)?;
