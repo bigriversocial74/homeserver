@@ -83,6 +83,11 @@ jobs:
           echo "e7dbad07b533e42aceca09d372aa21c9ee0a3f469359905eb3fd5519e33027a8  $RUNNER_TEMP/hardening.diff" | sha256sum -c -
           git apply -p1 --check "$RUNNER_TEMP/hardening.diff"
           git apply -p1 "$RUNNER_TEMP/hardening.diff"
+          python - <<'PYFORMAT'
+          from pathlib import Path
+          path = Path('crates/machine-keyring/src/lib.rs')
+          path.write_text(path.read_text().rstrip() + '\n')
+          PYFORMAT
           rm -rf .audit-patch
           rm -f .github/workflows/apply-audit-hardening.yml
           python - <<'PYHELPER'
