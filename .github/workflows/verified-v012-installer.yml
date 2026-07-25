@@ -1,0 +1,120 @@
+name: HomeServer Verified v0.1.2 Installer
+
+on:
+  push:
+    branches:
+      - fix/release-packaging-version-v012-20260725
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homeserver-v012-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-verify:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install and validate dependencies
+        shell: pwsh
+        run: |
+          npm ci
+          npm run check:frontend
+          npm audit --audit-level=high
+          cargo generate-lockfile
+          git diff --exit-code -- Cargo.lock package-lock.json
+
+      - name: Resolve expected release version
+        id: release
+        shell: pwsh
+        run: |
+          $cargo = Get-Content Cargo.toml -Raw
+          $match = [regex]::Match($cargo, '(?ms)\[workspace\.package\].*?^version\s*=\s*"([^"]+)"')
+          if (-not $match.Success) { throw "Unable to resolve workspace release version" }
+          $version = $match.Groups[1].Value
+          if ($version -ne "0.1.2") { throw "Expected release version 0.1.2 but found $version" }
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $tauri = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          if ($package.version -ne $version) { throw "package.json version does not match $version" }
+          if ($tauri.version -ne $version) { throw "tauri.conf.json version does not match $version" }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Verified source release metadata: $version"
+
+      - name: Validate source quality
+        shell: pwsh
+        run: |
+          npm run build
+          npm run prepare:icons
+          cargo fmt --all --check
+          cargo test --workspace --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Remove stale native release output
+        shell: pwsh
+        run: |
+          cargo clean --package microgifter-homeserver-service --package microgifter-homeserver-updater
+          Remove-Item target/release/microgifter-homeserver-service.exe -Force -ErrorAction SilentlyContinue
+          Remove-Item target/release/microgifter-homeserver-updater.exe -Force -ErrorAction SilentlyContinue
+          Remove-Item src-tauri/resources/microgifter-homeserver-service.exe -Force -ErrorAction SilentlyContinue
+          Remove-Item src-tauri/resources/microgifter-homeserver-updater.exe -Force -ErrorAction SilentlyContinue
+
+      - name: Build fresh native service and updater
+        shell: pwsh
+        run: |
+          cargo build --release --package microgifter-homeserver-updater --locked
+          cargo build --release --package microgifter-homeserver-service --locked
+          $expected = "MicrogifterHomeServer ${{ steps.release.outputs.version }}"
+          $reported = (& target/release/microgifter-homeserver-service.exe --version | Out-String).Trim()
+          if ($reported -ne $expected) {
+            throw "Fresh service binary version mismatch. Expected '$expected' but received '$reported'."
+          }
+          Copy-Item target/release/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
+          Copy-Item target/release/microgifter-homeserver-updater.exe src-tauri/resources/microgifter-homeserver-updater.exe -Force
+          $staged = (& src-tauri/resources/microgifter-homeserver-service.exe --version | Out-String).Trim()
+          if ($staged -ne $expected) {
+            throw "Staged installer resource version mismatch. Expected '$expected' but received '$staged'."
+          }
+          Write-Host "Verified fresh and staged service binaries: $reported"
+
+      - name: Cloud connector boundary smoke test
+        shell: pwsh
+        run: ./scripts/smoke-test-cloud-connector.ps1
+
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          npm run tauri:build
+          $bundle = "target/release/bundle/nsis"
+          $installer = Get-ChildItem $bundle -Filter "*-setup.exe" | Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer was not produced" }
+          Copy-Item $installer.FullName "$bundle/Microgifter-HomeServer-v0.1.2-Setup.exe" -Force
+
+      - name: Install and verify packaged release
+        shell: pwsh
+        run: |
+          ./scripts/verify-installer-release.ps1 `
+            -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-v0.1.2-Setup.exe `
+            -ExpectedVersion "${{ steps.release.outputs.version }}"
+
+      - name: Upload verified v0.1.2 installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Microgifter-HomeServer-v0.1.2-Verified
+          path: target/release/bundle/nsis/Microgifter-HomeServer-v0.1.2-Setup.exe
+          if-no-files-found: error
+          retention-days: 14
