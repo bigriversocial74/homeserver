@@ -1,0 +1,91 @@
+name: Cloud Connector Compile Fix
+
+on:
+  push:
+    branches:
+      - feature/cloud-connector-v2-20260724
+    paths:
+      - '.github/workflows/cloud-connector-compile-fix.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cloud-connector-compile-fix
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/cloud-connector-v2-20260724
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+
+      - name: Apply exact compile corrections
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('crates/homeserver-service/src/cloud_connector.rs')
+          text = path.read_text(encoding='utf-8')
+
+          state_impl = '''impl CloudConnectionState {
+              fn as_str(&self) -> &'static str {
+                  match self {
+                      Self::NotPaired => "not_paired",
+                      Self::Pairing => "pairing",
+                      Self::Connected => "connected",
+                      Self::Degraded => "degraded",
+                      Self::Revoked => "revoked",
+                  }
+              }
+          }
+
+          '''
+          if state_impl not in text:
+              raise SystemExit('expected CloudConnectionState helper was not found')
+          text = text.replace(state_impl, '', 1)
+
+          replacements = {
+              '.route("/v1/cloud/vault-self-test", post(vault_self_test))':
+                  '.route("/v1/cloud/vault-self-test", post(vault_self_test_handler))',
+              'async fn vault_self_test(State(state): State<Arc<AppState>>)':
+                  'async fn vault_self_test_handler(State(state): State<Arc<AppState>>)',
+              'fn vault_self_test(installation_id: &str) -> Result<()>':
+                  'fn credential_vault_self_test_entry(installation_id: &str) -> Result<()>',
+              'vault_self_test(&installation_id)':
+                  'credential_vault_self_test_entry(&installation_id)',
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'expected source fragment was not found: {old}')
+              text = text.replace(old, new, 1)
+
+          guard_count = text.count('&self.connection()?')
+          if guard_count != 14:
+              raise SystemExit(f'expected 14 connection guard borrows, found {guard_count}')
+          text = text.replace('&self.connection()?', '&*self.connection()?')
+
+          path.write_text(text, encoding='utf-8')
+
+      - name: Format corrected source
+        run: cargo fmt --all
+
+      - name: Commit corrected connector
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/homeserver-service/src/cloud_connector.rs
+          if git diff --cached --quiet; then
+            echo "Compile corrections are already applied."
+            exit 0
+          fi
+          git commit -m "Fix cloud connector service compilation"
+          git push origin HEAD:feature/cloud-connector-v2-20260724
