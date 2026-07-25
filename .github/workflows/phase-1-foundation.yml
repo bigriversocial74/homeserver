@@ -1,6 +1,7 @@
 name: Phase 3B Rollback Hardening
 
 on:
+  pull_request:
   push:
     branches:
       - feature/phase-3b-signed-updates-20260724
@@ -9,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: phase3b-rollback-hardening
+  group: phase3b-rollback-hardening-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
