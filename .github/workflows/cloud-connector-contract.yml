@@ -79,42 +79,8 @@ jobs:
       - name: Apply compiler corrections
         shell: bash
         run: |
-          python - <<'PYFIX'
-          from pathlib import Path
-
-          backup = Path('crates/homeserver-service/src/backup.rs')
-          text = backup.read_text()
-          old = '        let mut entry = entry?;'
-          if old not in text:
-              raise SystemExit('backup mutable entry marker missing')
-          backup.write_text(text.replace(old, '        let entry = entry?;', 1))
-
-          database = Path('crates/homeserver-service/src/database.rs')
-          text = database.read_text()
-          old = '''    statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                PathBuf::from(row.get::<_, String>(1)?),
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
-'''
-          new = '''    let rows = statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                PathBuf::from(row.get::<_, String>(1)?),
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
-'''
-          if old not in text:
-              raise SystemExit('database iterator lifetime marker missing')
-          database.write_text(text.replace(old, new, 1))
-          PYFIX
+          sed -i 's/let mut entry = entry?;/let entry = entry?;/' crates/homeserver-service/src/backup.rs
+          python -c "from pathlib import Path; p=Path('crates/homeserver-service/src/database.rs'); t=p.read_text(); marker='pub fn unreferenced_pre_update_backups'; a,s,b=t.partition(marker); old='    statement\n        .query_map([], |row| {\n            Ok((\n                row.get::<_, String>(0)?,\n                PathBuf::from(row.get::<_, String>(1)?),\n            ))\n        })?\n        .collect::<rusqlite::Result<Vec<_>>>()\n        .map_err(Into::into)\n'; new='    let rows = statement\n        .query_map([], |row| {\n            Ok((\n                row.get::<_, String>(0)?,\n                PathBuf::from(row.get::<_, String>(1)?),\n            ))\n        })?\n        .collect::<rusqlite::Result<Vec<_>>>()?;\n    Ok(rows)\n'; assert s and old in b; p.write_text(a+s+b.replace(old,new,1))"
           cargo fmt --all
       - name: Commit compiler corrections
         shell: bash
