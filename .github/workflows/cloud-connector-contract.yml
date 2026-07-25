@@ -41,7 +41,7 @@ jobs:
           path: cloud
           fetch-depth: 1
 
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@0c0c27b4cb4cc611a83d6f7372e7f7f945ceb49a
         with:
           php-version: '8.2'
           extensions: json, mbstring, pdo, sodium
@@ -61,59 +61,3 @@ jobs:
 
       - name: Validate cross-repository connector contract
         run: python homeserver/scripts/validate-cloud-connector-contract.py --homeserver-root homeserver --cloud-root cloud
-
-  apply-audit-hardening:
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'audit/full-production-hardening-20260725' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: audit/full-production-hardening-20260725
-          fetch-depth: 0
-
-      - name: Reconstruct, validate, and stage audited source hardening
-        shell: bash
-        run: |
-          cat .audit-patch/part-* > "$RUNNER_TEMP/hardening.diff.gz.b64"
-          echo "5945c9f7241baed92e0eb9e136cd4b2f268f62ae157062639a5dbfd74d136c74  $RUNNER_TEMP/hardening.diff.gz.b64" | sha256sum -c -
-          base64 --decode "$RUNNER_TEMP/hardening.diff.gz.b64" | gzip -d > "$RUNNER_TEMP/hardening.diff"
-          echo "e7dbad07b533e42aceca09d372aa21c9ee0a3f469359905eb3fd5519e33027a8  $RUNNER_TEMP/hardening.diff" | sha256sum -c -
-          git apply -p1 --check "$RUNNER_TEMP/hardening.diff"
-          git apply -p1 "$RUNNER_TEMP/hardening.diff"
-          python - <<'PYFORMAT'
-          from pathlib import Path
-          path = Path('crates/machine-keyring/src/lib.rs')
-          path.write_text(path.read_text().rstrip() + '\n')
-          PYFORMAT
-
-          # Remove temporary write-enabled helpers while validating the final tree.
-          rm -f .github/workflows/apply-audit-hardening.yml
-          python - <<'PYHELPER'
-          from pathlib import Path
-          path = Path('.github/workflows/cloud-connector-contract.yml')
-          text = path.read_text()
-          marker = '\n\n  apply-audit-hardening:\n'
-          if marker not in text:
-              raise SystemExit('temporary hardening job marker missing')
-          path.write_text(text.split(marker, 1)[0].rstrip() + '\n')
-          PYHELPER
-          rm -rf scripts/__pycache__
-          git diff --check
-          python scripts/validate-security-boundaries.py
-
-          # Workflow mutations are applied separately through GitHub.
-          git checkout HEAD -- .github/workflows
-          rm -rf .audit-patch
-          git diff --check
-
-      - name: Commit non-workflow hardening pass
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Harden HomeServer production boundaries and release quality"
-          git push origin HEAD:audit/full-production-hardening-20260725
