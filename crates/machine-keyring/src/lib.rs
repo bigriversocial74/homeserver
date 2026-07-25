@@ -108,8 +108,11 @@ impl Entry {
 
     fn entropy(&self) -> [u8; 32] {
         Sha256::digest(
-            format!("MicrogifterHomeServerCredential:{}\0{}", self.service, self.username)
-                .as_bytes(),
+            format!(
+                "MicrogifterHomeServerCredential:{}\0{}",
+                self.service, self.username
+            )
+            .as_bytes(),
         )
         .into()
     }
@@ -151,9 +154,7 @@ fn data_root() -> Result<PathBuf, Error> {
     #[cfg(not(windows))]
     {
         if let Some(path) = std::env::var_os("XDG_DATA_HOME") {
-            return Ok(PathBuf::from(path)
-                .join("Microgifter")
-                .join("HomeServer"));
+            return Ok(PathBuf::from(path).join("Microgifter").join("HomeServer"));
         }
         std::env::var_os("HOME")
             .map(PathBuf::from)
@@ -176,7 +177,10 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
         Error::PlatformFailure("HomeServer credential directory is unavailable".to_owned())
     })?;
     fs::create_dir_all(directory).map_err(|error| {
-        platform_error("unable to create the HomeServer credential directory", error)
+        platform_error(
+            "unable to create the HomeServer credential directory",
+            error,
+        )
     })?;
 
     let nonce = SystemTime::now()
