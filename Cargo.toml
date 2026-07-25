@@ -4,11 +4,12 @@ members = [
   "crates/homeserver-core",
   "crates/homeserver-service",
   "crates/homeserver-updater",
+  "crates/machine-keyring",
   "src-tauri",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.80"
 license = "UNLICENSED"
@@ -27,7 +28,7 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 flate2 = "1"
 futures-util = "0.3"
 hex = "0.4"
-keyring = "3"
+keyring = { path = "crates/machine-keyring" }
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 rfd = "0.15"
