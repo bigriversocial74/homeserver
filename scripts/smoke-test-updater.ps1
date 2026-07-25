@@ -333,6 +333,7 @@ finally {
     }
 }
 
+$global:LASTEXITCODE = $scriptExitCode
 if ($scriptExitCode -ne 0) {
     exit $scriptExitCode
 }
