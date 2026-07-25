@@ -114,17 +114,51 @@ function Invoke-UpdatePlan {
     if (-not (Test-Path $installedUpdater)) {
         throw "Installed HomeServer updater helper is missing"
     }
-    $updaterCopy = Join-Path $stagingDirectory ("updater-smoke-" + [guid]::NewGuid().ToString("N") + ".exe")
+
+    $diagnosticId = [guid]::NewGuid().ToString("N")
+    $updaterCopy = Join-Path $stagingDirectory "updater-smoke-$diagnosticId.exe"
+    $stdoutPath = Join-Path $stagingDirectory "updater-smoke-$diagnosticId.stdout.log"
+    $stderrPath = Join-Path $stagingDirectory "updater-smoke-$diagnosticId.stderr.log"
     Copy-Item $installedUpdater $updaterCopy -Force
     Remove-Item $resultPath -Force -ErrorAction SilentlyContinue
-    $process = Start-Process -FilePath $updaterCopy -ArgumentList @("apply", $Plan.PlanPath) -PassThru -Wait
-    if ($process.ExitCode -ne 0) {
-        throw "HomeServer updater helper failed with exit code $($process.ExitCode)"
+
+    try {
+        $process = Start-Process -FilePath $updaterCopy -ArgumentList @("apply", $Plan.PlanPath) -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru -Wait
+        $stdout = if (Test-Path $stdoutPath) { (Get-Content $stdoutPath -Raw).Trim() } else { "" }
+        $stderr = if (Test-Path $stderrPath) { (Get-Content $stderrPath -Raw).Trim() } else { "" }
+        $resultJson = if (Test-Path $resultPath) { (Get-Content $resultPath -Raw).Trim() } else { "" }
+
+        if ($stdout) {
+            Write-Host "HomeServer updater stdout:`n$stdout"
+        }
+        if ($stderr) {
+            Write-Host "HomeServer updater stderr:`n$stderr"
+        }
+        if ($resultJson) {
+            Write-Host "HomeServer updater result:`n$resultJson"
+        }
+
+        if ($process.ExitCode -ne 0) {
+            $detail = if ($resultJson) {
+                $result = $resultJson | ConvertFrom-Json
+                "state=$($result.state), failure_code=$($result.failure_code), message=$($result.message)"
+            }
+            elseif ($stderr) {
+                $stderr
+            }
+            else {
+                "no updater result or stderr was produced"
+            }
+            throw "HomeServer updater helper failed with exit code $($process.ExitCode): $detail"
+        }
+        if (-not $resultJson) {
+            throw "HomeServer updater did not write an application result"
+        }
+        $resultJson | ConvertFrom-Json
     }
-    if (-not (Test-Path $resultPath)) {
-        throw "HomeServer updater did not write an application result"
+    finally {
+        Remove-Item $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
     }
-    Get-Content $resultPath -Raw | ConvertFrom-Json
 }
 
 try {
