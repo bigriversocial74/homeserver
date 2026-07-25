@@ -1,4 +1,4 @@
-name: Phase 3B Migration Repair
+name: Restore Phase 3B Production Workflow
 
 on:
   push:
@@ -8,34 +8,22 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: phase3b-migration-repair
-  cancel-in-progress: true
-
 jobs:
-  repair:
+  restore:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: feature/phase-3b-signed-updates-20260724
+          fetch-depth: 0
 
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
-        with:
-          components: rustfmt
-
-      - name: Apply migration and audit-link repair
+      - name: Restore immutable production workflow
         run: |
-          python scripts/phase3b_migration_fix.py
-          cargo fmt --all
+          git show a5e6fe7546a6fba362477f27c85e2a6655351136:.github/workflows/phase-1-foundation.yml > .github/workflows/phase-1-foundation.yml
           git diff --check
-
-      - name: Commit repair
-        run: |
-          git rm scripts/phase3b_migration_fix.py
-          git add database/migrations/0003_signed_updates.sql crates/homeserver-service/src/update_store.rs crates/homeserver-service/src/main.rs
+          git add .github/workflows/phase-1-foundation.yml
           git config user.name "Microgifter Build Bot"
           git config user.email "buildbot@microgifter.local"
-          git commit -m "Migrate legacy update state and bind pre-update backups"
+          git commit -m "Restore strict Phase 3B production workflow"
           git push origin HEAD:feature/phase-3b-signed-updates-20260724
