@@ -21,6 +21,7 @@ $rollbackRoot = Join-Path $dataDirectory "updates\rollback"
 $installedArchive = Join-Path $dataDirectory "updates\installed"
 $resultPath = Join-Path $dataDirectory "updates\last-update-result.json"
 $uninstallerPath = $null
+$scriptExitCode = 0
 
 function Wait-ForHomeServerHealth {
     param([Parameter(Mandatory = $true)][string]$ExpectedVersion)
@@ -205,6 +206,18 @@ try {
 
     Write-Host "HomeServer signed update, Authenticode verification, health confirmation, automatic rollback, installer preservation, and cleanup smoke tests passed."
 }
+catch {
+    $scriptExitCode = 1
+    Write-Host "HomeServer updater smoke failure: $($_.Exception.Message)"
+    if ($_.ScriptStackTrace) {
+        Write-Host "Script stack:`n$($_.ScriptStackTrace)"
+    }
+    if (Test-Path $resultPath) {
+        Write-Host "Last updater result:`n$(Get-Content $resultPath -Raw)"
+    }
+    $serviceQuery = & "$env:SystemRoot\System32\sc.exe" query $serviceName 2>&1 | Out-String
+    Write-Host "Service query:`n$serviceQuery"
+}
 finally {
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     if ($service) {
@@ -217,4 +230,8 @@ finally {
     if (Test-Path $dataDirectory) {
         Remove-Item $dataDirectory -Recurse -Force -ErrorAction SilentlyContinue
     }
+}
+
+if ($scriptExitCode -ne 0) {
+    exit $scriptExitCode
 }
