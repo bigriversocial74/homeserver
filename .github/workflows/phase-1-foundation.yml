@@ -1,299 +1,270 @@
-name: HomeServer Production Quality
+name: Phase 3B Windows Lifecycle Canonicalizer
 
 on:
-  pull_request:
   push:
     branches:
-      - main
       - feature/phase-3b-signed-updates-20260724
 
+permissions:
+  contents: write
+
 concurrency:
-  group: homeserver-quality-${{ github.ref }}
+  group: phase3b-windows-lifecycle-canonicalize
   cancel-in-progress: true
 
-permissions:
-  contents: read
-
 jobs:
-  validate:
-    runs-on: windows-latest
-    timeout-minutes: 75
+  canonicalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-3b-signed-updates-20260724
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
-          components: rustfmt, clippy
+          components: rustfmt
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: windows-cargo-${{ hashFiles('Cargo.toml', '**/Cargo.toml', 'Cargo.lock') }}
-          restore-keys: windows-cargo-
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Verify dependency lock stability
-        shell: pwsh
+      - name: Apply Windows lifecycle hardening
+        shell: bash
         run: |
-          $PSNativeCommandUseErrorActionPreference = $false
-          npm install --package-lock-only --ignore-scripts
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo generate-lockfile
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          New-Item -ItemType Directory -Force generated-locks | Out-Null
-          Copy-Item Cargo.lock generated-locks/Cargo.lock -Force
-          Copy-Item package-lock.json generated-locks/package-lock.json -Force
-          git diff -- Cargo.lock package-lock.json | Set-Content dependency-lock-diff.log
-          git diff --quiet -- Cargo.lock package-lock.json
-          $lockExit = $LASTEXITCODE
-          if ($lockExit -ne 0) {
-            Get-Content dependency-lock-diff.log -Tail 240
-            exit $lockExit
-          }
+          python - <<'PY'
+          from pathlib import Path
 
-      - name: Upload dependency lock diagnostics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: dependency-lock-diagnostics
-          path: |
-            dependency-lock-diff.log
-            generated-locks
-          if-no-files-found: warn
-          retention-days: 7
+          backup = Path('crates/homeserver-service/src/backup.rs')
+          text = backup.read_text(encoding='utf-8')
+          old = '''            imports_dir: data_dir.join("imports"),
+            restore_dir: data_dir.join("restore"),
+            staging_dir: data_dir.join("staging"),
+            data_dir,
+            server_name: "Test HomeServer".to_owned(),'''
+          new = '''            imports_dir: data_dir.join("imports"),
+            restore_dir: data_dir.join("restore"),
+            staging_dir: data_dir.join("staging"),
+            updates_dir: data_dir.join("updates"),
+            update_staging_dir: data_dir.join("updates/staging"),
+            update_rollback_dir: data_dir.join("updates/rollback"),
+            update_installed_dir: data_dir.join("updates/installed"),
+            update_manifest_url: "https://updates.microgifter.com/homeserver/stable/manifest.json".to_owned(),
+            data_dir,
+            server_name: "Test HomeServer".to_owned(),'''
+          if old in text:
+              text = text.replace(old, new, 1)
+          old_dirs = '''            &config.restore_dir,
+            &config.staging_dir,
+        ] {'''
+          new_dirs = '''            &config.restore_dir,
+            &config.staging_dir,
+            &config.updates_dir,
+            &config.update_staging_dir,
+            &config.update_rollback_dir,
+            &config.update_installed_dir,
+        ] {'''
+          if old_dirs in text:
+              text = text.replace(old_dirs, new_dirs, 1)
+          backup.write_text(text, encoding='utf-8')
 
-      - name: Install frontend dependencies
-        run: npm ci
+          store = Path('crates/homeserver-service/src/update_store.rs')
+          text = store.read_text(encoding='utf-8')
+          text = text.replace('use chrono::{DateTime, Utc};', 'use chrono::{DateTime, Duration, Utc};')
+          start = text.index('pub fn record_application_result(')
+          end = text.index('\npub fn latest_update', start)
+          replacement = '''pub fn record_application_result(
+    connection: &Connection,
+    result: &UpdateApplicationResult,
+) -> Result<()> {
+    ensure!(
+        matches!(
+            result.state,
+            UpdateState::Succeeded | UpdateState::RolledBack | UpdateState::Failed
+        ),
+        "update application result has an unsupported state"
+    );
+    ensure!(
+        result.completed_at_utc <= Utc::now() + Duration::minutes(10),
+        "update application result completion time is in the future"
+    );
+    let stored = update_by_id(connection, &result.update_id)?;
+    ensure!(
+        stored.record.state == UpdateState::Applying,
+        "update application result does not belong to an applying release"
+    );
+    ensure!(
+        stored.record.version == result.target_version,
+        "update application result target version does not match the applying release"
+    );
+    let state = result.state.as_str();
+    let changed = connection.execute(
+        "UPDATE update_records SET state=?1,applied_at_utc=CASE WHEN ?1='succeeded' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE applied_at_utc END,failure_code=?2,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE update_id=?3 AND state='applying'",
+        params![state, result.failure_code.as_deref(), &result.update_id],
+    )?;
+    ensure!(changed == 1, "applying update state changed before its result was recorded");
+    set_runtime(
+        connection,
+        result.state.clone(),
+        result.failure_code.as_deref(),
+        false,
+    )?;
+    record_event(
+        connection,
+        Some(&result.update_id),
+        match &result.state {
+            UpdateState::Succeeded => "update.succeeded",
+            UpdateState::RolledBack => "update.rolled_back",
+            _ => "update.failed",
+        },
+        &result.message,
+        &serde_json::json!({
+            "target_version": &result.target_version,
+            "failure_code": result.failure_code.as_deref(),
+        })
+        .to_string(),
+    )
+}
+'''
+          store.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
 
-      - name: Frontend and script syntax
-        shell: pwsh
+          tauri = Path('src-tauri/src/lib.rs')
+          text = tauri.read_text(encoding='utf-8')
+          old = '''#[tauri::command]
+async fn homeserver_apply_update(
+    request: ApplyUpdateRequest,
+) -> Result<UpdateActionResult, String> {
+    post_json("/v1/updates/apply", &request).await
+}'''
+          new = '''#[tauri::command]
+async fn homeserver_apply_update(
+    app: tauri::AppHandle,
+    request: ApplyUpdateRequest,
+) -> Result<UpdateActionResult, String> {
+    let result = post_json("/v1/updates/apply", &request).await?;
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        app.exit(0);
+    });
+    Ok(result)
+}'''
+          if old not in text:
+              raise SystemExit('Tauri apply-update anchor not found')
+          tauri.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          updater = Path('crates/homeserver-updater/src/main.rs')
+          text = updater.read_text(encoding='utf-8')
+          text = text.replace(
+              '    stop_service(&plan.service_name)?;\n    snapshot_directory(&install_dir, &rollback_dir)?;\n\n    let install_result',
+              '    stop_service(&plan.service_name)?;\n    snapshot_directory(&install_dir, &rollback_dir)?;\n    tokio::time::sleep(Duration::from_secs(3)).await;\n\n    let install_result'
+          )
+          text = text.replace(
+              '    copy_directory(rollback_dir, install_dir)?;\n    start_service(&plan.service_name)?;',
+              '    copy_directory(rollback_dir, install_dir)?;\n    ensure_service_registration(&plan.service_name, install_dir)?;\n    start_service(&plan.service_name)?;'
+          )
+          anchor = '''fn start_service(service_name: &str) -> Result<()> {'''
+          service_registration = '''fn ensure_service_registration(service_name: &str, install_dir: &Path) -> Result<()> {
+    let service_binary = install_dir
+        .join("resources")
+        .join("microgifter-homeserver-service.exe");
+    ensure!(service_binary.is_file(), "restored HomeServer service binary is unavailable");
+    let binary_command = format!("\\\"{}\\\" service", service_binary.display());
+    let exists = Command::new("sc.exe")
+        .args(["query", service_name])
+        .status()
+        .context("unable to query HomeServer service registration")?
+        .success();
+    if !exists {
+        run_sc(
+            vec![
+                "create".to_owned(),
+                service_name.to_owned(),
+                "binPath=".to_owned(),
+                binary_command.clone(),
+                "start=".to_owned(),
+                "auto".to_owned(),
+                "DisplayName=".to_owned(),
+                "Microgifter HomeServer".to_owned(),
+            ],
+            "create restored HomeServer service",
+        )?;
+    }
+    run_sc(
+        vec![
+            "config".to_owned(),
+            service_name.to_owned(),
+            "binPath=".to_owned(),
+            binary_command,
+            "start=".to_owned(),
+            "delayed-auto".to_owned(),
+        ],
+        "configure restored HomeServer service",
+    )?;
+    run_sc(
+        vec![
+            "failure".to_owned(),
+            service_name.to_owned(),
+            "reset=".to_owned(),
+            "86400".to_owned(),
+            "actions=".to_owned(),
+            "restart/5000/restart/15000/none/0".to_owned(),
+        ],
+        "restore HomeServer service recovery policy",
+    )?;
+    run_sc(
+        vec![
+            "failureflag".to_owned(),
+            service_name.to_owned(),
+            "1".to_owned(),
+        ],
+        "restore HomeServer service failure actions",
+    )?;
+    run_sc(
+        vec![
+            "sidtype".to_owned(),
+            service_name.to_owned(),
+            "unrestricted".to_owned(),
+        ],
+        "restore HomeServer service identity",
+    )?;
+    Ok(())
+}
+
+fn run_sc(arguments: Vec<String>, action: &str) -> Result<()> {
+    let output = Command::new("sc.exe")
+        .args(&arguments)
+        .output()
+        .with_context(|| format!("unable to {action}"))?;
+    ensure!(
+        output.status.success(),
+        "unable to {action}: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(())
+}
+
+'''
+          if anchor not in text:
+              raise SystemExit('updater start-service anchor not found')
+          updater.write_text(text.replace(anchor, service_registration + anchor, 1), encoding='utf-8')
+
+          for file_name in [
+              'crates/homeserver-service/src/update.rs',
+              'crates/homeserver-service/src/update_apply.rs',
+          ]:
+              path = Path(file_name)
+              text = path.read_text(encoding='utf-8')
+              text = text.replace(
+                  'use anyhow::{bail, ensure, Context, Result};',
+                  '#[cfg(not(windows))]\nuse anyhow::bail;\nuse anyhow::{ensure, Context, Result};'
+              )
+              path.write_text(text, encoding='utf-8')
+          PY
+          cargo fmt --all
+          git diff --check
+
+      - name: Commit canonical source
+        shell: bash
         run: |
-          npm run check:frontend
-          $scripts = Get-ChildItem scripts -Filter "*.ps1"
-          foreach ($script in $scripts) {
-            $tokens = $null
-            $errors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors) | Out-Null
-            if ($errors.Count -gt 0) {
-              $errors | ForEach-Object { Write-Error $_.Message }
-              throw "PowerShell syntax validation failed for $($script.Name)"
-            }
-          }
-
-      - name: Frontend build
-        run: npm run build
-
-      - name: Dependency vulnerability audit
-        run: npm audit --audit-level=high
-
-      - name: Prepare generated Windows resources
-        run: npm run prepare:icons
-
-      - name: Rust formatting
-        run: cargo fmt --all --check
-
-      - name: Build updater and Windows service resources
-        shell: pwsh
-        run: |
-          cargo build --release --package microgifter-homeserver-updater --locked *> updater-build.log
-          $updaterCode = $LASTEXITCODE
-          if ($updaterCode -ne 0) {
-            Get-Content updater-build.log -Tail 180
-            exit $updaterCode
-          }
-          cargo build --release --package microgifter-homeserver-service --locked *> service-build.log
-          $serviceCode = $LASTEXITCODE
-          if ($serviceCode -ne 0) {
-            Get-Content service-build.log -Tail 180
-            exit $serviceCode
-          }
-          Get-Content updater-build.log -Tail 20
-          Get-Content service-build.log -Tail 20
-
-      - name: Upload native compiler logs
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: native-build-logs
-          path: |
-            updater-build.log
-            service-build.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Stage native resources for desktop targets
-        shell: pwsh
-        run: |
-          Copy-Item target/release/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
-          Copy-Item target/release/microgifter-homeserver-updater.exe src-tauri/resources/microgifter-homeserver-updater.exe -Force
-
-      - name: Full workspace tests
-        shell: pwsh
-        run: |
-          cargo test --workspace --locked *> cargo-test.log
-          $testCode = $LASTEXITCODE
-          if ($testCode -ne 0) {
-            Get-Content cargo-test.log -Tail 220
-            exit $testCode
-          }
-          Get-Content cargo-test.log -Tail 50
-
-      - name: Upload workspace test log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: cargo-test-log
-          path: cargo-test.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Full workspace lint
-        shell: pwsh
-        run: |
-          cargo clippy --workspace --all-targets --locked -- -D warnings *> cargo-clippy.log
-          $lintCode = $LASTEXITCODE
-          if ($lintCode -ne 0) {
-            Get-Content cargo-clippy.log -Tail 220
-            exit $lintCode
-          }
-          Get-Content cargo-clippy.log -Tail 40
-
-      - name: Upload workspace lint log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: cargo-clippy-log
-          path: cargo-clippy.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Encrypted backup and restore console smoke test
-        shell: pwsh
-        run: |
-          & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-service.ps1 *> service-smoke.log
-          $smokeCode = $LASTEXITCODE
-          if ($smokeCode -ne 0) {
-            Get-Content service-smoke.log -Tail 220
-            exit $smokeCode
-          }
-          Get-Content service-smoke.log -Tail 50
-
-      - name: Signed update loopback API smoke test
-        shell: pwsh
-        run: |
-          & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-update-api.ps1 *> update-api-smoke.log
-          $smokeCode = $LASTEXITCODE
-          if ($smokeCode -ne 0) {
-            Get-Content update-api-smoke.log -Tail 180
-            exit $smokeCode
-          }
-          Get-Content update-api-smoke.log -Tail 40
-
-      - name: Upload service smoke logs
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: service-smoke-logs
-          path: |
-            service-smoke.log
-            update-api-smoke.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Build NSIS installer
-        shell: pwsh
-        run: |
-          npm run tauri:build *> tauri-build.log
-          $buildCode = $LASTEXITCODE
-          if ($buildCode -ne 0) {
-            Get-Content tauri-build.log -Tail 220
-            exit $buildCode
-          }
-
-      - name: Upload Tauri build log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: tauri-build-log
-          path: tauri-build.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Normalize installer filename
-        shell: pwsh
-        run: |
-          $bundle = "target/release/bundle/nsis"
-          $installer = Get-ChildItem $bundle -Filter "*-setup.exe" | Select-Object -First 1
-          if (-not $installer) { throw "NSIS installer was not produced" }
-          Copy-Item $installer.FullName "$bundle/Microgifter-HomeServer-Setup.exe" -Force
-
-      - name: Installed LocalSystem backup and uninstall smoke test
-        shell: pwsh
-        run: ./scripts/smoke-test-installer.ps1 -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Setup.exe
-
-      - name: Create trusted CI Authenticode update installer
-        id: sign_update
-        shell: pwsh
-        run: |
-          $bundle = "target/release/bundle/nsis"
-          $source = "$bundle/Microgifter-HomeServer-Setup.exe"
-          $signed = "$bundle/Microgifter-HomeServer-Update-Test.exe"
-          Copy-Item $source $signed -Force
-          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Microgifter CI Update Test" -CertStoreLocation "Cert:\CurrentUser\My" -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 -KeyExportPolicy Exportable -NotAfter (Get-Date).AddDays(2)
-          Export-Certificate -Cert $cert -FilePath "$bundle/Microgifter-CI-Update-Test.cer" | Out-Null
-          Import-Certificate -FilePath "$bundle/Microgifter-CI-Update-Test.cer" -CertStoreLocation "Cert:\LocalMachine\Root" | Out-Null
-          Import-Certificate -FilePath "$bundle/Microgifter-CI-Update-Test.cer" -CertStoreLocation "Cert:\LocalMachine\TrustedPublisher" | Out-Null
-          $signedResult = Set-AuthenticodeSignature -FilePath $signed -Certificate $cert -HashAlgorithm SHA256
-          if ($signedResult.Status -ne "Valid") { throw "Unable to create a trusted CI Authenticode installer: $($signedResult.StatusMessage)" }
-          $cert.Thumbprint | Set-Content update-test-thumbprint.txt -NoNewline
-          "thumbprint=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
-      - name: Installed signed update and rollback smoke test
-        shell: pwsh
-        run: |
-          ./scripts/smoke-test-updater.ps1 `
-            -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Setup.exe `
-            -UpdateInstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Update-Test.exe `
-            -SignerThumbprint "${{ steps.sign_update.outputs.thumbprint }}" *> updater-smoke.log
-          $updateCode = $LASTEXITCODE
-          if ($updateCode -ne 0) {
-            Get-Content updater-smoke.log -Tail 260
-            exit $updateCode
-          }
-          Get-Content updater-smoke.log -Tail 60
-
-      - name: Upload updater smoke log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: updater-smoke-log
-          path: updater-smoke.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Remove CI Authenticode trust material
-        if: always()
-        shell: pwsh
-        run: |
-          if (Test-Path update-test-thumbprint.txt) {
-            $thumbprint = (Get-Content update-test-thumbprint.txt -Raw).Trim()
-            Remove-Item "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
-            Remove-Item "Cert:\LocalMachine\Root\$thumbprint" -Force -ErrorAction SilentlyContinue
-            Remove-Item "Cert:\LocalMachine\TrustedPublisher\$thumbprint" -Force -ErrorAction SilentlyContinue
-          }
-
-      - name: Upload validated installer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: Microgifter-HomeServer-Setup
-          path: target/release/bundle/nsis/Microgifter-HomeServer-Setup.exe
-          if-no-files-found: error
-          retention-days: 14
+          git rm .github/workflows/phase-3b-fixture-result-hardening.yml 2>/dev/null || true
+          git add crates/homeserver-service/src/backup.rs crates/homeserver-service/src/update_store.rs crates/homeserver-service/src/update.rs crates/homeserver-service/src/update_apply.rs crates/homeserver-updater/src/main.rs src-tauri/src/lib.rs
+          git config user.name "Microgifter Build Bot"
+          git config user.email "buildbot@microgifter.local"
+          git commit -m "Harden Phase 3B Windows update lifecycle"
+          git push origin HEAD:feature/phase-3b-signed-updates-20260724
