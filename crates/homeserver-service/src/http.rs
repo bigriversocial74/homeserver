@@ -360,6 +360,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn absent_verified_update_is_a_validation_error() {
+        let error = action_error(
+            "update_download_failed",
+            anyhow::anyhow!("update is not available in the available state"),
+        );
+        assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
     fn accepts_maximum_multibyte_passphrase_header() {
         let passphrase = "🦀".repeat(256);
         let encoded = URL_SAFE_NO_PAD.encode(passphrase.as_bytes());

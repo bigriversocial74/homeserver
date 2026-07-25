@@ -303,7 +303,7 @@ pub fn latest_in_state(connection: &Connection, state: UpdateState) -> Result<St
             stored_update_from_row,
         )
         .optional()?
-        .ok_or_else(|| anyhow::anyhow!("no {} update is available", state.as_str()))
+        .ok_or_else(|| anyhow::anyhow!("update is not available in the {} state", state.as_str()))
 }
 
 fn set_runtime(
