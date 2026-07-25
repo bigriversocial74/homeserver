@@ -2,7 +2,11 @@ use crate::config::AppConfig;
 use anyhow::{ensure, Context, Result};
 use rand::{rngs::OsRng, RngCore};
 use sha2::{Digest, Sha256};
-use std::{fs, io::Write, path::{Path, PathBuf}};
+use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
 use zeroize::Zeroize;
 
 const BACKUP_KEY_BYTES: usize = 32;
@@ -28,8 +32,7 @@ pub fn load_or_create(config: &AppConfig, installation_id: &str) -> Result<[u8; 
 pub fn load(config: &AppConfig, installation_id: &str) -> Result<[u8; BACKUP_KEY_BYTES]> {
     let path = key_path(config);
     recover_interrupted_replace(&path)?;
-    let protected =
-        fs::read(path).context("HomeServer backup encryption key is unavailable")?;
+    let protected = fs::read(path).context("HomeServer backup encryption key is unavailable")?;
     ensure!(
         !protected.is_empty() && protected.len() <= MAX_PROTECTED_KEY_BYTES,
         "HomeServer backup encryption key is invalid"

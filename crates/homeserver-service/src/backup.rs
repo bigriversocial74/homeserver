@@ -649,7 +649,10 @@ fn extract_archive(archive: &[u8], directory: &Path, header: &PackageHeader) -> 
         entry_count = entry_count
             .checked_add(1)
             .context("backup archive contains too many entries")?;
-        ensure!(entry_count <= 2, "backup archive contains unexpected entries");
+        ensure!(
+            entry_count <= 2,
+            "backup archive contains unexpected entries"
+        );
         let mut entry = entry?;
         ensure!(
             entry.header().entry_type().is_file(),
@@ -658,7 +661,10 @@ fn extract_archive(archive: &[u8], directory: &Path, header: &PackageHeader) -> 
         let path = entry.path()?.into_owned();
         match path.to_string_lossy().as_ref() {
             "manifest.json" => {
-                ensure!(manifest.is_none(), "backup archive contains duplicate manifests");
+                ensure!(
+                    manifest.is_none(),
+                    "backup archive contains duplicate manifests"
+                );
                 ensure!(
                     entry.size() <= MAX_HEADER_BYTES as u64,
                     "backup manifest is too large"
@@ -683,10 +689,7 @@ fn extract_archive(archive: &[u8], directory: &Path, header: &PackageHeader) -> 
                 );
                 let destination = directory.join("homeserver.sqlite3");
                 let mut output = File::create(&destination)?;
-                let copied = std::io::copy(
-                    &mut entry.take(MAX_DATABASE_BYTES + 1),
-                    &mut output,
-                )?;
+                let copied = std::io::copy(&mut entry.take(MAX_DATABASE_BYTES + 1), &mut output)?;
                 ensure!(
                     copied <= MAX_DATABASE_BYTES,
                     "backup database exceeds the size limit"
@@ -742,7 +745,10 @@ pub fn enforce_pre_update_retention(connection: &Connection) -> Result<()> {
     for (backup_id, path) in database::unreferenced_pre_update_backups(connection)? {
         if path.exists() {
             fs::remove_file(&path).with_context(|| {
-                format!("unable to remove expired pre-update backup {}", path.display())
+                format!(
+                    "unable to remove expired pre-update backup {}",
+                    path.display()
+                )
             })?;
         }
         database::delete_backup_record(connection, &backup_id)?;
@@ -907,6 +913,4 @@ mod tests {
             b"original database"
         );
     }
-
-
 }

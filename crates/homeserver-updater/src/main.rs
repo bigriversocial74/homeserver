@@ -479,7 +479,10 @@ fn atomic_copy(source: &Path, destination: &Path) -> Result<()> {
         fs::remove_file(&previous)?;
     }
     fs::copy(source, &temporary)?;
-    fs::File::options().write(true).open(&temporary)?.sync_all()?;
+    fs::File::options()
+        .write(true)
+        .open(&temporary)?
+        .sync_all()?;
     if destination.exists() {
         fs::rename(destination, &previous)?;
     }
@@ -710,12 +713,8 @@ fn remove_directory_with_retry(path: &Path, timeout: Duration) -> Result<()> {
 async fn wait_for_health(base_url: &str, expected_version: &str, timeout: Duration) -> bool {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
-        reqwest::header::HeaderName::from_static(
-            microgifter_homeserver_core::LOCAL_CLIENT_HEADER,
-        ),
-        reqwest::header::HeaderValue::from_static(
-            microgifter_homeserver_core::LOCAL_CLIENT_VALUE,
-        ),
+        reqwest::header::HeaderName::from_static(microgifter_homeserver_core::LOCAL_CLIENT_HEADER),
+        reqwest::header::HeaderValue::from_static(microgifter_homeserver_core::LOCAL_CLIENT_VALUE),
     );
     let client = match reqwest::Client::builder()
         .default_headers(headers)
@@ -756,7 +755,10 @@ fn write_result(path: &Path, result: &UpdateApplicationResult) -> Result<()> {
     let temporary = path.with_extension("tmp");
     let backup = path.with_extension("replace-backup");
     fs::write(&temporary, serde_json::to_vec_pretty(result)?)?;
-    fs::File::options().write(true).open(&temporary)?.sync_all()?;
+    fs::File::options()
+        .write(true)
+        .open(&temporary)?
+        .sync_all()?;
     if backup.exists() {
         fs::remove_file(&backup)?;
     }
@@ -781,9 +783,9 @@ fn absolute(path: &Path) -> Result<PathBuf> {
 
     ensure!(path.is_absolute(), "update path must be absolute");
     ensure!(
-        !path.components().any(|component| {
-            matches!(component, Component::CurDir | Component::ParentDir)
-        }),
+        !path
+            .components()
+            .any(|component| { matches!(component, Component::CurDir | Component::ParentDir) }),
         "update path cannot contain relative traversal components"
     );
     Ok(path.to_path_buf())
@@ -854,5 +856,4 @@ mod tests {
         assert!(absolute(Path::new("C:\\ProgramData\\Microgifter\\HomeServer")).is_ok());
         assert!(absolute(Path::new("C:\\ProgramData\\Microgifter\\..\\Windows")).is_err());
     }
-
 }

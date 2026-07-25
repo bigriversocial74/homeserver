@@ -95,11 +95,9 @@ pub fn secure(router: Router) -> Router {
 }
 
 async fn protect_local_api(request: Request, next: Next) -> Response {
-    if let Some(message) = local_request_rejection(
-        request.method(),
-        request.uri().path(),
-        request.headers(),
-    ) {
+    if let Some(message) =
+        local_request_rejection(request.method(), request.uri().path(), request.headers())
+    {
         return (
             StatusCode::FORBIDDEN,
             Json(ApiError {
@@ -452,7 +450,10 @@ mod tests {
         assert!(local_request_rejection(&Method::GET, "/v1/test", &headers).is_none());
         assert!(local_request_rejection(&Method::POST, "/v1/test", &headers).is_none());
 
-        headers.insert(header::ORIGIN, HeaderValue::from_static("https://example.com"));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://example.com"),
+        );
         assert!(local_request_rejection(&Method::POST, "/v1/test", &headers).is_some());
         headers.remove(header::ORIGIN);
         headers.insert("x-forwarded-host", HeaderValue::from_static("example.com"));

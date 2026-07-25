@@ -332,9 +332,7 @@ pub fn retention_candidates(connection: &Connection) -> Result<Vec<(String, Path
     Ok(rows)
 }
 
-pub fn unreferenced_pre_update_backups(
-    connection: &Connection,
-) -> Result<Vec<(String, PathBuf)>> {
+pub fn unreferenced_pre_update_backups(connection: &Connection) -> Result<Vec<(String, PathBuf)>> {
     let mut statement = connection.prepare(
         "SELECT backup_id,storage_path FROM backup_records WHERE kind='pre_update' AND state IN ('ready','verified','restored','failed') AND backup_id NOT IN (SELECT pre_update_backup_id FROM update_records WHERE pre_update_backup_id IS NOT NULL) ORDER BY created_at_utc DESC,backup_id DESC",
     )?;

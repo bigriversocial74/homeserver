@@ -618,8 +618,7 @@ mod tests {
             std::fs::write(&path, index.to_string()).expect("artifact fixture");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        prune_artifact_generations(directory.path(), 3, false)
-            .expect("prune update artifacts");
+        prune_artifact_generations(directory.path(), 3, false).expect("prune update artifacts");
         let remaining = std::fs::read_dir(directory.path())
             .expect("artifact directory")
             .count();

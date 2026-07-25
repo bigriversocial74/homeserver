@@ -228,13 +228,19 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     if backup.exists() {
         fs::remove_file(&backup).map_err(|error| {
             let _ = fs::remove_file(&temporary);
-            platform_error("unable to clear a stale credential replacement backup", error)
+            platform_error(
+                "unable to clear a stale credential replacement backup",
+                error,
+            )
         })?;
     }
     if path.exists() {
         fs::rename(path, &backup).map_err(|error| {
             let _ = fs::remove_file(&temporary);
-            platform_error("unable to preserve the current HomeServer credential", error)
+            platform_error(
+                "unable to preserve the current HomeServer credential",
+                error,
+            )
         })?;
     }
 
@@ -264,11 +270,17 @@ fn recover_interrupted_replace(path: &Path) -> Result<(), Error> {
     let backup = replacement_backup_path(path);
     if !path.exists() && backup.exists() {
         fs::rename(&backup, path).map_err(|error| {
-            platform_error("unable to recover an interrupted credential replacement", error)
+            platform_error(
+                "unable to recover an interrupted credential replacement",
+                error,
+            )
         })?;
     } else if path.exists() && backup.exists() {
         fs::remove_file(&backup).map_err(|error| {
-            platform_error("unable to clear an obsolete credential replacement backup", error)
+            platform_error(
+                "unable to clear an obsolete credential replacement backup",
+                error,
+            )
         })?;
     }
     Ok(())

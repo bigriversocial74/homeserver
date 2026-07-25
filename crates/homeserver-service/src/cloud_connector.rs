@@ -1065,14 +1065,16 @@ fn validate_receipts(operations: &[QueuedOperation], receipts: &[ReceiptRecord])
         validate_idempotency_key(&receipt.idempotency_key)?;
         ensure!(
             receipt.receipt_id.len() <= 190
-                && receipt
-                    .receipt_id
-                    .chars()
-                    .all(|character| character.is_ascii_alphanumeric() || "_.:-".contains(character)),
+                && receipt.receipt_id.chars().all(
+                    |character| character.is_ascii_alphanumeric() || "_.:-".contains(character)
+                ),
             "Microgifter returned an invalid synchronization receipt identity"
         );
         ensure!(
-            receipt.reason_code.as_deref().map_or(true, |value| value.len() <= 120),
+            receipt
+                .reason_code
+                .as_deref()
+                .map_or(true, |value| value.len() <= 120),
             "Microgifter returned an oversized synchronization reason"
         );
         ensure!(
@@ -1308,7 +1310,12 @@ mod tests {
         let temp = tempdir().unwrap();
         let connection = database::initialize(&temp.path().join("queue.sqlite3")).unwrap();
         initialize(&connection).unwrap();
-        assert!(enqueue_operation(&connection, "oversized", "cache.refresh.request", &oversized).is_err());
+        assert!(enqueue_operation(
+            &connection,
+            "oversized",
+            "cache.refresh.request",
+            &oversized
+        )
+        .is_err());
     }
-
 }

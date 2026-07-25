@@ -68,7 +68,10 @@ pub async fn run(
 
     let state = Arc::new(AppState::new(config, connection));
     if let Err(error) = state.maintain_runtime_history() {
-        warn!(?error, "HomeServer runtime history retention failed during startup");
+        warn!(
+            ?error,
+            "HomeServer runtime history retention failed during startup"
+        );
     }
     let address: SocketAddr = format!("{API_HOST}:{API_PORT}").parse()?;
     let listener = tokio::net::TcpListener::bind(address)

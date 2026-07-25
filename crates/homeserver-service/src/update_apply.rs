@@ -149,7 +149,10 @@ fn atomic_write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> 
     let temporary = path.with_extension("tmp");
     let backup = path.with_extension("replace-backup");
     fs::write(&temporary, serde_json::to_vec_pretty(value)?)?;
-    fs::File::options().write(true).open(&temporary)?.sync_all()?;
+    fs::File::options()
+        .write(true)
+        .open(&temporary)?
+        .sync_all()?;
     if backup.exists() {
         fs::remove_file(&backup)?;
     }
