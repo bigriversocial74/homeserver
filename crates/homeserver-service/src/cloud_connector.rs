@@ -48,18 +48,6 @@ pub enum CloudConnectionState {
     Revoked,
 }
 
-impl CloudConnectionState {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::NotPaired => "not_paired",
-            Self::Pairing => "pairing",
-            Self::Connected => "connected",
-            Self::Degraded => "degraded",
-            Self::Revoked => "revoked",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CloudConnectionSnapshot {
     pub state: CloudConnectionState,
@@ -425,7 +413,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/cloud", get(cloud_status))
         .route("/v1/cloud/pair", post(pair_cloud))
         .route("/v1/cloud/disconnect", post(disconnect_cloud))
-        .route("/v1/cloud/vault-self-test", post(vault_self_test))
+        .route("/v1/cloud/vault-self-test", post(vault_self_test_handler))
         .route("/v1/cloud/enqueue", post(enqueue_sync))
         .route("/v1/cloud/sync", post(sync_once))
         .layer(DefaultBodyLimit::max(MAX_CONTROL_BODY_BYTES))
@@ -468,11 +456,11 @@ pub async fn run(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>) {
 
 impl AppState {
     fn cloud_snapshot(&self) -> Result<CloudConnectionSnapshot> {
-        cloud_connection(&self.connection()?)
+        cloud_connection(&*self.connection()?)
     }
 
     async fn pair_cloud(&self, request: PairCloudRequest) -> Result<CloudConnectionSnapshot> {
-        let installation_id = database::installation_id(&self.connection()?)?;
+        let installation_id = database::installation_id(&*self.connection()?)?;
         let client = CloudClient::new()?;
         let outcome = client
             .pair(
@@ -485,7 +473,7 @@ impl AppState {
 
         save_secrets(&installation_id, &outcome.secrets)?;
         if let Err(error) = save_cloud_connection(
-            &self.connection()?,
+            &*self.connection()?,
             &outcome.cloud_base_url,
             &outcome.device_id,
             &outcome.public_key_base64,
@@ -495,30 +483,30 @@ impl AppState {
             return Err(error).context("unable to persist HomeServer cloud pairing state");
         }
 
-        let record = cloud_connection_record(&self.connection()?)?;
+        let record = cloud_connection_record(&*self.connection()?)?;
         if let Err(error) = client.status(&record, &outcome.secrets).await {
             mark_cloud_error(
-                &self.connection()?,
+                &*self.connection()?,
                 &public_cloud_error(&error),
                 authentication_failed(&error),
             )?;
             return Err(error).context("pairing completed but signed cloud verification failed");
         }
-        mark_cloud_success(&self.connection()?)?;
+        mark_cloud_success(&*self.connection()?)?;
         self.enqueue_heartbeat()?;
         self.cloud_snapshot()
     }
 
     fn disconnect_cloud(&self) -> Result<CloudConnectionSnapshot> {
-        let installation_id = database::installation_id(&self.connection()?)?;
+        let installation_id = database::installation_id(&*self.connection()?)?;
         delete_secrets(&installation_id)?;
-        clear_cloud_connection(&self.connection()?)?;
+        clear_cloud_connection(&*self.connection()?)?;
         Ok(CloudConnectionSnapshot::default())
     }
 
     fn credential_vault_self_test(&self) -> Result<()> {
-        let installation_id = database::installation_id(&self.connection()?)?;
-        vault_self_test(&installation_id)
+        let installation_id = database::installation_id(&*self.connection()?)?;
+        credential_vault_self_test_entry(&installation_id)
     }
 
     fn enqueue_sync(&self, request: EnqueueSyncRequest) -> Result<String> {
@@ -531,7 +519,7 @@ impl AppState {
             .unwrap_or_else(|| format!("homeserver:{}", Uuid::new_v4().simple()));
         validate_idempotency_key(&idempotency_key)?;
         enqueue_operation(
-            &self.connection()?,
+            &*self.connection()?,
             &idempotency_key,
             &operation_type,
             &request.payload,
@@ -585,7 +573,7 @@ impl AppState {
         let secrets = match load_secrets(&installation_id) {
             Ok(secrets) => secrets,
             Err(error) => {
-                mark_cloud_error(&self.connection()?, "credential_vault_unavailable", false)?;
+                mark_cloud_error(&*self.connection()?, "credential_vault_unavailable", false)?;
                 return Err(error);
             }
         };
@@ -593,10 +581,10 @@ impl AppState {
 
         if operations.is_empty() {
             match client.status(&record, &secrets).await {
-                Ok(()) => mark_cloud_success(&self.connection()?)?,
+                Ok(()) => mark_cloud_success(&*self.connection()?)?,
                 Err(error) => {
                     mark_cloud_error(
-                        &self.connection()?,
+                        &*self.connection()?,
                         &public_cloud_error(&error),
                         authentication_failed(&error),
                     )?;
@@ -608,7 +596,7 @@ impl AppState {
                 accepted: 0,
                 rejected: 0,
                 review: 0,
-                pending: cloud_pending_sync_count(&self.connection()?)?,
+                pending: cloud_pending_sync_count(&*self.connection()?)?,
             });
         }
 
@@ -687,7 +675,7 @@ async fn disconnect_cloud(
         .map_err(|error| action_error("cloud_disconnect_failed", error))
 }
 
-async fn vault_self_test(State(state): State<Arc<AppState>>) -> ApiResult<ActionMessage> {
+async fn vault_self_test_handler(State(state): State<Arc<AppState>>) -> ApiResult<ActionMessage> {
     tokio::task::spawn_blocking(move || state.credential_vault_self_test())
         .await
         .map_err(task_error)?
@@ -754,7 +742,7 @@ fn delete_secrets(installation_id: &str) -> Result<()> {
     }
 }
 
-fn vault_self_test(installation_id: &str) -> Result<()> {
+fn credential_vault_self_test_entry(installation_id: &str) -> Result<()> {
     let diagnostic_user = format!("{installation_id}:diagnostic:{}", Uuid::new_v4().simple());
     let diagnostic_entry = Entry::new(CREDENTIAL_SERVICE, &diagnostic_user)
         .context("unable to open a diagnostic operating-system credential entry")?;
