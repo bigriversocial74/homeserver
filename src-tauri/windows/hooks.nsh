@@ -22,10 +22,28 @@
 
   DetailPrint "Hardening Microgifter HomeServer data permissions"
   CreateDirectory "$COMMONAPPDATA\Microgifter\HomeServer"
-  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONAPPDATA\Microgifter\HomeServer" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C'
-  !insertmacro MG_REQUIRE_SUCCESS "Unable to secure the HomeServer data directory"
-  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONAPPDATA\Microgifter\HomeServer" /setowner "*S-1-5-18" /T /C'
+
+  ; Protect the root first. Keeping this separate from the grant operation is
+  ; required because a combined recursive icacls invocation can leave the root
+  ; ACL inheriting from ProgramData on some Windows builds.
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONAPPDATA\Microgifter\HomeServer" /inheritance:r'
+  !insertmacro MG_REQUIRE_SUCCESS "Unable to disable inherited HomeServer data permissions"
+
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONAPPDATA\Microgifter\HomeServer" /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"'
+  !insertmacro MG_REQUIRE_SUCCESS "Unable to grant restricted HomeServer data permissions"
+
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONAPPDATA\Microgifter\HomeServer" /setowner "*S-1-5-18"'
   !insertmacro MG_REQUIRE_SUCCESS "Unable to set the HomeServer data directory owner"
+
+  ; Harden retained data during upgrades as well as the root directory itself.
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONAPPDATA\Microgifter\HomeServer" /inheritance:r /T /C'
+  !insertmacro MG_REQUIRE_SUCCESS "Unable to remove inherited permissions from retained HomeServer data"
+
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONAPPDATA\Microgifter\HomeServer" /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C'
+  !insertmacro MG_REQUIRE_SUCCESS "Unable to apply restricted permissions to retained HomeServer data"
+
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONAPPDATA\Microgifter\HomeServer" /setowner "*S-1-5-18" /T /C'
+  !insertmacro MG_REQUIRE_SUCCESS "Unable to set retained HomeServer data ownership"
 
   nsExec::ExecToLog '"$SYSDIR\sc.exe" create "${MG_SERVICE_NAME}" binPath= "\"$INSTDIR\resources\microgifter-homeserver-service.exe\" service" start= auto DisplayName= "${MG_SERVICE_DISPLAY}"'
   !insertmacro MG_REQUIRE_SUCCESS "Unable to register the Microgifter HomeServer service"
