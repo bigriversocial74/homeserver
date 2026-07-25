@@ -265,16 +265,15 @@ jobs:
             (Join-Path $env:ProgramFiles "WindowsPowerShell\Modules")
           ) -join [System.IO.Path]::PathSeparator
           Write-Host "Updater Windows PowerShell module path: $env:PSModulePath"
-          ./scripts/smoke-test-updater.ps1 `
+          & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-updater.ps1 `
             -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Setup.exe `
             -UpdateInstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Update-Test.exe `
             -SignerThumbprint "${{ steps.sign_update.outputs.thumbprint }}" *> updater-smoke.log
           $updateCode = $LASTEXITCODE
+          Get-Content updater-smoke.log -Tail 260
           if ($updateCode -ne 0) {
-            Get-Content updater-smoke.log -Tail 260
             exit $updateCode
           }
-          Get-Content updater-smoke.log -Tail 60
 
       - name: Upload updater smoke log
         if: always()
