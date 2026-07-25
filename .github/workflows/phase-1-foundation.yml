@@ -257,8 +257,14 @@ jobs:
           "thumbprint=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Installed signed update and rollback smoke test
-        shell: powershell
+        shell: pwsh
         run: |
+          Import-Module Microsoft.PowerShell.Security -Force
+          $env:PSModulePath = @(
+            (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\Modules")
+            (Join-Path $env:ProgramFiles "WindowsPowerShell\Modules")
+          ) -join [System.IO.Path]::PathSeparator
+          Write-Host "Updater Windows PowerShell module path: $env:PSModulePath"
           ./scripts/smoke-test-updater.ps1 `
             -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Setup.exe `
             -UpdateInstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Update-Test.exe `
