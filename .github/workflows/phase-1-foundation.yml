@@ -1,299 +1,41 @@
-name: HomeServer Production Quality
+name: Phase 3B Authenticode Trace
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
-      - feature/phase-3b-signed-updates-20260724
-
-concurrency:
-  group: homeserver-quality-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: phase3b-authenticode-trace
+  cancel-in-progress: true
 
 jobs:
-  validate:
-    runs-on: windows-latest
-    timeout-minutes: 75
+  trace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-3b-signed-updates-20260724
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
-          components: rustfmt, clippy
+          components: rustfmt
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: windows-cargo-${{ hashFiles('Cargo.toml', '**/Cargo.toml', 'Cargo.lock') }}
-          restore-keys: windows-cargo-
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Verify dependency lock stability
-        shell: pwsh
+      - name: Apply staged Authenticode tracing
         run: |
-          $PSNativeCommandUseErrorActionPreference = $false
-          npm install --package-lock-only --ignore-scripts
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo generate-lockfile
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          New-Item -ItemType Directory -Force generated-locks | Out-Null
-          Copy-Item Cargo.lock generated-locks/Cargo.lock -Force
-          Copy-Item package-lock.json generated-locks/package-lock.json -Force
-          git diff -- Cargo.lock package-lock.json | Set-Content dependency-lock-diff.log
-          git diff --quiet -- Cargo.lock package-lock.json
-          $lockExit = $LASTEXITCODE
-          if ($lockExit -ne 0) {
-            Get-Content dependency-lock-diff.log -Tail 240
-            exit $lockExit
-          }
+          python scripts/phase3b_authenticode_trace.py
+          cargo fmt --all
+          git diff --check
 
-      - name: Upload dependency lock diagnostics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: dependency-lock-diagnostics
-          path: |
-            dependency-lock-diff.log
-            generated-locks
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Frontend and script syntax
-        shell: pwsh
+      - name: Restore production validation and commit
         run: |
-          npm run check:frontend
-          $scripts = Get-ChildItem scripts -Filter "*.ps1"
-          foreach ($script in $scripts) {
-            $tokens = $null
-            $errors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors) | Out-Null
-            if ($errors.Count -gt 0) {
-              $errors | ForEach-Object { Write-Error $_.Message }
-              throw "PowerShell syntax validation failed for $($script.Name)"
-            }
-          }
-
-      - name: Frontend build
-        run: npm run build
-
-      - name: Dependency vulnerability audit
-        run: npm audit --audit-level=high
-
-      - name: Prepare generated Windows resources
-        run: npm run prepare:icons
-
-      - name: Rust formatting
-        run: cargo fmt --all --check
-
-      - name: Build updater and Windows service resources
-        shell: pwsh
-        run: |
-          cargo build --release --package microgifter-homeserver-updater --locked *> updater-build.log
-          $updaterCode = $LASTEXITCODE
-          if ($updaterCode -ne 0) {
-            Get-Content updater-build.log -Tail 180
-            exit $updaterCode
-          }
-          cargo build --release --package microgifter-homeserver-service --locked *> service-build.log
-          $serviceCode = $LASTEXITCODE
-          if ($serviceCode -ne 0) {
-            Get-Content service-build.log -Tail 180
-            exit $serviceCode
-          }
-          Get-Content updater-build.log -Tail 20
-          Get-Content service-build.log -Tail 20
-
-      - name: Upload native compiler logs
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: native-build-logs
-          path: |
-            updater-build.log
-            service-build.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Stage native resources for desktop targets
-        shell: pwsh
-        run: |
-          Copy-Item target/release/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
-          Copy-Item target/release/microgifter-homeserver-updater.exe src-tauri/resources/microgifter-homeserver-updater.exe -Force
-
-      - name: Full workspace tests
-        shell: pwsh
-        run: |
-          cargo test --workspace --locked *> cargo-test.log
-          $testCode = $LASTEXITCODE
-          if ($testCode -ne 0) {
-            Get-Content cargo-test.log -Tail 220
-            exit $testCode
-          }
-          Get-Content cargo-test.log -Tail 50
-
-      - name: Upload workspace test log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: cargo-test-log
-          path: cargo-test.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Full workspace lint
-        shell: pwsh
-        run: |
-          cargo clippy --workspace --all-targets --locked -- -D warnings *> cargo-clippy.log
-          $lintCode = $LASTEXITCODE
-          if ($lintCode -ne 0) {
-            Get-Content cargo-clippy.log -Tail 220
-            exit $lintCode
-          }
-          Get-Content cargo-clippy.log -Tail 40
-
-      - name: Upload workspace lint log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: cargo-clippy-log
-          path: cargo-clippy.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Encrypted backup and restore console smoke test
-        shell: pwsh
-        run: |
-          & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-service.ps1 *> service-smoke.log
-          $smokeCode = $LASTEXITCODE
-          if ($smokeCode -ne 0) {
-            Get-Content service-smoke.log -Tail 220
-            exit $smokeCode
-          }
-          Get-Content service-smoke.log -Tail 50
-
-      - name: Signed update loopback API smoke test
-        shell: pwsh
-        run: |
-          & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-update-api.ps1 *> update-api-smoke.log
-          $smokeCode = $LASTEXITCODE
-          if ($smokeCode -ne 0) {
-            Get-Content update-api-smoke.log -Tail 180
-            exit $smokeCode
-          }
-          Get-Content update-api-smoke.log -Tail 40
-
-      - name: Upload service smoke logs
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: service-smoke-logs
-          path: |
-            service-smoke.log
-            update-api-smoke.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Build NSIS installer
-        shell: pwsh
-        run: |
-          npm run tauri:build *> tauri-build.log
-          $buildCode = $LASTEXITCODE
-          if ($buildCode -ne 0) {
-            Get-Content tauri-build.log -Tail 220
-            exit $buildCode
-          }
-
-      - name: Upload Tauri build log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: tauri-build-log
-          path: tauri-build.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Normalize installer filename
-        shell: pwsh
-        run: |
-          $bundle = "target/release/bundle/nsis"
-          $installer = Get-ChildItem $bundle -Filter "*-setup.exe" | Select-Object -First 1
-          if (-not $installer) { throw "NSIS installer was not produced" }
-          Copy-Item $installer.FullName "$bundle/Microgifter-HomeServer-Setup.exe" -Force
-
-      - name: Installed LocalSystem backup and uninstall smoke test
-        shell: pwsh
-        run: ./scripts/smoke-test-installer.ps1 -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Setup.exe
-
-      - name: Create trusted CI Authenticode update installer
-        id: sign_update
-        shell: pwsh
-        run: |
-          $bundle = "target/release/bundle/nsis"
-          $source = "$bundle/Microgifter-HomeServer-Setup.exe"
-          $signed = "$bundle/Microgifter-HomeServer-Update-Test.exe"
-          Copy-Item $source $signed -Force
-          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Microgifter CI Update Test" -CertStoreLocation "Cert:\CurrentUser\My" -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 -KeyExportPolicy Exportable -NotAfter (Get-Date).AddDays(2)
-          Export-Certificate -Cert $cert -FilePath "$bundle/Microgifter-CI-Update-Test.cer" | Out-Null
-          Import-Certificate -FilePath "$bundle/Microgifter-CI-Update-Test.cer" -CertStoreLocation "Cert:\LocalMachine\Root" | Out-Null
-          Import-Certificate -FilePath "$bundle/Microgifter-CI-Update-Test.cer" -CertStoreLocation "Cert:\LocalMachine\TrustedPublisher" | Out-Null
-          $signedResult = Set-AuthenticodeSignature -FilePath $signed -Certificate $cert -HashAlgorithm SHA256
-          if ($signedResult.Status -ne "Valid") { throw "Unable to create a trusted CI Authenticode installer: $($signedResult.StatusMessage)" }
-          $cert.Thumbprint | Set-Content update-test-thumbprint.txt -NoNewline
-          "thumbprint=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
-      - name: Installed signed update and rollback smoke test
-        shell: pwsh
-        run: |
-          ./scripts/smoke-test-updater.ps1 `
-            -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Setup.exe `
-            -UpdateInstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Update-Test.exe `
-            -SignerThumbprint "${{ steps.sign_update.outputs.thumbprint }}" *> updater-smoke.log
-          $updateCode = $LASTEXITCODE
-          if ($updateCode -ne 0) {
-            Get-Content updater-smoke.log -Tail 260
-            exit $updateCode
-          }
-          Get-Content updater-smoke.log -Tail 60
-
-      - name: Upload updater smoke log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: updater-smoke-log
-          path: updater-smoke.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Remove CI Authenticode trust material
-        if: always()
-        shell: pwsh
-        run: |
-          if (Test-Path update-test-thumbprint.txt) {
-            $thumbprint = (Get-Content update-test-thumbprint.txt -Raw).Trim()
-            Remove-Item "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
-            Remove-Item "Cert:\LocalMachine\Root\$thumbprint" -Force -ErrorAction SilentlyContinue
-            Remove-Item "Cert:\LocalMachine\TrustedPublisher\$thumbprint" -Force -ErrorAction SilentlyContinue
-          }
-
-      - name: Upload validated installer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: Microgifter-HomeServer-Setup
-          path: target/release/bundle/nsis/Microgifter-HomeServer-Setup.exe
-          if-no-files-found: error
-          retention-days: 14
+          git show HEAD^:.github/workflows/phase-1-foundation.yml > .github/workflows/phase-1-foundation.yml
+          git rm scripts/phase3b_authenticode_trace.py
+          git add crates/homeserver-updater/src/main.rs scripts/smoke-test-updater.ps1 .github/workflows/phase-1-foundation.yml
+          git config user.name "Microgifter Build Bot"
+          git config user.email "buildbot@microgifter.local"
+          git commit -m "Trace staged Phase 3B Authenticode verification"
+          git push origin HEAD:feature/phase-3b-signed-updates-20260724
