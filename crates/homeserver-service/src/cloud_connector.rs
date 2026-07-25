@@ -300,11 +300,7 @@ impl CloudClient {
         })
     }
 
-    async fn status(
-        &self,
-        record: &CloudConnectionRecord,
-        secrets: &DeviceSecrets,
-    ) -> Result<()> {
+    async fn status(&self, record: &CloudConnectionRecord, secrets: &DeviceSecrets) -> Result<()> {
         let base_url = record
             .snapshot
             .cloud_base_url
@@ -589,11 +585,7 @@ impl AppState {
         let secrets = match load_secrets(&installation_id) {
             Ok(secrets) => secrets,
             Err(error) => {
-                mark_cloud_error(
-                    &self.connection()?,
-                    "credential_vault_unavailable",
-                    false,
-                )?;
+                mark_cloud_error(&self.connection()?, "credential_vault_unavailable", false)?;
                 return Err(error);
             }
         };
@@ -812,8 +804,7 @@ fn cloud_connection_record(connection: &Connection) -> Result<CloudConnectionRec
         .optional()?;
 
     let pending_sync = cloud_pending_sync_count(connection)?;
-    let Some((base_url, device_id, state, scopes_json, paired_at, last_success, last_error)) =
-        row
+    let Some((base_url, device_id, state, scopes_json, paired_at, last_success, last_error)) = row
     else {
         return Ok(CloudConnectionRecord {
             snapshot: CloudConnectionSnapshot {
@@ -1212,8 +1203,9 @@ mod tests {
         key.verifying_key()
             .verify(canonical.as_bytes(), &signature)
             .unwrap();
-        assert!(canonical
-            .ends_with("5041bf1f713df204784353e82f6a4a535931cb64f1f4b4a5aeaffcb720918b22"));
+        assert!(
+            canonical.ends_with("5041bf1f713df204784353e82f6a4a535931cb64f1f4b4a5aeaffcb720918b22")
+        );
     }
 
     #[test]
@@ -1231,7 +1223,10 @@ mod tests {
         .unwrap();
         assert!(id > 0);
         assert_eq!(cloud_pending_sync_count(&connection).unwrap(), 1);
-        assert_eq!(cloud_connection(&connection).unwrap().state, CloudConnectionState::NotPaired);
+        assert_eq!(
+            cloud_connection(&connection).unwrap().state,
+            CloudConnectionState::NotPaired
+        );
     }
 
     #[test]
