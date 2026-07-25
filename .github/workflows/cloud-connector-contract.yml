@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CLOUD_CONTRACT_SHA: ad38f9f5d5a0b2c621dffd0b0a49e70983fc780c
+  CLOUD_CONTRACT_SHA: 211971296685fada7ec0181fa8bf36f0d80c8518
 
 jobs:
   contract:
