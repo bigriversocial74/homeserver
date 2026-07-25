@@ -18,7 +18,7 @@ use microgifter_homeserver_core::{
 };
 use rusqlite::Connection;
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Mutex, MutexGuard},
 };
 use tokio::sync::watch;
@@ -442,7 +442,6 @@ fn service_main(_arguments: Vec<std::ffi::OsString>) {
 #[cfg(windows)]
 fn windows_service_runtime() -> Result<()> {
     use std::{sync::mpsc, time::Duration};
-    use tokio::sync::oneshot;
     use windows_service::{
         service::{
             ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,

@@ -18,6 +18,7 @@ use std::{
     process::Command,
     time::Duration,
 };
+use tokio::io::AsyncWriteExt;
 use url::Url;
 
 const DEFAULT_PINNED_UPDATE_PUBLIC_KEY_BASE64: &str =
@@ -229,10 +230,10 @@ pub async fn download_and_verify_installer(
             size <= manifest.payload.installer.size_bytes && size <= MAX_INSTALLER_BYTES,
             "update installer exceeds the signed size"
         );
-        tokio::io::AsyncWriteExt::write_all(&mut output, &chunk).await?;
+        output.write_all(&chunk).await?;
         hasher.update(&chunk);
     }
-    tokio::io::AsyncWriteExt::sync_all(&mut output).await?;
+    output.sync_all().await?;
     drop(output);
 
     let hash = hex::encode(hasher.finalize());
