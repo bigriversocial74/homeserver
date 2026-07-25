@@ -88,12 +88,23 @@ jobs:
           path = Path('crates/machine-keyring/src/lib.rs')
           path.write_text(path.read_text().rstrip() + '\n')
           PYFORMAT
+
+          # Remove temporary write-enabled helpers while validating the final tree.
+          rm -f .github/workflows/apply-audit-hardening.yml
+          python - <<'PYHELPER'
+          from pathlib import Path
+          path = Path('.github/workflows/cloud-connector-contract.yml')
+          text = path.read_text()
+          marker = '\n\n  apply-audit-hardening:\n'
+          if marker not in text:
+              raise SystemExit('temporary hardening job marker missing')
+          path.write_text(text.split(marker, 1)[0].rstrip() + '\n')
+          PYHELPER
           rm -rf scripts/__pycache__
           git diff --check
           python scripts/validate-security-boundaries.py
 
-          # GitHub Actions cannot push workflow-file mutations with this token.
-          # Restore current workflows; they are applied separately through GitHub.
+          # Workflow mutations are applied separately through GitHub.
           git checkout HEAD -- .github/workflows
           rm -rf .audit-patch
           git diff --check
