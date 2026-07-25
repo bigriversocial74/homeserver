@@ -1,0 +1,48 @@
+name: Connector Rustfmt
+
+on:
+  push:
+    branches:
+      - feature/cloud-connector-v2-20260724
+    paths:
+      - 'crates/homeserver-service/src/cloud_connector.rs'
+      - 'crates/homeserver-service/src/app.rs'
+      - 'src-tauri/src/cloud.rs'
+      - 'src-tauri/src/lib.rs'
+      - '.github/workflows/connector-rustfmt.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: connector-rustfmt
+  cancel-in-progress: true
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/cloud-connector-v2-20260724
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+
+      - name: Apply rustfmt
+        run: cargo fmt --all
+
+      - name: Commit formatting when changed
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "Rust sources are already formatted."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/homeserver-service/src/cloud_connector.rs crates/homeserver-service/src/app.rs src-tauri/src/cloud.rs src-tauri/src/lib.rs
+          git commit -m "Format cloud connector Rust sources"
+          git push origin HEAD:feature/cloud-connector-v2-20260724
