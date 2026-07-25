@@ -30,11 +30,10 @@ jobs:
           cargo fmt --all
           git diff --check
 
-      - name: Restore production validation and commit
+      - name: Commit traced source
         run: |
-          git show HEAD^:.github/workflows/phase-1-foundation.yml > .github/workflows/phase-1-foundation.yml
           git rm scripts/phase3b_authenticode_trace.py
-          git add crates/homeserver-updater/src/main.rs scripts/smoke-test-updater.ps1 .github/workflows/phase-1-foundation.yml
+          git add crates/homeserver-updater/src/main.rs scripts/smoke-test-updater.ps1
           git config user.name "Microgifter Build Bot"
           git config user.email "buildbot@microgifter.local"
           git commit -m "Trace staged Phase 3B Authenticode verification"
