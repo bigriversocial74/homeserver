@@ -2,15 +2,12 @@ name: Phase 3B Rollback Hardening
 
 on:
   pull_request:
-  push:
-    branches:
-      - feature/phase-3b-signed-updates-20260724
 
 permissions:
   contents: write
 
 concurrency:
-  group: phase3b-rollback-hardening-${{ github.ref }}
+  group: phase3b-rollback-hardening
   cancel-in-progress: true
 
 jobs:
@@ -29,7 +26,7 @@ jobs:
 
       - name: Apply updater rollback hardening
         run: |
-          python scripts/phase3b_rollback_hardening_runner.py
+          python scripts/phase3b_rollback_hardening.py
           cargo fmt --all
           git diff --check
 
