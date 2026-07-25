@@ -1,21 +1,23 @@
 name: Cloud Connector Compile Fix
 
 on:
-  push:
+  pull_request:
     branches:
-      - feature/cloud-connector-v2-20260724
+      - main
     paths:
       - '.github/workflows/cloud-connector-compile-fix.yml'
+      - 'crates/homeserver-service/src/cloud_connector.rs'
 
 permissions:
   contents: write
 
 concurrency:
-  group: cloud-connector-compile-fix
+  group: cloud-connector-compile-fix-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   fix:
+    if: github.head_ref == 'feature/cloud-connector-v2-20260724'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -48,9 +50,8 @@ jobs:
           }
 
           '''
-          if state_impl not in text:
-              raise SystemExit('expected CloudConnectionState helper was not found')
-          text = text.replace(state_impl, '', 1)
+          if state_impl in text:
+              text = text.replace(state_impl, '', 1)
 
           replacements = {
               '.route("/v1/cloud/vault-self-test", post(vault_self_test))':
@@ -63,19 +64,29 @@ jobs:
                   'credential_vault_self_test_entry(&installation_id)',
           }
           for old, new in replacements.items():
-              if old not in text:
-                  raise SystemExit(f'expected source fragment was not found: {old}')
-              text = text.replace(old, new, 1)
+              if old in text:
+                  text = text.replace(old, new, 1)
 
-          guard_count = text.count('&self.connection()?')
-          if guard_count != 14:
-              raise SystemExit(f'expected 14 connection guard borrows, found {guard_count}')
           text = text.replace('&self.connection()?', '&*self.connection()?')
+
+          required = [
+              'post(vault_self_test_handler)',
+              'async fn vault_self_test_handler(',
+              'fn credential_vault_self_test_entry(',
+              'credential_vault_self_test_entry(&installation_id)',
+          ]
+          missing = [fragment for fragment in required if fragment not in text]
+          if missing:
+              raise SystemExit(f'compile correction incomplete: {missing}')
+          if '&self.connection()?' in text:
+              raise SystemExit('undereferenced SQLite connection guard remains')
 
           path.write_text(text, encoding='utf-8')
 
-      - name: Format corrected source
-        run: cargo fmt --all
+      - name: Format and compile corrected service
+        run: |
+          cargo fmt --all
+          cargo check --package microgifter-homeserver-service --locked
 
       - name: Commit corrected connector
         shell: bash
