@@ -139,9 +139,18 @@ fn sanitize_server_name(value: &str) -> String {
 
 fn validate_update_manifest_url(value: &str) -> Result<()> {
     let url = Url::parse(value).context("HomeServer update manifest URL is invalid")?;
-    ensure!(url.scheme() == "https", "HomeServer update manifest URL must use HTTPS");
-    ensure!(url.host_str().is_some(), "HomeServer update manifest host is missing");
-    ensure!(url.username().is_empty() && url.password().is_none(), "HomeServer update manifest URL cannot contain credentials");
+    ensure!(
+        url.scheme() == "https",
+        "HomeServer update manifest URL must use HTTPS"
+    );
+    ensure!(
+        url.host_str().is_some(),
+        "HomeServer update manifest host is missing"
+    );
+    ensure!(
+        url.username().is_empty() && url.password().is_none(),
+        "HomeServer update manifest URL cannot contain credentials"
+    );
     Ok(())
 }
 
@@ -171,7 +180,11 @@ mod tests {
     #[test]
     fn update_manifest_must_use_https() {
         assert!(validate_update_manifest_url(DEFAULT_UPDATE_MANIFEST_URL).is_ok());
-        assert!(validate_update_manifest_url("http://updates.microgifter.com/manifest.json").is_err());
-        assert!(validate_update_manifest_url("https://user:secret@example.com/manifest.json").is_err());
+        assert!(
+            validate_update_manifest_url("http://updates.microgifter.com/manifest.json").is_err()
+        );
+        assert!(
+            validate_update_manifest_url("https://user:secret@example.com/manifest.json").is_err()
+        );
     }
 }
