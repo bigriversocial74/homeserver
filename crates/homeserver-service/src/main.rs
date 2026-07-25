@@ -319,6 +319,7 @@ impl AppState {
             &*self.connection()?,
             &stored.record.update_id,
             &rollback_path,
+            &backup_result.backup.backup_id,
         )?;
         if let Err(error) =
             update_apply::prepare_and_launch(&self.config, &stored.record, installer_path)
