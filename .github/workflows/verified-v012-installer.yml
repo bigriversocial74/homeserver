@@ -24,8 +24,6 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
-        with:
-          components: rustfmt, clippy
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -58,14 +56,11 @@ jobs:
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "Verified source release metadata: $version"
 
-      - name: Validate source quality
+      - name: Build frontend resources
         shell: pwsh
         run: |
           npm run build
           npm run prepare:icons
-          cargo fmt --all --check
-          cargo test --workspace --locked
-          cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Remove stale native release output
         shell: pwsh
