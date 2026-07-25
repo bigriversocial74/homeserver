@@ -25,11 +25,11 @@ jobs:
             --exclude=target \
             --exclude=node_modules \
             --exclude=dist \
-            -czf homeserver-audit-source.tar.gz .
+            -czf "$RUNNER_TEMP/homeserver-audit-source.tar.gz" .
       - name: Upload source snapshot
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: homeserver-audit-source
-          path: homeserver-audit-source.tar.gz
+          path: ${{ runner.temp }}/homeserver-audit-source.tar.gz
           if-no-files-found: error
           retention-days: 2
