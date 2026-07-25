@@ -1,0 +1,102 @@
+name: Cloud Connector Compile Fix
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cloud-connector-compile-fix.yml'
+      - 'crates/homeserver-service/src/cloud_connector.rs'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cloud-connector-compile-fix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    if: github.head_ref == 'feature/cloud-connector-v2-20260724'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/cloud-connector-v2-20260724
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+
+      - name: Apply exact compile corrections
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('crates/homeserver-service/src/cloud_connector.rs')
+          text = path.read_text(encoding='utf-8')
+
+          state_impl = '''impl CloudConnectionState {
+              fn as_str(&self) -> &'static str {
+                  match self {
+                      Self::NotPaired => "not_paired",
+                      Self::Pairing => "pairing",
+                      Self::Connected => "connected",
+                      Self::Degraded => "degraded",
+                      Self::Revoked => "revoked",
+                  }
+              }
+          }
+
+          '''
+          if state_impl in text:
+              text = text.replace(state_impl, '', 1)
+
+          replacements = {
+              '.route("/v1/cloud/vault-self-test", post(vault_self_test))':
+                  '.route("/v1/cloud/vault-self-test", post(vault_self_test_handler))',
+              'async fn vault_self_test(State(state): State<Arc<AppState>>)':
+                  'async fn vault_self_test_handler(State(state): State<Arc<AppState>>)',
+              'fn vault_self_test(installation_id: &str) -> Result<()>':
+                  'fn credential_vault_self_test_entry(installation_id: &str) -> Result<()>',
+              'vault_self_test(&installation_id)':
+                  'credential_vault_self_test_entry(&installation_id)',
+          }
+          for old, new in replacements.items():
+              if old in text:
+                  text = text.replace(old, new, 1)
+
+          text = text.replace('&self.connection()?', '&*self.connection()?')
+
+          required = [
+              'post(vault_self_test_handler)',
+              'async fn vault_self_test_handler(',
+              'fn credential_vault_self_test_entry(',
+              'credential_vault_self_test_entry(&installation_id)',
+          ]
+          missing = [fragment for fragment in required if fragment not in text]
+          if missing:
+              raise SystemExit(f'compile correction incomplete: {missing}')
+          if '&self.connection()?' in text:
+              raise SystemExit('undereferenced SQLite connection guard remains')
+
+          path.write_text(text, encoding='utf-8')
+
+      - name: Format and compile corrected service
+        run: |
+          cargo fmt --all
+          cargo check --package microgifter-homeserver-service --locked
+
+      - name: Commit corrected connector
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/homeserver-service/src/cloud_connector.rs
+          if git diff --cached --quiet; then
+            echo "Compile corrections are already applied."
+            exit 0
+          fi
+          git commit -m "Fix cloud connector service compilation"
+          git push origin HEAD:feature/cloud-connector-v2-20260724

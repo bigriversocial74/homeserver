@@ -1,0 +1,63 @@
+name: Coordinated Cloud Connector Contract
+
+on:
+  pull_request:
+    paths:
+      - 'crates/homeserver-service/src/cloud_connector.rs'
+      - 'database/migrations/0004_cloud_pairing_sync.sql'
+      - 'src-tauri/src/cloud.rs'
+      - 'src-tauri/src/lib.rs'
+      - 'src/main.js'
+      - 'scripts/validate-cloud-connector-contract.py'
+      - '.github/workflows/cloud-connector-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coordinated-cloud-connector-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CLOUD_CONTRACT_SHA: f456a85e75dc2061ed0b1ea0772eddba739f26c4
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout HomeServer connector
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: homeserver
+          fetch-depth: 1
+
+      - name: Checkout exact Microgifter cloud authority
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: bigriversocial74/contactform
+          ref: ${{ env.CLOUD_CONTRACT_SHA }}
+          path: cloud
+          fetch-depth: 1
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: json, mbstring, pdo, sodium
+          coverage: none
+
+      - name: Verify exact cloud contract commit
+        working-directory: cloud
+        run: test "$(git rev-parse HEAD)" = "$CLOUD_CONTRACT_SHA"
+
+      - name: Validate cloud protocol and migration manifest
+        working-directory: cloud
+        run: |
+          composer validate --strict
+          composer audit --locked --no-interaction
+          php scripts/validate_homeserver_pairing_sync_v1.php
+          php scripts/validate_migration_manifest.php
+
+      - name: Validate cross-repository connector contract
+        run: python homeserver/scripts/validate-cloud-connector-contract.py --homeserver-root homeserver --cloud-root cloud

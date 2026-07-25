@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - feature/phase-3b-signed-updates-20260724
 
 concurrency:
   group: homeserver-quality-${{ github.ref }}
@@ -186,6 +185,17 @@ jobs:
           }
           Get-Content service-smoke.log -Tail 50
 
+      - name: Cloud connector local boundary smoke test
+        shell: pwsh
+        run: |
+          & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-cloud-connector.ps1 *> cloud-connector-smoke.log
+          $smokeCode = $LASTEXITCODE
+          if ($smokeCode -ne 0) {
+            Get-Content cloud-connector-smoke.log -Tail 220
+            exit $smokeCode
+          }
+          Get-Content cloud-connector-smoke.log -Tail 80
+
       - name: Signed update loopback API smoke test
         shell: pwsh
         run: |
@@ -204,6 +214,7 @@ jobs:
           name: service-smoke-logs
           path: |
             service-smoke.log
+            cloud-connector-smoke.log
             update-api-smoke.log
           if-no-files-found: warn
           retention-days: 7

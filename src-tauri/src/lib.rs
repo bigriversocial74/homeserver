@@ -1,3 +1,5 @@
+mod cloud;
+
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use futures_util::StreamExt;
 use microgifter_homeserver_core::{
@@ -262,6 +264,12 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             homeserver_status,
+            cloud::homeserver_cloud_status,
+            cloud::homeserver_pair_cloud,
+            cloud::homeserver_disconnect_cloud,
+            cloud::homeserver_cloud_vault_self_test,
+            cloud::homeserver_enqueue_cloud_sync,
+            cloud::homeserver_sync_cloud,
             homeserver_backups,
             homeserver_create_backup,
             homeserver_verify_backup,

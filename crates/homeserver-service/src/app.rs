@@ -1,3 +1,6 @@
+#[path = "cloud_connector.rs"]
+mod cloud_connector;
+
 use crate::{backup, config::AppConfig, database, http, update, update_store, AppState};
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -23,6 +26,7 @@ pub async fn run(
     };
     let connection = database::initialize(&config.database_path)?;
     update_store::initialize(&connection)?;
+    cloud_connector::initialize(&connection)?;
     if let Some(outcome) = restore_outcome {
         match outcome {
             backup::RestoreOutcome::Applied {
@@ -70,16 +74,19 @@ pub async fn run(
 
     let backup_scheduler = tokio::spawn(run_backup_scheduler(state.clone(), shutdown.clone()));
     let update_scheduler = tokio::spawn(run_update_scheduler(state.clone(), shutdown.clone()));
+    let cloud_worker = tokio::spawn(cloud_connector::run(state.clone(), shutdown.clone()));
     info!(%address, "HomeServer local API ready");
     if let Some(ready) = ready {
         let _ = ready.send(());
     }
 
-    let result = axum::serve(listener, http::router(state))
+    let router = http::router(state.clone()).merge(cloud_connector::router(state));
+    let result = axum::serve(listener, router)
         .with_graceful_shutdown(wait_for_shutdown(shutdown))
         .await;
     backup_scheduler.abort();
     update_scheduler.abort();
+    cloud_worker.abort();
     result?;
     Ok(())
 }
