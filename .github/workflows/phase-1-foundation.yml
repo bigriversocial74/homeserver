@@ -28,13 +28,13 @@ jobs:
 
       - name: Apply rollback and diagnostic hardening
         run: |
-          python scripts/phase3b_rollback_hardening.py
+          python scripts/phase3b_rollback_hardening_runner.py
           cargo fmt --all
           git diff --check
 
       - name: Commit hardened rollback path
         run: |
-          git rm scripts/phase3b_rollback_hardening.py
+          git rm scripts/phase3b_rollback_hardening.py scripts/phase3b_rollback_hardening_runner.py
           git add crates/homeserver-updater/src/main.rs scripts/smoke-test-updater.ps1 .github/workflows/phase-1-foundation.yml
           git config user.name "Microgifter Build Bot"
           git config user.email "buildbot@microgifter.local"
