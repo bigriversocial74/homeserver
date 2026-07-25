@@ -74,7 +74,7 @@ jobs:
           ref: audit/full-production-hardening-20260725
           fetch-depth: 0
 
-      - name: Reconstruct and apply audited patch
+      - name: Reconstruct, validate, and stage audited source hardening
         shell: bash
         run: |
           cat .audit-patch/part-* > "$RUNNER_TEMP/hardening.diff.gz.b64"
@@ -88,22 +88,17 @@ jobs:
           path = Path('crates/machine-keyring/src/lib.rs')
           path.write_text(path.read_text().rstrip() + '\n')
           PYFORMAT
-          rm -rf .audit-patch
-          rm -f .github/workflows/apply-audit-hardening.yml
-          python - <<'PYHELPER'
-          from pathlib import Path
-          path = Path('.github/workflows/cloud-connector-contract.yml')
-          text = path.read_text()
-          marker = '\n\n  apply-audit-hardening:\n'
-          if marker not in text:
-              raise SystemExit('temporary hardening job marker missing')
-          path.write_text(text.split(marker, 1)[0].rstrip() + '\n')
-          PYHELPER
           rm -rf scripts/__pycache__
           git diff --check
           python scripts/validate-security-boundaries.py
 
-      - name: Commit hardening pass
+          # GitHub Actions cannot push workflow-file mutations with this token.
+          # Restore current workflows; they are applied separately through GitHub.
+          git checkout HEAD -- .github/workflows
+          rm -rf .audit-patch
+          git diff --check
+
+      - name: Commit non-workflow hardening pass
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
