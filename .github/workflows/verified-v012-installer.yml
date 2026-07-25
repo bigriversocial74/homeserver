@@ -105,9 +105,22 @@ jobs:
       - name: Install and verify packaged release
         shell: pwsh
         run: |
-          ./scripts/verify-installer-release.ps1 `
+          & pwsh -NoLogo -NoProfile -NonInteractive `
+            -File ./scripts/verify-installer-release.ps1 `
             -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-v0.1.2-Setup.exe `
-            -ExpectedVersion "${{ steps.release.outputs.version }}"
+            -ExpectedVersion "${{ steps.release.outputs.version }}" *> installer-verification.log
+          $verifyCode = $LASTEXITCODE
+          Get-Content installer-verification.log -Tail 240
+          if ($verifyCode -ne 0) { exit $verifyCode }
+
+      - name: Upload installer verification log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v0.1.2-installer-verification-log
+          path: installer-verification.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload verified v0.1.2 installer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
