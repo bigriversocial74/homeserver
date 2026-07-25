@@ -319,7 +319,12 @@ catch {
     Write-Host "Service query:`n$serviceQuery"
 }
 finally {
-    Remove-CurrentUserPublisherTrust -Thumbprint $SignerThumbprint
+    try {
+        Remove-CurrentUserPublisherTrust -Thumbprint $SignerThumbprint
+    }
+    catch {
+        Write-Warning "Unable to remove temporary CurrentUser publisher trust: $($_.Exception.Message)"
+    }
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     if ($service) {
         Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
