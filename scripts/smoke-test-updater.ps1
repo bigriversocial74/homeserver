@@ -29,7 +29,11 @@ function Read-TrimmedText {
     if (-not (Test-Path -LiteralPath $Path)) {
         return ""
     }
-    return ([string](Get-Content -LiteralPath $Path -Raw)).Trim()
+    $content = Get-Content -LiteralPath $Path -Raw
+    if ($null -eq $content) {
+        return ""
+    }
+    return $content.Trim()
 }
 
 function Wait-ForHomeServerHealth {
