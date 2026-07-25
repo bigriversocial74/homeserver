@@ -653,7 +653,7 @@ fn extract_archive(archive: &[u8], directory: &Path, header: &PackageHeader) -> 
             entry_count <= 2,
             "backup archive contains unexpected entries"
         );
-        let mut entry = entry?;
+        let entry = entry?;
         ensure!(
             entry.header().entry_type().is_file(),
             "backup archive entries must be regular files"

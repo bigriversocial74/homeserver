@@ -336,15 +336,15 @@ pub fn unreferenced_pre_update_backups(connection: &Connection) -> Result<Vec<(S
     let mut statement = connection.prepare(
         "SELECT backup_id,storage_path FROM backup_records WHERE kind='pre_update' AND state IN ('ready','verified','restored','failed') AND backup_id NOT IN (SELECT pre_update_backup_id FROM update_records WHERE pre_update_backup_id IS NOT NULL) ORDER BY created_at_utc DESC,backup_id DESC",
     )?;
-    statement
+    let rows = statement
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 PathBuf::from(row.get::<_, String>(1)?),
             ))
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 pub fn delete_backup_record(connection: &Connection, backup_id: &str) -> Result<()> {
