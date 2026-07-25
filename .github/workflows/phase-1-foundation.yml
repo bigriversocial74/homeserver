@@ -275,6 +275,7 @@ jobs:
           if ($log -match "HomeServer updater smoke failure:" -or -not $log.Contains($successMarker)) {
             exit 1
           }
+          exit 0
 
       - name: Upload updater smoke log
         if: always()
