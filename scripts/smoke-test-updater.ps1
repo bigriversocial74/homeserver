@@ -23,6 +23,15 @@ $resultPath = Join-Path $dataDirectory "updates\last-update-result.json"
 $uninstallerPath = $null
 $scriptExitCode = 0
 
+function Read-TrimmedText {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return ""
+    }
+    return ([string](Get-Content -LiteralPath $Path -Raw)).Trim()
+}
+
 function Wait-ForHomeServerHealth {
     param([Parameter(Mandatory = $true)][string]$ExpectedVersion)
 
@@ -125,9 +134,9 @@ function Invoke-UpdatePlan {
 
     try {
         $process = Start-Process -FilePath $updaterCopy -ArgumentList @("apply", $Plan.PlanPath) -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru -Wait
-        $stdout = if (Test-Path $stdoutPath) { (Get-Content $stdoutPath -Raw).Trim() } else { "" }
-        $stderr = if (Test-Path $stderrPath) { (Get-Content $stderrPath -Raw).Trim() } else { "" }
-        $resultJson = if (Test-Path $resultPath) { (Get-Content $resultPath -Raw).Trim() } else { "" }
+        $stdout = Read-TrimmedText -Path $stdoutPath
+        $stderr = Read-TrimmedText -Path $stderrPath
+        $resultJson = Read-TrimmedText -Path $resultPath
 
         if ($stdout) {
             Write-Host "HomeServer updater stdout:`n$stdout"
