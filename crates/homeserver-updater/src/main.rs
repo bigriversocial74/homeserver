@@ -263,9 +263,16 @@ fn verify_file(path: &Path, expected_size: u64, expected_sha256: &str) -> Result
 
 #[cfg(windows)]
 fn verify_authenticode(path: &Path, expected_thumbprint: &str) -> Result<()> {
-    let script = r#"$signature = Get-AuthenticodeSignature -LiteralPath $env:MG_UPDATE_FILE
-if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate) { exit 20 }
-[Console]::Out.Write($signature.SignerCertificate.Thumbprint)"#;
+    let script = r#"$exists = Test-Path -LiteralPath $env:MG_UPDATE_FILE
+$signature = Get-AuthenticodeSignature -LiteralPath $env:MG_UPDATE_FILE
+$status = [string]$signature.Status
+$message = [string]$signature.StatusMessage
+$thumbprint = if ($signature.SignerCertificate) { [string]$signature.SignerCertificate.Thumbprint } else { '' }
+if ($status -ne 'Valid' -or -not $signature.SignerCertificate) {
+    [Console]::Error.Write("path=$env:MG_UPDATE_FILE; exists=$exists; status=$status; message=$message; thumbprint=$thumbprint")
+    exit 20
+}
+[Console]::Out.Write($thumbprint)"#;
     let output = Command::new("powershell.exe")
         .args([
             "-NoLogo",
@@ -277,14 +284,22 @@ if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate) { exit 
         .env("MG_UPDATE_FILE", path)
         .output()
         .context("unable to execute Windows Authenticode verification")?;
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
     ensure!(
         output.status.success(),
-        "staged installer does not have a valid trusted Authenticode signature"
+        "staged installer does not have a valid trusted Authenticode signature: {}",
+        if stderr.is_empty() {
+            "Windows PowerShell returned no signature details"
+        } else {
+            &stderr
+        }
     );
     let actual = String::from_utf8(output.stdout)?.trim().replace(' ', "");
     ensure!(
         actual.eq_ignore_ascii_case(expected_thumbprint),
-        "staged installer Authenticode signer does not match the signed manifest"
+        "staged installer Authenticode signer does not match the signed manifest: expected {}, received {}",
+        expected_thumbprint,
+        actual
     );
     Ok(())
 }

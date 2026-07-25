@@ -187,6 +187,7 @@ function New-UpdatePlan {
 
     [pscustomobject]@{
         PlanPath = $planPath
+        StagedInstaller = $stagedInstaller
         ArchivedInstaller = $archivedInstaller
         RollbackDirectory = $rollbackDirectory
     }
@@ -273,6 +274,11 @@ try {
     $currentVersion = $initialStatus.version
 
     $rollbackPlan = New-UpdatePlan -UpdateId "ci-rollback-$([guid]::NewGuid().ToString('N'))" -CurrentVersion $currentVersion -TargetVersion "9.9.9"
+    $stagedSignature = Get-WindowsPowerShellSignature -Path $rollbackPlan.StagedInstaller
+    Write-Host "Staged Windows PowerShell Authenticode status: $($stagedSignature.status); $($stagedSignature.status_message); signer=$($stagedSignature.thumbprint)"
+    if ($stagedSignature.status -ne "Valid" -or $stagedSignature.thumbprint -ne $SignerThumbprint) {
+        throw "The staged CI update installer does not retain its trusted Authenticode identity"
+    }
     $rollbackResult = Invoke-UpdatePlan -Plan $rollbackPlan
     if ($rollbackResult.state -ne "rolled_back" -or $rollbackResult.failure_code -ne "post_update_health_failed") {
         throw "Forced update did not complete the automatic binary rollback path"
