@@ -44,7 +44,7 @@ impl Entry {
     }
 
     pub fn set_password(&self, password: &str) -> Result<(), Error> {
-        if password.as_bytes().len() > MAX_SECRET_BYTES {
+        if password.len() > MAX_SECRET_BYTES {
             return Err(Error::Invalid(
                 "credential payload exceeds the HomeServer size limit".to_owned(),
             ));
@@ -141,14 +141,14 @@ fn data_root() -> Result<PathBuf, Error> {
 
     #[cfg(windows)]
     {
-        return std::env::var_os("PROGRAMDATA")
+        std::env::var_os("PROGRAMDATA")
             .map(PathBuf::from)
             .map(|root| root.join("Microgifter").join("HomeServer"))
             .ok_or_else(|| {
                 Error::PlatformFailure(
                     "Windows ProgramData is unavailable for HomeServer credentials".to_owned(),
                 )
-            });
+            })
     }
 
     #[cfg(not(windows))]
