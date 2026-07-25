@@ -158,6 +158,7 @@ async fn apply_update(plan: &UpdateApplicationPlan) -> Result<UpdateApplicationR
     let rollback_dir = PathBuf::from(&plan.rollback_dir);
     stop_service(&plan.service_name)?;
     snapshot_directory(&install_dir, &rollback_dir)?;
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     let install_result = Command::new(&installer_path)
         .arg("/S")
@@ -220,6 +221,7 @@ async fn rollback_installation(
             .context("unable to remove failed HomeServer installation")?;
     }
     copy_directory(rollback_dir, install_dir)?;
+    ensure_service_registration(&plan.service_name, install_dir)?;
     start_service(&plan.service_name)?;
     ensure!(
         wait_for_health(
@@ -362,6 +364,89 @@ fn atomic_copy(source: &Path, destination: &Path) -> Result<()> {
 fn stop_service(service_name: &str) -> Result<()> {
     let _ = Command::new("sc.exe").args(["stop", service_name]).status();
     wait_for_service_state(service_name, "STOPPED", Duration::from_secs(45))
+}
+
+fn ensure_service_registration(service_name: &str, install_dir: &Path) -> Result<()> {
+    let service_binary = install_dir
+        .join("resources")
+        .join("microgifter-homeserver-service.exe");
+    ensure!(
+        service_binary.is_file(),
+        "restored HomeServer service binary is unavailable"
+    );
+    let binary_command = format!("\"{}\" service", service_binary.display());
+    let exists = Command::new("sc.exe")
+        .args(["query", service_name])
+        .status()
+        .context("unable to query HomeServer service registration")?
+        .success();
+    if !exists {
+        run_sc(
+            vec![
+                "create".to_owned(),
+                service_name.to_owned(),
+                "binPath=".to_owned(),
+                binary_command.clone(),
+                "start=".to_owned(),
+                "auto".to_owned(),
+                "DisplayName=".to_owned(),
+                "Microgifter HomeServer".to_owned(),
+            ],
+            "create restored HomeServer service",
+        )?;
+    }
+    run_sc(
+        vec![
+            "config".to_owned(),
+            service_name.to_owned(),
+            "binPath=".to_owned(),
+            binary_command,
+            "start=".to_owned(),
+            "delayed-auto".to_owned(),
+        ],
+        "configure restored HomeServer service",
+    )?;
+    run_sc(
+        vec![
+            "failure".to_owned(),
+            service_name.to_owned(),
+            "reset=".to_owned(),
+            "86400".to_owned(),
+            "actions=".to_owned(),
+            "restart/5000/restart/15000/none/0".to_owned(),
+        ],
+        "restore HomeServer service recovery policy",
+    )?;
+    run_sc(
+        vec![
+            "failureflag".to_owned(),
+            service_name.to_owned(),
+            "1".to_owned(),
+        ],
+        "restore HomeServer service failure actions",
+    )?;
+    run_sc(
+        vec![
+            "sidtype".to_owned(),
+            service_name.to_owned(),
+            "unrestricted".to_owned(),
+        ],
+        "restore HomeServer service identity",
+    )?;
+    Ok(())
+}
+
+fn run_sc(arguments: Vec<String>, action: &str) -> Result<()> {
+    let output = Command::new("sc.exe")
+        .args(&arguments)
+        .output()
+        .with_context(|| format!("unable to {action}"))?;
+    ensure!(
+        output.status.success(),
+        "unable to {action}: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(())
 }
 
 fn start_service(service_name: &str) -> Result<()> {

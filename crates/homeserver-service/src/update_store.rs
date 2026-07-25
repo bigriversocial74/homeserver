@@ -1,5 +1,5 @@
 use anyhow::{bail, ensure, Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use microgifter_homeserver_core::{
     SignedUpdateManifest, UpdateApplicationResult, UpdateChannel, UpdateRecord, UpdateState,
     UpdateStatus,
@@ -212,11 +212,28 @@ pub fn record_application_result(
         ),
         "update application result has an unsupported state"
     );
+    ensure!(
+        result.completed_at_utc <= Utc::now() + Duration::minutes(10),
+        "update application result completion time is in the future"
+    );
+    let stored = update_by_id(connection, &result.update_id)?;
+    ensure!(
+        stored.record.state == UpdateState::Applying,
+        "update application result does not belong to an applying release"
+    );
+    ensure!(
+        stored.record.version == result.target_version,
+        "update application result target version does not match the applying release"
+    );
     let state = result.state.as_str();
-    connection.execute(
-        "UPDATE update_records SET state=?1,applied_at_utc=CASE WHEN ?1='succeeded' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE applied_at_utc END,failure_code=?2,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE update_id=?3",
-        params![state, result.failure_code, result.update_id],
+    let changed = connection.execute(
+        "UPDATE update_records SET state=?1,applied_at_utc=CASE WHEN ?1='succeeded' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE applied_at_utc END,failure_code=?2,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE update_id=?3 AND state='applying'",
+        params![state, result.failure_code.as_deref(), &result.update_id],
     )?;
+    ensure!(
+        changed == 1,
+        "applying update state changed before its result was recorded"
+    );
     set_runtime(
         connection,
         result.state.clone(),
@@ -226,15 +243,15 @@ pub fn record_application_result(
     record_event(
         connection,
         Some(&result.update_id),
-        match result.state {
+        match &result.state {
             UpdateState::Succeeded => "update.succeeded",
             UpdateState::RolledBack => "update.rolled_back",
             _ => "update.failed",
         },
         &result.message,
         &serde_json::json!({
-            "target_version": result.target_version,
-            "failure_code": result.failure_code,
+            "target_version": &result.target_version,
+            "failure_code": result.failure_code.as_deref(),
         })
         .to_string(),
     )

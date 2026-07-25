@@ -1,5 +1,7 @@
 use crate::config::AppConfig;
-use anyhow::{bail, ensure, Context, Result};
+#[cfg(not(windows))]
+use anyhow::bail;
+use anyhow::{ensure, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{Duration as ChronoDuration, Utc};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};

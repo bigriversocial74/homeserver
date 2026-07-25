@@ -1,5 +1,7 @@
 use crate::{config::AppConfig, update};
-use anyhow::{bail, ensure, Context, Result};
+#[cfg(not(windows))]
+use anyhow::bail;
+use anyhow::{ensure, Context, Result};
 use microgifter_homeserver_core::{
     UpdateApplicationPlan, UpdateRecord, SERVICE_NAME, UPDATE_MANIFEST_SCHEMA_VERSION,
 };

@@ -138,9 +138,15 @@ async fn homeserver_download_update() -> Result<UpdateActionResult, String> {
 
 #[tauri::command]
 async fn homeserver_apply_update(
+    app: tauri::AppHandle,
     request: ApplyUpdateRequest,
 ) -> Result<UpdateActionResult, String> {
-    post_json("/v1/updates/apply", &request).await
+    let result = post_json("/v1/updates/apply", &request).await?;
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        app.exit(0);
+    });
+    Ok(result)
 }
 
 #[tauri::command]
