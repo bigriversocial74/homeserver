@@ -257,7 +257,7 @@ jobs:
           "thumbprint=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Installed signed update and rollback smoke test
-        shell: pwsh
+        shell: powershell
         run: |
           ./scripts/smoke-test-updater.ps1 `
             -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Setup.exe `
