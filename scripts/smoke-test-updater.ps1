@@ -22,6 +22,7 @@ $installedArchive = Join-Path $dataDirectory "updates\installed"
 $resultPath = Join-Path $dataDirectory "updates\last-update-result.json"
 $uninstallerPath = $null
 $scriptExitCode = 0
+$currentUserTrustStores = @("Root", "TrustedPublisher")
 
 function Read-TrimmedText {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -34,6 +35,76 @@ function Read-TrimmedText {
         return ""
     }
     return $content.Trim()
+}
+
+function Set-CurrentUserPublisherTrust {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate
+    )
+
+    foreach ($storeName in $currentUserTrustStores) {
+        $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+            $storeName,
+            [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+        )
+        try {
+            $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            $store.Add($Certificate)
+        }
+        finally {
+            $store.Close()
+        }
+    }
+}
+
+function Remove-CurrentUserPublisherTrust {
+    param([Parameter(Mandatory = $true)][string]$Thumbprint)
+
+    foreach ($storeName in $currentUserTrustStores) {
+        $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+            $storeName,
+            [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+        )
+        try {
+            $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            $matches = $store.Certificates.Find(
+                [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+                $Thumbprint,
+                $false
+            )
+            foreach ($certificate in $matches) {
+                $store.Remove($certificate)
+            }
+        }
+        finally {
+            $store.Close()
+        }
+    }
+}
+
+function Get-WindowsPowerShellSignature {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $previous = $env:MG_UPDATE_FILE
+    try {
+        $env:MG_UPDATE_FILE = $Path
+        $json = & powershell.exe -NoLogo -NoProfile -NonInteractive -Command @'
+$signature = Get-AuthenticodeSignature -LiteralPath $env:MG_UPDATE_FILE
+[pscustomobject]@{
+    status = [string]$signature.Status
+    status_message = [string]$signature.StatusMessage
+    thumbprint = if ($signature.SignerCertificate) { [string]$signature.SignerCertificate.Thumbprint } else { "" }
+} | ConvertTo-Json -Compress
+'@
+        if ($LASTEXITCODE -ne 0 -or -not $json) {
+            throw "Windows PowerShell could not inspect the CI update signature"
+        }
+        $json | ConvertFrom-Json
+    }
+    finally {
+        $env:MG_UPDATE_FILE = $previous
+    }
 }
 
 function Wait-ForHomeServerHealth {
@@ -184,6 +255,16 @@ try {
         throw "CI update installer signer thumbprint does not match the test input"
     }
 
+    Set-CurrentUserPublisherTrust -Certificate $signature.SignerCertificate
+    $windowsPowerShellSignature = Get-WindowsPowerShellSignature -Path $updateInstaller
+    Write-Host "Windows PowerShell Authenticode status: $($windowsPowerShellSignature.status); $($windowsPowerShellSignature.status_message)"
+    if ($windowsPowerShellSignature.status -ne "Valid") {
+        throw "Windows PowerShell does not trust the CI update installer: $($windowsPowerShellSignature.status) $($windowsPowerShellSignature.status_message)"
+    }
+    if ($windowsPowerShellSignature.thumbprint -ne $SignerThumbprint) {
+        throw "Windows PowerShell resolved an unexpected CI update signer"
+    }
+
     $install = Start-Process -FilePath $installer -ArgumentList "/S" -PassThru -Wait
     if ($install.ExitCode -ne 0) {
         throw "HomeServer installer failed with exit code $($install.ExitCode)"
@@ -232,6 +313,7 @@ catch {
     Write-Host "Service query:`n$serviceQuery"
 }
 finally {
+    Remove-CurrentUserPublisherTrust -Thumbprint $SignerThumbprint
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     if ($service) {
         Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
