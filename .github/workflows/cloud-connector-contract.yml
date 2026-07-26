@@ -61,3 +61,5 @@ jobs:
 
       - name: Validate cross-repository connector contract
         run: python homeserver/scripts/validate-cloud-connector-contract.py --homeserver-root homeserver --cloud-root cloud
+
+# Post-merge validation trigger only; no executable behavior changed.
