@@ -3,12 +3,16 @@
 !define MG_SERVICE_NAME "MicrogifterHomeServer"
 !define MG_SERVICE_DISPLAY "Microgifter HomeServer"
 !define MG_INSTALL_LOG_PATH "$COMMONAPPDATA\Microgifter\HomeServer\logs\microgifter-homeserver-service.log-installer"
+!define MG_TEMP_INSTALL_LOG_PATH "$TEMP\Microgifter-HomeServer-install.log"
 
 !macro MG_WRITE_INSTALL_LOG MESSAGE
   CreateDirectory "$COMMONAPPDATA\Microgifter\HomeServer\logs"
   FileOpen $1 "${MG_INSTALL_LOG_PATH}" a
   FileWrite $1 "${MESSAGE}$\r$\n"
   FileClose $1
+  FileOpen $2 "${MG_TEMP_INSTALL_LOG_PATH}" a
+  FileWrite $2 "${MESSAGE}$\r$\n"
+  FileClose $2
 !macroend
 
 !macro MG_REQUIRE_SUCCESS MESSAGE
@@ -18,6 +22,9 @@
     FileOpen $1 "${MG_INSTALL_LOG_PATH}" a
     FileWrite $1 "${MESSAGE} (exit code $0).$\r$\n"
     FileClose $1
+    FileOpen $2 "${MG_TEMP_INSTALL_LOG_PATH}" a
+    FileWrite $2 "${MESSAGE} (exit code $0).$\r$\n"
+    FileClose $2
     SetErrorLevel $0
     Quit
   ${EndIf}
@@ -36,6 +43,7 @@
   CreateDirectory "$COMMONAPPDATA\Microgifter\HomeServer"
   CreateDirectory "$COMMONAPPDATA\Microgifter\HomeServer\logs"
   Delete "${MG_INSTALL_LOG_PATH}"
+  Delete "${MG_TEMP_INSTALL_LOG_PATH}"
   !insertmacro MG_WRITE_INSTALL_LOG "Starting HomeServer installer security and service registration"
 
   ; Protect the root first. Keeping this separate from the grant operation is
