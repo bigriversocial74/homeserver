@@ -77,6 +77,15 @@ jobs:
         shell: pwsh
         run: ./scripts/smoke-test-installer.ps1 -InstallerPath "${{ steps.installer.outputs.path }}"
 
+      - name: Collect external installer command log
+        if: always()
+        shell: pwsh
+        run: |
+          $source = Join-Path $env:TEMP "Microgifter-HomeServer-install.log"
+          if (Test-Path -LiteralPath $source) {
+            Copy-Item -LiteralPath $source -Destination installer-command.log -Force
+          }
+
       - name: Upload installer repair diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -84,6 +93,6 @@ jobs:
           name: installer-repair-diagnostics
           path: |
             installer-verification.log
-            ${{ runner.temp }}/Microgifter-HomeServer-install.log
+            installer-command.log
           if-no-files-found: warn
           retention-days: 7
