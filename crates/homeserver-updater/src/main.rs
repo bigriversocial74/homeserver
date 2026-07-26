@@ -26,6 +26,11 @@ async fn main() -> Result<()> {
         .next()
         .and_then(|value| value.into_string().ok())
         .unwrap_or_default();
+    if matches!(command.as_str(), "version" | "--version" | "-V") {
+        ensure!(arguments.next().is_none(), "unexpected updater arguments");
+        println!("MicrogifterHomeServerUpdater {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     let plan_path = arguments
         .next()
         .map(PathBuf::from)
@@ -145,6 +150,72 @@ fn validate_plan(plan: &UpdateApplicationPlan) -> Result<()> {
         install_dir.is_dir(),
         "HomeServer install directory is unavailable"
     );
+
+    let canonical_data = data_dir
+        .canonicalize()
+        .context("HomeServer data directory is unavailable")?;
+    let canonical_updates = canonical_data
+        .join("updates")
+        .canonicalize()
+        .context("HomeServer update directory is unavailable")?;
+    let canonical_staging = canonical_updates
+        .join("staging")
+        .canonicalize()
+        .context("HomeServer update staging directory is unavailable")?;
+    let canonical_rollback = canonical_updates
+        .join("rollback")
+        .canonicalize()
+        .context("HomeServer update rollback directory is unavailable")?;
+    let canonical_installed = canonical_updates
+        .join("installed")
+        .canonicalize()
+        .context("HomeServer installed-update archive is unavailable")?;
+    let canonical_installer = installer_path
+        .canonicalize()
+        .context("staged installer is unavailable")?;
+    let canonical_install = install_dir
+        .canonicalize()
+        .context("HomeServer install directory is unavailable")?;
+    let rollback_parent = rollback_dir
+        .parent()
+        .context("rollback directory parent is unavailable")?
+        .canonicalize()
+        .context("HomeServer rollback root is unavailable")?;
+    let archive_parent = archived_installer
+        .parent()
+        .context("installer archive parent is unavailable")?
+        .canonicalize()
+        .context("HomeServer installed-update archive is unavailable")?;
+    let result_parent = result_path
+        .parent()
+        .context("update result parent is unavailable")?
+        .canonicalize()
+        .context("HomeServer update result directory is unavailable")?;
+
+    ensure!(
+        canonical_installer.starts_with(&canonical_staging),
+        "staged installer resolves outside managed update staging"
+    );
+    ensure!(
+        rollback_parent == canonical_rollback
+            && rollback_dir.file_name().and_then(|value| value.to_str())
+                == Some(plan.update_id.as_str()),
+        "rollback directory is outside managed update rollback storage"
+    );
+    ensure!(
+        archive_parent == canonical_installed,
+        "installer archive is outside managed installed-update storage"
+    );
+    ensure!(
+        result_parent == canonical_updates
+            && result_path.file_name().and_then(|value| value.to_str())
+                == Some("last-update-result.json"),
+        "update result path is outside the managed update contract"
+    );
+    ensure!(
+        !canonical_install.starts_with(&canonical_data),
+        "install and data directories resolve to overlapping storage"
+    );
     Ok(())
 }
 
@@ -159,14 +230,27 @@ async fn apply_update(plan: &UpdateApplicationPlan) -> Result<UpdateApplicationR
 
     let install_dir = PathBuf::from(&plan.install_dir);
     let rollback_dir = PathBuf::from(&plan.rollback_dir);
-    stop_service(&plan.service_name)?;
     snapshot_directory(&install_dir, &rollback_dir)?;
+    stop_service(&plan.service_name)?;
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    let install_result = Command::new(&installer_path)
-        .arg("/S")
-        .status()
-        .context("unable to start the staged HomeServer installer")?;
+    let install_result = match Command::new(&installer_path).arg("/S").status() {
+        Ok(result) => result,
+        Err(error) => {
+            let restarted = start_service(&plan.service_name).is_ok()
+                && wait_for_health(
+                    &plan.health_url,
+                    &plan.current_version,
+                    Duration::from_secs(90),
+                )
+                .await;
+            ensure!(
+                restarted,
+                "the staged installer could not start and the previous HomeServer service could not be recovered"
+            );
+            return Err(error).context("unable to start the staged HomeServer installer");
+        }
+    };
     let installation_healthy = install_result.success()
         && wait_for_health(
             &plan.health_url,
@@ -310,10 +394,32 @@ fn verify_authenticode(_path: &Path, _expected_thumbprint: &str) -> Result<()> {
 }
 
 fn snapshot_directory(source: &Path, destination: &Path) -> Result<()> {
-    if destination.exists() {
-        fs::remove_dir_all(destination)?;
+    let temporary = destination.with_extension("snapshot-tmp");
+    let previous = destination.with_extension("snapshot-previous");
+    if temporary.exists() {
+        fs::remove_dir_all(&temporary)?;
     }
-    copy_directory(source, destination)
+    if previous.exists() {
+        fs::remove_dir_all(&previous)?;
+    }
+    if let Err(error) = copy_directory(source, &temporary) {
+        let _ = fs::remove_dir_all(&temporary);
+        return Err(error);
+    }
+    if destination.exists() {
+        fs::rename(destination, &previous)?;
+    }
+    if let Err(error) = fs::rename(&temporary, destination) {
+        if previous.exists() {
+            let _ = fs::rename(&previous, destination);
+        }
+        let _ = fs::remove_dir_all(&temporary);
+        return Err(error.into());
+    }
+    if previous.exists() {
+        fs::remove_dir_all(previous)?;
+    }
+    Ok(())
 }
 
 fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
@@ -365,14 +471,31 @@ fn copy_directory_inner(
 
 fn atomic_copy(source: &Path, destination: &Path) -> Result<()> {
     let temporary = destination.with_extension("tmp");
+    let previous = destination.with_extension("replace-backup");
     if temporary.exists() {
         fs::remove_file(&temporary)?;
     }
-    fs::copy(source, &temporary)?;
-    if destination.exists() {
-        fs::remove_file(destination)?;
+    if previous.exists() {
+        fs::remove_file(&previous)?;
     }
-    fs::rename(temporary, destination)?;
+    fs::copy(source, &temporary)?;
+    fs::File::options()
+        .write(true)
+        .open(&temporary)?
+        .sync_all()?;
+    if destination.exists() {
+        fs::rename(destination, &previous)?;
+    }
+    if let Err(error) = fs::rename(&temporary, destination) {
+        if previous.exists() {
+            let _ = fs::rename(&previous, destination);
+        }
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    if previous.exists() {
+        fs::remove_file(previous)?;
+    }
     Ok(())
 }
 
@@ -444,12 +567,10 @@ fn ensure_service_registration(service_name: &str, install_dir: &Path) -> Result
         vec![
             "config".to_owned(),
             service_name.to_owned(),
-            "binPath=".to_owned(),
-            binary_command,
             "start=".to_owned(),
             "delayed-auto".to_owned(),
         ],
-        "configure restored HomeServer service",
+        "configure restored HomeServer service startup",
     )?;
     run_sc(
         vec![
@@ -530,16 +651,36 @@ fn service_state(service_name: &str) -> Result<Option<String>> {
 }
 
 fn start_service(service_name: &str) -> Result<()> {
-    let output = Command::new("sc.exe")
-        .args(["start", service_name])
-        .output()
-        .context("unable to start HomeServer service")?;
-    ensure!(
-        output.status.success()
-            || wait_for_service_state(service_name, "RUNNING", Duration::from_secs(5)).is_ok(),
-        "unable to start HomeServer service"
-    );
-    Ok(())
+    if service_state(service_name)?.as_deref() == Some("RUNNING") {
+        return Ok(());
+    }
+
+    let started = std::time::Instant::now();
+    let mut last_output = "no service start attempt was made".to_owned();
+    while started.elapsed() < Duration::from_secs(45) {
+        let output = Command::new("sc.exe")
+            .args(["start", service_name])
+            .output()
+            .context("unable to request HomeServer service start")?;
+        last_output = command_output(&output);
+
+        if wait_for_service_state(service_name, "RUNNING", Duration::from_secs(8)).is_ok() {
+            return Ok(());
+        }
+
+        match service_state(service_name)? {
+            Some(state) if state == "RUNNING" => return Ok(()),
+            None => {
+                bail!("unable to start HomeServer service: service registration is unavailable")
+            }
+            Some(_) => std::thread::sleep(Duration::from_millis(500)),
+        }
+    }
+
+    let final_state = service_state(service_name)?.unwrap_or_else(|| "ABSENT".to_owned());
+    bail!(
+        "unable to start HomeServer service after 45 seconds (final state: {final_state}; last sc.exe output: {last_output})"
+    )
 }
 
 fn wait_for_service_state(service_name: &str, state: &str, timeout: Duration) -> Result<()> {
@@ -588,7 +729,13 @@ fn remove_directory_with_retry(path: &Path, timeout: Duration) -> Result<()> {
 }
 
 async fn wait_for_health(base_url: &str, expected_version: &str, timeout: Duration) -> bool {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::HeaderName::from_static(microgifter_homeserver_core::LOCAL_CLIENT_HEADER),
+        reqwest::header::HeaderValue::from_static(microgifter_homeserver_core::LOCAL_CLIENT_VALUE),
+    );
     let client = match reqwest::Client::builder()
+        .default_headers(headers)
         .connect_timeout(Duration::from_secs(2))
         .timeout(Duration::from_secs(3))
         .build()
@@ -624,16 +771,41 @@ fn write_result(path: &Path, result: &UpdateApplicationResult) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     let temporary = path.with_extension("tmp");
+    let backup = path.with_extension("replace-backup");
     fs::write(&temporary, serde_json::to_vec_pretty(result)?)?;
-    if path.exists() {
-        fs::remove_file(path)?;
+    fs::File::options()
+        .write(true)
+        .open(&temporary)?
+        .sync_all()?;
+    if backup.exists() {
+        fs::remove_file(&backup)?;
     }
-    fs::rename(temporary, path)?;
+    if path.exists() {
+        fs::rename(path, &backup)?;
+    }
+    if let Err(error) = fs::rename(&temporary, path) {
+        if backup.exists() {
+            let _ = fs::rename(&backup, path);
+        }
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    if backup.exists() {
+        fs::remove_file(backup)?;
+    }
     Ok(())
 }
 
 fn absolute(path: &Path) -> Result<PathBuf> {
+    use std::path::Component;
+
     ensure!(path.is_absolute(), "update path must be absolute");
+    ensure!(
+        !path
+            .components()
+            .any(|component| { matches!(component, Component::CurDir | Component::ParentDir) }),
+        "update path cannot contain relative traversal components"
+    );
     Ok(path.to_path_buf())
 }
 
@@ -695,5 +867,11 @@ mod tests {
             fs::read(destination.join("resources/service.exe")).unwrap(),
             b"service"
         );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn update_paths_reject_relative_traversal() {
+        assert!(absolute(Path::new("C:\\ProgramData\\Microgifter\\HomeServer")).is_ok());
+        assert!(absolute(Path::new("C:\\ProgramData\\Microgifter\\..\\Windows")).is_err());
     }
 }

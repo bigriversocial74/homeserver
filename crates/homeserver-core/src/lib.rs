@@ -6,6 +6,8 @@ pub const PRODUCT_NAME: &str = "Microgifter HomeServer";
 pub const SERVICE_NAME: &str = "MicrogifterHomeServer";
 pub const API_HOST: &str = "127.0.0.1";
 pub const API_PORT: u16 = 47_831;
+pub const LOCAL_CLIENT_HEADER: &str = "x-mg-local-client";
+pub const LOCAL_CLIENT_VALUE: &str = "microgifter-control-center-v1";
 pub const UPDATE_MANIFEST_SCHEMA_VERSION: u32 = 1;
 pub const UPDATE_KEY_ID: &str = "homeserver-release-2026-01";
 

@@ -284,7 +284,7 @@ function render() {
             <p>${apiAvailable ? "The private local API is responding." : "The background service is not responding yet."}</p>
           </div>
           <div class="hero-meta">
-            <div><span>Version</span><strong>${escapeHtml(snapshot?.version || "0.1.0")}</strong></div>
+            <div><span>Version</span><strong>${escapeHtml(snapshot?.version || "Unknown")}</strong></div>
             <div><span>API</span><strong>${apiAvailable ? "Available" : "Offline"}</strong></div>
             <div><span>Database</span><strong>${escapeHtml(humanize(databaseState))}</strong></div>
           </div>

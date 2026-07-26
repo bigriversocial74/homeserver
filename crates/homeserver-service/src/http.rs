@@ -1,9 +1,10 @@
 use crate::AppState;
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, Path, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::Response,
+    extract::{DefaultBodyLimit, Path, Request, State},
+    http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -12,6 +13,7 @@ use futures_util::StreamExt;
 use microgifter_homeserver_core::{
     ApplyUpdateRequest, BackupActionResult, BackupCatalog, BackupReferenceRequest,
     CreateBackupRequest, HealthSnapshot, ServiceState, UpdateActionResult, UpdateStatus,
+    LOCAL_CLIENT_HEADER, LOCAL_CLIENT_VALUE,
 };
 use serde::Serialize;
 use std::sync::Arc;
@@ -26,6 +28,7 @@ const MAX_CONTROL_BODY_BYTES: usize = 64 * 1024;
 const MAX_IMPORT_BODY_BYTES: usize = 320 * 1024 * 1024;
 const MAX_ENCODED_PASSPHRASE_HEADER_BYTES: usize = 4 * 1024;
 const PASSPHRASE_HEADER: &str = "x-mg-recovery-passphrase";
+const LOCAL_API_HOST: &str = "127.0.0.1:47831";
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 type ResponseResult = Result<Response, (StatusCode, Json<ApiError>)>;
@@ -61,6 +64,12 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .merge(control_routes)
         .merge(transfer_routes)
+        .with_state(state)
+}
+
+pub fn secure(router: Router) -> Router {
+    router
+        .layer(middleware::from_fn(protect_local_api))
         .layer(SetResponseHeaderLayer::if_not_present(
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
@@ -69,9 +78,69 @@ pub fn router(state: Arc<AppState>) -> Router {
             header::X_CONTENT_TYPE_OPTIONS,
             HeaderValue::from_static("nosniff"),
         ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("cross-origin-resource-policy"),
+            HeaderValue::from_static("same-origin"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("referrer-policy"),
+            HeaderValue::from_static("no-referrer"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("x-frame-options"),
+            HeaderValue::from_static("DENY"),
+        ))
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http())
-        .with_state(state)
+}
+
+async fn protect_local_api(request: Request, next: Next) -> Response {
+    if let Some(message) =
+        local_request_rejection(request.method(), request.uri().path(), request.headers())
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                ok: false,
+                error: "local_client_required",
+                message: message.to_owned(),
+            }),
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
+fn local_request_rejection(
+    _method: &Method,
+    path: &str,
+    headers: &HeaderMap,
+) -> Option<&'static str> {
+    let valid_host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case(LOCAL_API_HOST));
+    if !valid_host {
+        return Some("The HomeServer local API requires its fixed loopback host.");
+    }
+    if headers.contains_key(header::ORIGIN)
+        || headers.contains_key("sec-fetch-site")
+        || headers.contains_key("forwarded")
+        || headers.contains_key("x-forwarded-host")
+        || headers.contains_key("x-forwarded-for")
+    {
+        return Some("Browser-originated or forwarded requests are not accepted by the HomeServer local API.");
+    }
+    if path.starts_with("/v1/") {
+        let authorized = headers
+            .get(LOCAL_CLIENT_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value == LOCAL_CLIENT_VALUE);
+        if !authorized {
+            return Some("A trusted HomeServer local client header is required.");
+        }
+    }
+    None
 }
 
 async fn healthz(State(state): State<Arc<AppState>>) -> StatusCode {
@@ -174,31 +243,39 @@ async fn import_recovery_package(
     let mut stream = body.into_data_stream();
     let mut total_bytes = 0_usize;
 
-    while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|error| action_error("recovery_import_stream_failed", error.into()))?;
-        total_bytes = total_bytes.checked_add(chunk.len()).ok_or_else(|| {
-            action_error(
-                "recovery_import_too_large",
-                anyhow::anyhow!("recovery package size overflow"),
-            )
-        })?;
-        if total_bytes > MAX_IMPORT_BODY_BYTES {
-            let _ = tokio::fs::remove_file(&temporary_path).await;
-            return Err(action_error(
-                "recovery_import_too_large",
-                anyhow::anyhow!("recovery package exceeds the import size limit"),
-            ));
+    let transfer_result = async {
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk
+                .map_err(|error| action_error("recovery_import_stream_failed", error.into()))?;
+            total_bytes = total_bytes.checked_add(chunk.len()).ok_or_else(|| {
+                action_error(
+                    "recovery_import_too_large",
+                    anyhow::anyhow!("recovery package size overflow"),
+                )
+            })?;
+            if total_bytes > MAX_IMPORT_BODY_BYTES {
+                return Err(action_error(
+                    "recovery_import_too_large",
+                    anyhow::anyhow!("recovery package exceeds the import size limit"),
+                ));
+            }
+            output
+                .write_all(&chunk)
+                .await
+                .map_err(|error| internal_error("recovery_import_write_failed", error.into()))?;
         }
         output
-            .write_all(&chunk)
+            .sync_all()
             .await
-            .map_err(|error| internal_error("recovery_import_write_failed", error.into()))?;
+            .map_err(|error| internal_error("recovery_import_sync_failed", error.into()))?;
+        Ok::<(), (StatusCode, Json<ApiError>)>(())
     }
-    output
-        .sync_all()
-        .await
-        .map_err(|error| internal_error("recovery_import_sync_failed", error.into()))?;
+    .await;
+    if let Err(error) = transfer_result {
+        drop(output);
+        let _ = tokio::fs::remove_file(&temporary_path).await;
+        return Err(error);
+    }
     drop(output);
     if total_bytes <= 12 {
         let _ = tokio::fs::remove_file(&temporary_path).await;
@@ -358,6 +435,41 @@ fn api_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_forwarded_and_unmarked_api_requests_are_rejected() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static(LOCAL_API_HOST));
+        assert!(local_request_rejection(&Method::GET, "/healthz", &headers).is_none());
+        assert!(local_request_rejection(&Method::GET, "/v1/test", &headers).is_some());
+
+        headers.insert(
+            LOCAL_CLIENT_HEADER,
+            HeaderValue::from_static(LOCAL_CLIENT_VALUE),
+        );
+        assert!(local_request_rejection(&Method::GET, "/v1/test", &headers).is_none());
+        assert!(local_request_rejection(&Method::POST, "/v1/test", &headers).is_none());
+
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://example.com"),
+        );
+        assert!(local_request_rejection(&Method::POST, "/v1/test", &headers).is_some());
+        headers.remove(header::ORIGIN);
+        headers.insert("x-forwarded-host", HeaderValue::from_static("example.com"));
+        assert!(local_request_rejection(&Method::GET, "/v1/test", &headers).is_some());
+    }
+
+    #[test]
+    fn local_api_rejects_an_unexpected_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("localhost:47831"));
+        headers.insert(
+            LOCAL_CLIENT_HEADER,
+            HeaderValue::from_static(LOCAL_CLIENT_VALUE),
+        );
+        assert!(local_request_rejection(&Method::GET, "/v1/test", &headers).is_some());
+    }
 
     #[test]
     fn absent_verified_update_is_a_validation_error() {

@@ -65,6 +65,7 @@ impl Entry {
 
     pub fn get_password(&self) -> Result<String, Error> {
         let path = self.path()?;
+        recover_interrupted_replace(&path)?;
         let mut protected = match fs::read(&path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -96,13 +97,25 @@ impl Entry {
     }
 
     pub fn delete_credential(&self) -> Result<(), Error> {
-        match fs::remove_file(self.path()?) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(Error::NoEntry),
-            Err(error) => Err(platform_error(
-                "unable to delete the HomeServer credential file",
-                error,
-            )),
+        let path = self.path()?;
+        let backup = replacement_backup_path(&path);
+        let mut removed = false;
+        for candidate in [&path, &backup] {
+            match fs::remove_file(candidate) {
+                Ok(()) => removed = true,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(platform_error(
+                        "unable to delete the HomeServer credential file",
+                        error,
+                    ))
+                }
+            }
+        }
+        if removed {
+            Ok(())
+        } else {
+            Err(Error::NoEntry)
         }
     }
 
@@ -183,11 +196,13 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
         )
     })?;
 
+    recover_interrupted_replace(path)?;
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     let temporary = path.with_extension(format!("tmp-{}-{nonce}", std::process::id()));
+    let backup = replacement_backup_path(path);
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
 
@@ -210,16 +225,64 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     }
     drop(output);
 
-    if path.exists() {
-        fs::remove_file(path).map_err(|error| {
+    if backup.exists() {
+        fs::remove_file(&backup).map_err(|error| {
             let _ = fs::remove_file(&temporary);
-            platform_error("unable to replace the HomeServer credential file", error)
+            platform_error(
+                "unable to clear a stale credential replacement backup",
+                error,
+            )
         })?;
     }
-    fs::rename(&temporary, path).map_err(|error| {
+    if path.exists() {
+        fs::rename(path, &backup).map_err(|error| {
+            let _ = fs::remove_file(&temporary);
+            platform_error(
+                "unable to preserve the current HomeServer credential",
+                error,
+            )
+        })?;
+    }
+
+    if let Err(error) = fs::rename(&temporary, path) {
+        if backup.exists() {
+            let _ = fs::rename(&backup, path);
+        }
         let _ = fs::remove_file(&temporary);
-        platform_error("unable to activate the HomeServer credential file", error)
-    })?;
+        return Err(platform_error(
+            "unable to activate the HomeServer credential file",
+            error,
+        ));
+    }
+    if backup.exists() {
+        fs::remove_file(&backup).map_err(|error| {
+            platform_error("unable to remove the credential replacement backup", error)
+        })?;
+    }
+    Ok(())
+}
+
+fn replacement_backup_path(path: &Path) -> PathBuf {
+    path.with_extension("replace-backup")
+}
+
+fn recover_interrupted_replace(path: &Path) -> Result<(), Error> {
+    let backup = replacement_backup_path(path);
+    if !path.exists() && backup.exists() {
+        fs::rename(&backup, path).map_err(|error| {
+            platform_error(
+                "unable to recover an interrupted credential replacement",
+                error,
+            )
+        })?;
+    } else if path.exists() && backup.exists() {
+        fs::remove_file(&backup).map_err(|error| {
+            platform_error(
+                "unable to clear an obsolete credential replacement backup",
+                error,
+            )
+        })?;
+    }
     Ok(())
 }
 
@@ -241,7 +304,10 @@ fn protect(value: &[u8], entropy: &[u8; 32]) -> Result<Vec<u8>, Error> {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::{
         Foundation::LocalFree,
-        Security::Cryptography::{CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB},
+        Security::Cryptography::{
+            CryptProtectData, CRYPTPROTECT_LOCAL_MACHINE, CRYPTPROTECT_UI_FORBIDDEN,
+            CRYPT_INTEGER_BLOB,
+        },
     };
 
     let mut value = value.to_vec();
@@ -266,7 +332,7 @@ fn protect(value: &[u8], entropy: &[u8; 32]) -> Result<Vec<u8>, Error> {
             &entropy_blob,
             null_mut(),
             null(),
-            CRYPTPROTECT_UI_FORBIDDEN,
+            CRYPTPROTECT_LOCAL_MACHINE | CRYPTPROTECT_UI_FORBIDDEN,
             &mut output,
         )
     };
@@ -341,13 +407,17 @@ fn unprotect(value: &[u8], entropy: &[u8; 32]) -> Result<Vec<u8>, Error> {
 }
 
 #[cfg(not(windows))]
-fn protect(value: &[u8], _entropy: &[u8; 32]) -> Result<Vec<u8>, Error> {
-    Ok(value.to_vec())
+fn protect(_value: &[u8], _entropy: &[u8; 32]) -> Result<Vec<u8>, Error> {
+    Err(Error::PlatformFailure(
+        "machine-scoped HomeServer credentials are only supported on Windows".to_owned(),
+    ))
 }
 
 #[cfg(not(windows))]
-fn unprotect(value: &[u8], _entropy: &[u8; 32]) -> Result<Vec<u8>, Error> {
-    Ok(value.to_vec())
+fn unprotect(_value: &[u8], _entropy: &[u8; 32]) -> Result<Vec<u8>, Error> {
+    Err(Error::PlatformFailure(
+        "machine-scoped HomeServer credentials are only supported on Windows".to_owned(),
+    ))
 }
 
 #[cfg(test)]
@@ -367,5 +437,18 @@ mod tests {
     fn invalid_components_are_rejected() {
         assert!(Entry::new("", "user").is_err());
         assert!(Entry::new("service", "bad\nuser").is_err());
+    }
+
+    #[test]
+    fn interrupted_replacement_uses_a_separate_recovery_path() {
+        let path = PathBuf::from("credential-example.dpapi");
+        assert_ne!(replacement_backup_path(&path), path);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unsupported_platform_never_falls_back_to_plaintext() {
+        assert!(protect(b"secret", &[0_u8; 32]).is_err());
+        assert!(unprotect(b"secret", &[0_u8; 32]).is_err());
     }
 }

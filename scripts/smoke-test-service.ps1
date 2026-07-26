@@ -11,6 +11,7 @@ $env:MG_HOMESERVER_DATA_DIR = $primaryDataDirectory
 $env:MG_HOMESERVER_NAME = "CI HomeServer"
 $process = $null
 $apiBase = "http://127.0.0.1:47831"
+$controlHeaders = @{ "X-MG-Local-Client" = "microgifter-control-center-v1" }
 
 function ConvertTo-Base64Url {
     param([Parameter(Mandatory = $true)][string]$Value)
@@ -47,7 +48,7 @@ function Stop-HomeServerProcess {
 try {
     Start-HomeServerProcess
 
-    $status = Invoke-RestMethod -Uri "$apiBase/v1/status" -TimeoutSec 3
+    $status = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/status" -TimeoutSec 3
     if ($status.state -ne "running") {
         throw "Expected running state, received '$($status.state)'"
     }
@@ -66,7 +67,7 @@ try {
         passphrase = $null
         note = "CI manual backup"
     } | ConvertTo-Json -Compress
-    $manual = Invoke-RestMethod -Method Post -Uri "$apiBase/v1/backups/create" -ContentType "application/json" -Body $manualBody -TimeoutSec 90
+    $manual = Invoke-RestMethod -Method Post -Headers $controlHeaders -Uri "$apiBase/v1/backups/create" -ContentType "application/json" -Body $manualBody -TimeoutSec 90
     if ($manual.backup.kind -ne "manual" -or $manual.backup.state -ne "ready") {
         throw "Manual encrypted backup was not created correctly"
     }
@@ -79,7 +80,7 @@ try {
         passphrase = $null
         confirmation = $null
     } | ConvertTo-Json -Compress
-    $verifiedManual = Invoke-RestMethod -Method Post -Uri "$apiBase/v1/backups/verify" -ContentType "application/json" -Body $verifyManualBody -TimeoutSec 90
+    $verifiedManual = Invoke-RestMethod -Method Post -Headers $controlHeaders -Uri "$apiBase/v1/backups/verify" -ContentType "application/json" -Body $verifyManualBody -TimeoutSec 90
     if ($verifiedManual.backup.state -ne "verified") {
         throw "Manual backup verification did not persist"
     }
@@ -90,7 +91,7 @@ try {
         passphrase = $recoveryPassphrase
         note = "CI portable recovery package"
     } | ConvertTo-Json -Compress
-    $recovery = Invoke-RestMethod -Method Post -Uri "$apiBase/v1/backups/create" -ContentType "application/json" -Body $recoveryBody -TimeoutSec 90
+    $recovery = Invoke-RestMethod -Method Post -Headers $controlHeaders -Uri "$apiBase/v1/backups/create" -ContentType "application/json" -Body $recoveryBody -TimeoutSec 90
     if ($recovery.backup.kind -ne "recovery" -or $recovery.backup.state -ne "ready") {
         throw "Recovery package was not created correctly"
     }
@@ -103,7 +104,7 @@ try {
         passphrase = "wrong recovery passphrase value"
         confirmation = $null
     } | ConvertTo-Json -Compress
-    $wrongPassphrase = Invoke-WebRequest -SkipHttpErrorCheck -Method Post -Uri "$apiBase/v1/backups/verify" -ContentType "application/json" -Body $wrongPassphraseBody -TimeoutSec 90
+    $wrongPassphrase = Invoke-WebRequest -SkipHttpErrorCheck -Method Post -Headers $controlHeaders -Uri "$apiBase/v1/backups/verify" -ContentType "application/json" -Body $wrongPassphraseBody -TimeoutSec 90
     if ($wrongPassphrase.StatusCode -ne 422) {
         throw "Expected wrong recovery passphrase rejection, received HTTP $($wrongPassphrase.StatusCode)"
     }
@@ -113,17 +114,17 @@ try {
         passphrase = $recoveryPassphrase
         confirmation = $null
     } | ConvertTo-Json -Compress
-    $verifiedRecovery = Invoke-RestMethod -Method Post -Uri "$apiBase/v1/backups/verify" -ContentType "application/json" -Body $verifyRecoveryBody -TimeoutSec 90
+    $verifiedRecovery = Invoke-RestMethod -Method Post -Headers $controlHeaders -Uri "$apiBase/v1/backups/verify" -ContentType "application/json" -Body $verifyRecoveryBody -TimeoutSec 90
     if ($verifiedRecovery.backup.state -ne "verified") {
         throw "Recovery package verification did not persist"
     }
 
-    Invoke-WebRequest -UseBasicParsing -Uri "$apiBase/v1/backups/$($recovery.backup.backup_id)/package" -OutFile $exportedPackage -TimeoutSec 90
+    Invoke-WebRequest -UseBasicParsing -Headers $controlHeaders -Uri "$apiBase/v1/backups/$($recovery.backup.backup_id)/package" -OutFile $exportedPackage -TimeoutSec 90
     if (-not (Test-Path $exportedPackage) -or (Get-Item $exportedPackage).Length -le 12) {
         throw "Portable recovery package export was not produced"
     }
 
-    $catalog = Invoke-RestMethod -Uri "$apiBase/v1/backups" -TimeoutSec 5
+    $catalog = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/backups" -TimeoutSec 5
     if (@($catalog.backups).Count -lt 2 -or [int]$catalog.retention_count -ne 14 -or [int]$catalog.interval_hours -ne 24) {
         throw "Backup catalog or policy is incomplete"
     }
@@ -133,22 +134,22 @@ try {
         passphrase = $null
         confirmation = "RESTORE"
     } | ConvertTo-Json -Compress
-    $staged = Invoke-RestMethod -Method Post -Uri "$apiBase/v1/backups/stage-restore" -ContentType "application/json" -Body $restoreBody -TimeoutSec 90
+    $staged = Invoke-RestMethod -Method Post -Headers $controlHeaders -Uri "$apiBase/v1/backups/stage-restore" -ContentType "application/json" -Body $restoreBody -TimeoutSec 90
     if (-not $staged.restart_required -or $staged.backup.state -ne "restore_staged") {
         throw "Verified backup was not staged for restore"
     }
-    $status = Invoke-RestMethod -Uri "$apiBase/v1/status" -TimeoutSec 5
+    $status = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/status" -TimeoutSec 5
     if (-not $status.restore_pending) {
         throw "HomeServer status did not report the staged restore"
     }
 
     Stop-HomeServerProcess
     Start-HomeServerProcess
-    $status = Invoke-RestMethod -Uri "$apiBase/v1/status" -TimeoutSec 5
+    $status = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/status" -TimeoutSec 5
     if ($status.restore_pending -or $status.database -ne "ready") {
         throw "Staged restore did not apply cleanly after restart"
     }
-    $catalog = Invoke-RestMethod -Uri "$apiBase/v1/backups" -TimeoutSec 5
+    $catalog = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/backups" -TimeoutSec 5
     $restored = $catalog.backups | Where-Object { $_.backup_id -eq $manual.backup.backup_id } | Select-Object -First 1
     if (-not $restored -or $restored.state -ne "restored") {
         throw "Applied restore was not recorded in the restored database"
@@ -159,23 +160,24 @@ try {
     $env:MG_HOMESERVER_NAME = "CI Recovery HomeServer"
     Start-HomeServerProcess
 
-    $freshStatus = Invoke-RestMethod -Uri "$apiBase/v1/status" -TimeoutSec 5
+    $freshStatus = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/status" -TimeoutSec 5
     if ($freshStatus.server_name -ne "CI Recovery HomeServer" -or $freshStatus.database -ne "ready") {
         throw "Fresh HomeServer installation did not initialize correctly"
     }
-    $freshCatalog = Invoke-RestMethod -Uri "$apiBase/v1/backups" -TimeoutSec 5
+    $freshCatalog = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/backups" -TimeoutSec 5
     if (@($freshCatalog.backups).Count -ne 0) {
         throw "Fresh HomeServer catalog was not empty before recovery import"
     }
 
     $wrongImportHeaders = @{
+        "X-MG-Local-Client" = "microgifter-control-center-v1"
         "x-mg-recovery-passphrase" = ConvertTo-Base64Url "wrong recovery passphrase value"
     }
     $wrongImport = Invoke-WebRequest -SkipHttpErrorCheck -Method Post -Uri "$apiBase/v1/backups/import" -Headers $wrongImportHeaders -ContentType "application/vnd.microgifter.homeserver-backup" -InFile $exportedPackage -TimeoutSec 90
     if ($wrongImport.StatusCode -ne 422) {
         throw "Expected wrong import passphrase rejection, received HTTP $($wrongImport.StatusCode)"
     }
-    $freshCatalog = Invoke-RestMethod -Uri "$apiBase/v1/backups" -TimeoutSec 5
+    $freshCatalog = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/backups" -TimeoutSec 5
     if (@($freshCatalog.backups).Count -ne 0) {
         throw "Failed recovery import left a catalog record"
     }
@@ -185,6 +187,7 @@ try {
     }
 
     $importHeaders = @{
+        "X-MG-Local-Client" = "microgifter-control-center-v1"
         "x-mg-recovery-passphrase" = ConvertTo-Base64Url $recoveryPassphrase
     }
     $imported = Invoke-RestMethod -Method Post -Uri "$apiBase/v1/backups/import" -Headers $importHeaders -ContentType "application/vnd.microgifter.homeserver-backup" -InFile $exportedPackage -TimeoutSec 90
@@ -200,18 +203,18 @@ try {
         passphrase = $recoveryPassphrase
         confirmation = "RESTORE"
     } | ConvertTo-Json -Compress
-    $freshStaged = Invoke-RestMethod -Method Post -Uri "$apiBase/v1/backups/stage-restore" -ContentType "application/json" -Body $freshRestoreBody -TimeoutSec 90
+    $freshStaged = Invoke-RestMethod -Method Post -Headers $controlHeaders -Uri "$apiBase/v1/backups/stage-restore" -ContentType "application/json" -Body $freshRestoreBody -TimeoutSec 90
     if (-not $freshStaged.restart_required -or $freshStaged.backup.state -ne "restore_staged") {
         throw "Imported recovery package could not be staged on a fresh installation"
     }
 
     Stop-HomeServerProcess
     Start-HomeServerProcess
-    $freshStatus = Invoke-RestMethod -Uri "$apiBase/v1/status" -TimeoutSec 5
+    $freshStatus = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/status" -TimeoutSec 5
     if ($freshStatus.restore_pending -or $freshStatus.database -ne "ready") {
         throw "Fresh-install recovery did not apply cleanly"
     }
-    $freshCatalog = Invoke-RestMethod -Uri "$apiBase/v1/backups" -TimeoutSec 5
+    $freshCatalog = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/backups" -TimeoutSec 5
     $freshRestored = $freshCatalog.backups | Where-Object { $_.backup_id -eq $recovery.backup.backup_id } | Select-Object -First 1
     if (-not $freshRestored -or $freshRestored.state -ne "restored") {
         throw "Fresh-install recovery was not recorded in the restored database"

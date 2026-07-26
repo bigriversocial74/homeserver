@@ -6,12 +6,17 @@ param(
     [string]$UpdateInstallerPath,
 
     [Parameter(Mandatory = $true)]
-    [string]$SignerThumbprint
+    [string]$SignerThumbprint,
+
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [string]$ExpectedVersion
 )
 
 $ErrorActionPreference = "Stop"
 $serviceName = "MicrogifterHomeServer"
 $apiBase = "http://127.0.0.1:47831"
+$controlHeaders = @{ "X-MG-Local-Client" = "microgifter-control-center-v1" }
 $installer = (Resolve-Path $InstallerPath).Path
 $updateInstaller = (Resolve-Path $UpdateInstallerPath).Path
 $dataDirectory = Join-Path $env:ProgramData "Microgifter\HomeServer"
@@ -20,21 +25,41 @@ $stagingDirectory = Join-Path $dataDirectory "updates\staging"
 $rollbackRoot = Join-Path $dataDirectory "updates\rollback"
 $installedArchive = Join-Path $dataDirectory "updates\installed"
 $resultPath = Join-Path $dataDirectory "updates\last-update-result.json"
+$diagnosticDirectory = Join-Path $env:SystemRoot "Temp\Microgifter-HomeServer-Updater-Smoke"
 $uninstallerPath = $null
 $scriptExitCode = 0
 $currentUserTrustStores = @("Root", "TrustedPublisher")
 
 function Read-TrimmedText {
-    param([Parameter(Mandatory = $true)][string]$Path)
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [ValidateRange(1, 600)]
+        [int]$TimeoutSeconds = 30
+    )
 
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return ""
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $lastError = $null
+    do {
+        try {
+            if (Test-Path -LiteralPath $Path) {
+                $content = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+                if ($null -eq $content) {
+                    return ""
+                }
+                return $content.Trim()
+            }
+        }
+        catch {
+            $lastError = $_
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    if ($lastError) {
+        throw "Unable to read '$Path' after $TimeoutSeconds seconds: $($lastError.Exception.Message)"
     }
-    $content = Get-Content -LiteralPath $Path -Raw
-    if ($null -eq $content) {
-        return ""
-    }
-    return $content.Trim()
+    return ""
 }
 
 function Set-CurrentUserPublisherTrust {
@@ -62,23 +87,35 @@ function Remove-CurrentUserPublisherTrust {
     param([Parameter(Mandatory = $true)][string]$Thumbprint)
 
     foreach ($storeName in $currentUserTrustStores) {
-        $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-            $storeName,
-            [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
-        )
-        try {
-            $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-            $matches = $store.Certificates.Find(
-                [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
-                $Thumbprint,
-                $false
+        $removed = $false
+        $lastError = $null
+        for ($attempt = 0; $attempt -lt 20 -and -not $removed; $attempt++) {
+            $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+                $storeName,
+                [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
             )
-            foreach ($certificate in $matches) {
-                $store.Remove($certificate)
+            try {
+                $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+                $matches = $store.Certificates.Find(
+                    [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+                    $Thumbprint,
+                    $false
+                )
+                foreach ($certificate in $matches) {
+                    $store.Remove($certificate)
+                }
+                $removed = $true
+            }
+            catch {
+                $lastError = $_
+                Start-Sleep -Milliseconds 500
+            }
+            finally {
+                $store.Close()
             }
         }
-        finally {
-            $store.Close()
+        if (-not $removed -and $lastError) {
+            throw $lastError
         }
     }
 }
@@ -116,7 +153,7 @@ function Wait-ForHomeServerHealth {
             if ($service.Status -eq "Running") {
                 $health = Invoke-WebRequest -UseBasicParsing -Uri "$apiBase/healthz" -TimeoutSec 2
                 if ($health.StatusCode -eq 204) {
-                    $status = Invoke-RestMethod -Uri "$apiBase/v1/status" -TimeoutSec 3
+                    $status = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/status" -TimeoutSec 3
                     if ($status.version -eq $ExpectedVersion -and $status.state -eq "running") {
                         return $status
                     }
@@ -201,49 +238,127 @@ function Invoke-UpdatePlan {
         throw "Installed HomeServer updater helper is missing"
     }
 
+    New-Item -ItemType Directory -Force $diagnosticDirectory | Out-Null
     $diagnosticId = [guid]::NewGuid().ToString("N")
+    $taskName = "MicrogifterHomeServerUpdaterSmoke-$diagnosticId"
+    $taskDirectory = Join-Path $diagnosticDirectory $diagnosticId
     $updaterCopy = Join-Path $stagingDirectory "updater-smoke-$diagnosticId.exe"
-    $stdoutPath = Join-Path $stagingDirectory "updater-smoke-$diagnosticId.stdout.log"
-    $stderrPath = Join-Path $stagingDirectory "updater-smoke-$diagnosticId.stderr.log"
+    $taskConfigPath = Join-Path $taskDirectory "task-config.json"
+    $taskScriptPath = Join-Path $taskDirectory "run-updater.ps1"
+    $completionPath = Join-Path $taskDirectory "completion.json"
+    $stdoutPath = Join-Path $taskDirectory "updater.stdout.log"
+    $stderrPath = Join-Path $taskDirectory "updater.stderr.log"
+
+    New-Item -ItemType Directory -Force $taskDirectory | Out-Null
     Copy-Item $installedUpdater $updaterCopy -Force
     Remove-Item $resultPath -Force -ErrorAction SilentlyContinue
 
+    [ordered]@{
+        updater_path = $updaterCopy
+        plan_path = $Plan.PlanPath
+        result_path = $resultPath
+        stdout_path = $stdoutPath
+        stderr_path = $stderrPath
+        completion_path = $completionPath
+    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $taskConfigPath -Encoding UTF8
+
+    @'
+$ErrorActionPreference = "Stop"
+$config = Get-Content -LiteralPath (Join-Path $PSScriptRoot "task-config.json") -Raw | ConvertFrom-Json
+
+function Read-TaskText {
+    param([string]$Path)
+    for ($attempt = 0; $attempt -lt 120; $attempt++) {
+        try {
+            if (Test-Path -LiteralPath $Path) {
+                $value = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+                if ($null -eq $value) { return "" }
+                return $value.Trim()
+            }
+        }
+        catch {
+            Start-Sleep -Milliseconds 250
+            continue
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    return ""
+}
+
+$exitCode = 1
+$taskError = $null
+try {
+    $process = Start-Process -FilePath $config.updater_path -ArgumentList @("apply", $config.plan_path) -RedirectStandardOutput $config.stdout_path -RedirectStandardError $config.stderr_path -PassThru -Wait
+    $exitCode = $process.ExitCode
+}
+catch {
+    $taskError = $_.Exception.ToString()
+}
+
+$stdout = Read-TaskText -Path $config.stdout_path
+$stderr = Read-TaskText -Path $config.stderr_path
+$resultJson = Read-TaskText -Path $config.result_path
+[ordered]@{
+    exit_code = $exitCode
+    task_error = $taskError
+    stdout = $stdout
+    stderr = $stderr
+    result_json = $resultJson
+} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $config.completion_path -Encoding UTF8
+'@ | Set-Content -LiteralPath $taskScriptPath -Encoding UTF8
+
     try {
-        $process = Start-Process -FilePath $updaterCopy -ArgumentList @("apply", $Plan.PlanPath) -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru -Wait
-        $stdout = Read-TrimmedText -Path $stdoutPath
-        $stderr = Read-TrimmedText -Path $stderrPath
-        $resultJson = Read-TrimmedText -Path $resultPath
-
-        if ($stdout) {
-            Write-Host "HomeServer updater stdout:`n$stdout"
+        $taskTime = (Get-Date).AddMinutes(1).ToString("HH:mm")
+        $windowsPowerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+        $taskCommand = "`"$windowsPowerShell`" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$taskScriptPath`""
+        $createOutput = & "$env:SystemRoot\System32\schtasks.exe" /Create /TN $taskName /TR $taskCommand /SC ONCE /ST $taskTime /RU SYSTEM /RL HIGHEST /F 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to create LocalSystem updater task: $($createOutput.Trim())"
         }
-        if ($stderr) {
-            Write-Host "HomeServer updater stderr:`n$stderr"
-        }
-        if ($resultJson) {
-            Write-Host "HomeServer updater result:`n$resultJson"
+        $runOutput = & "$env:SystemRoot\System32\schtasks.exe" /Run /TN $taskName 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to start LocalSystem updater task: $($runOutput.Trim())"
         }
 
-        if ($process.ExitCode -ne 0) {
-            $detail = if ($resultJson) {
-                $result = $resultJson | ConvertFrom-Json
+        $completionJson = Read-TrimmedText -Path $completionPath -TimeoutSeconds 420
+        if (-not $completionJson) {
+            throw "LocalSystem updater task did not produce a completion record"
+        }
+        $completion = $completionJson | ConvertFrom-Json
+
+        if ($completion.stdout) {
+            Write-Host "HomeServer updater stdout:`n$($completion.stdout)"
+        }
+        if ($completion.stderr) {
+            Write-Host "HomeServer updater stderr:`n$($completion.stderr)"
+        }
+        if ($completion.result_json) {
+            Write-Host "HomeServer updater result:`n$($completion.result_json)"
+        }
+        if ($completion.task_error) {
+            throw "LocalSystem updater task failed to launch the helper: $($completion.task_error)"
+        }
+        if ([int]$completion.exit_code -ne 0) {
+            $detail = if ($completion.result_json) {
+                $result = $completion.result_json | ConvertFrom-Json
                 "state=$($result.state), failure_code=$($result.failure_code), message=$($result.message)"
             }
-            elseif ($stderr) {
-                $stderr
+            elseif ($completion.stderr) {
+                $completion.stderr
             }
             else {
                 "no updater result or stderr was produced"
             }
-            throw "HomeServer updater helper failed with exit code $($process.ExitCode): $detail"
+            throw "HomeServer updater helper failed with exit code $($completion.exit_code): $detail"
         }
-        if (-not $resultJson) {
+        if (-not $completion.result_json) {
             throw "HomeServer updater did not write an application result"
         }
-        $resultJson | ConvertFrom-Json
+        $completion.result_json | ConvertFrom-Json
     }
     finally {
-        Remove-Item $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+        & "$env:SystemRoot\System32\schtasks.exe" /Delete /TN $taskName /F 2>$null | Out-Null
+        Remove-Item $taskDirectory -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -270,7 +385,7 @@ try {
     if ($install.ExitCode -ne 0) {
         throw "HomeServer installer failed with exit code $($install.ExitCode)"
     }
-    $initialStatus = Wait-ForHomeServerHealth -ExpectedVersion "0.1.0"
+    $initialStatus = Wait-ForHomeServerHealth -ExpectedVersion $ExpectedVersion
     $currentVersion = $initialStatus.version
 
     $rollbackPlan = New-UpdatePlan -UpdateId "ci-rollback-$([guid]::NewGuid().ToString('N'))" -CurrentVersion $currentVersion -TargetVersion "9.9.9"
@@ -312,8 +427,14 @@ catch {
     if ($_.ScriptStackTrace) {
         Write-Host "Script stack:`n$($_.ScriptStackTrace)"
     }
-    if (Test-Path $resultPath) {
-        Write-Host "Last updater result:`n$(Get-Content $resultPath -Raw)"
+    try {
+        $lastResult = Read-TrimmedText -Path $resultPath -TimeoutSeconds 10
+        if ($lastResult) {
+            Write-Host "Last updater result:`n$lastResult"
+        }
+    }
+    catch {
+        Write-Host "Unable to read the last updater result: $($_.Exception.Message)"
     }
     $serviceQuery = & "$env:SystemRoot\System32\sc.exe" query $serviceName 2>&1 | Out-String
     Write-Host "Service query:`n$serviceQuery"
@@ -335,6 +456,9 @@ finally {
     }
     if (Test-Path $dataDirectory) {
         Remove-Item $dataDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $diagnosticDirectory) {
+        Remove-Item $diagnosticDirectory -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 

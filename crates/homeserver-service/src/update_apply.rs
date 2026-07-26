@@ -50,14 +50,23 @@ pub fn prepare_and_launch(
         record.state == microgifter_homeserver_core::UpdateState::Staged,
         "update is not staged for application"
     );
+    let canonical_staging = config
+        .update_staging_dir
+        .canonicalize()
+        .context("managed update staging directory is unavailable")?;
+    let canonical_installer = installer_path
+        .canonicalize()
+        .context("staged update installer is unavailable")?;
     ensure!(
-        installer_path.starts_with(&config.update_staging_dir),
+        canonical_installer.starts_with(&canonical_staging),
         "staged installer is outside managed update storage"
     );
-    verify_staged_installer(record, installer_path)?;
+    verify_staged_installer(record, &canonical_installer)?;
 
-    let current_exe =
-        std::env::current_exe().context("unable to resolve HomeServer service executable")?;
+    let current_exe = std::env::current_exe()
+        .context("unable to resolve HomeServer service executable")?
+        .canonicalize()
+        .context("unable to canonicalize HomeServer service executable")?;
     let resource_dir = current_exe
         .parent()
         .context("HomeServer service resource directory is unavailable")?;
@@ -67,11 +76,16 @@ pub fn prepare_and_launch(
     );
     let install_dir = resource_dir
         .parent()
+        .context("HomeServer installation directory is unavailable")?
+        .canonicalize()
         .context("HomeServer installation directory is unavailable")?;
-    let bundled_updater = resource_dir.join(UPDATER_RESOURCE_NAME);
+    let bundled_updater = resource_dir
+        .join(UPDATER_RESOURCE_NAME)
+        .canonicalize()
+        .context("HomeServer updater helper is unavailable")?;
     ensure!(
-        bundled_updater.is_file(),
-        "HomeServer updater helper is unavailable"
+        bundled_updater.starts_with(resource_dir) && bundled_updater.is_file(),
+        "HomeServer updater helper is outside the installed resource directory"
     );
 
     let run_id = Uuid::new_v4().simple().to_string();
@@ -90,7 +104,7 @@ pub fn prepare_and_launch(
         update_id: record.update_id.clone(),
         current_version: env!("CARGO_PKG_VERSION").to_owned(),
         target_version: record.version.clone(),
-        installer_path: installer_path.to_string_lossy().into_owned(),
+        installer_path: canonical_installer.to_string_lossy().into_owned(),
         installer_size_bytes: record.installer_size_bytes,
         installer_sha256: record.installer_sha256.clone(),
         authenticode_thumbprint: record.authenticode_thumbprint.clone(),
@@ -133,11 +147,28 @@ fn atomic_write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> 
         fs::create_dir_all(parent)?;
     }
     let temporary = path.with_extension("tmp");
+    let backup = path.with_extension("replace-backup");
     fs::write(&temporary, serde_json::to_vec_pretty(value)?)?;
-    if path.exists() {
-        fs::remove_file(path)?;
+    fs::File::options()
+        .write(true)
+        .open(&temporary)?
+        .sync_all()?;
+    if backup.exists() {
+        fs::remove_file(&backup)?;
     }
-    fs::rename(temporary, path)?;
+    if path.exists() {
+        fs::rename(path, &backup)?;
+    }
+    if let Err(error) = fs::rename(&temporary, path) {
+        if backup.exists() {
+            let _ = fs::rename(&backup, path);
+        }
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    if backup.exists() {
+        fs::remove_file(backup)?;
+    }
     Ok(())
 }
 

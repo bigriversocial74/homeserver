@@ -230,18 +230,42 @@ fn read_header(path: &Path) -> Result<ImportedHeader> {
 }
 
 fn move_replace(source: &Path, destination: &Path) -> Result<()> {
-    if destination.exists() {
-        fs::remove_file(destination)?;
+    let temporary = destination.with_extension("import-tmp");
+    let previous = destination.with_extension("replace-backup");
+    if temporary.exists() {
+        fs::remove_file(&temporary)?;
     }
-    match fs::rename(source, destination) {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            fs::copy(source, destination)?;
-            File::options().write(true).open(destination)?.sync_all()?;
-            fs::remove_file(source)?;
-            Ok(())
+    if previous.exists() {
+        if destination.exists() {
+            fs::remove_file(&previous)?;
+        } else {
+            fs::rename(&previous, destination)?;
         }
     }
+    match fs::rename(source, &temporary) {
+        Ok(()) => {}
+        Err(_) => {
+            fs::copy(source, &temporary)?;
+            File::options().write(true).open(&temporary)?.sync_all()?;
+        }
+    }
+    if destination.exists() {
+        fs::rename(destination, &previous)?;
+    }
+    if let Err(error) = fs::rename(&temporary, destination) {
+        if previous.exists() {
+            let _ = fs::rename(&previous, destination);
+        }
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    if previous.exists() {
+        fs::remove_file(previous)?;
+    }
+    if source.exists() {
+        fs::remove_file(source)?;
+    }
+    Ok(())
 }
 
 fn validate_sha256(value: &str, label: &str) -> Result<()> {
