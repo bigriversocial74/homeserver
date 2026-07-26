@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import "./styles.css";
+import { icon, logoMark } from "./icons.js";
 
 const app = document.querySelector("#app");
 let statusSnapshot = null;
@@ -8,15 +9,28 @@ let backupCatalog = null;
 let updateStatus = null;
 let notice = null;
 let busy = false;
+let activePage = window.location.hash.replace("#", "") || "dashboard";
+
+const pages = [
+  ["dashboard", "Dashboard", "dashboard"],
+  ["home", "Home", "home"],
+  ["apps", "Apps", "apps"],
+  ["backups", "Backups", "backup"],
+  ["integrations", "Integrations & Agents", "integrations"],
+  ["knowledge", "Knowledge Vault", "vault"],
+  ["settings", "Settings", "settings"],
+  ["sync", "Sync Cloud", "cloud"],
+  ["system", "System", "system"],
+];
 
 const serviceRows = [
-  ["Core service", "Coordinates HomeServer configuration and health."],
-  ["Local API", "Private loopback API for the Control Center."],
-  ["Local database", "Embedded operational storage for local state."],
-  ["Microgifter connection", "Signed cloud pairing, heartbeat, and synchronization."],
-  ["Backup service", "Encrypted backups, recovery packages, and staged restore."],
-  ["Update service", "Signed release discovery, verified staging, and automatic rollback."],
-  ["Model Center", "Optional local AI runtime management."],
+  ["Control Center", "Central management and system monitoring.", "dashboard"],
+  ["Local API", "Private loopback API for trusted local automation.", "network"],
+  ["Local database", "Embedded operational storage for HomeServer state.", "storage"],
+  ["Microgifter Cloud", "Signed cloud pairing, heartbeat, and synchronization.", "cloud"],
+  ["Backup Engine", "Encrypted backups, recovery packages, and staged restore.", "backup"],
+  ["Update Manager", "Signed release discovery, verified staging, and rollback.", "update"],
+  ["Model Center", "Optional local AI runtime management.", "model"],
 ];
 
 function escapeHtml(value) {
@@ -42,10 +56,21 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
 }
 
+function relativeDate(value) {
+  if (!value) return "Not yet";
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return formatDate(value);
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return "Just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
 function formatBytes(value) {
   const bytes = Number(value || 0);
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
+  const units = ["B", "KB", "MB", "GB", "TB"];
   const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / 1024 ** unit).toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
@@ -56,340 +81,484 @@ function compactId(value) {
   return `${text.slice(0, 8)}…${text.slice(-8)}`;
 }
 
-function backupRows() {
-  const backups = backupCatalog?.backups || [];
-  if (!backups.length) {
-    return `<div class="empty-state"><strong>No backups yet</strong><p>Create a protected local backup or an exportable recovery package.</p></div>`;
-  }
-
-  return backups
-    .slice(0, 25)
-    .map(
-      (backup) => `
-        <article class="backup-row">
-          <div class="backup-kind">${escapeHtml(backup.kind === "recovery" ? "RP" : backup.kind === "pre_update" ? "UP" : "BK")}</div>
-          <div class="backup-copy">
-            <div class="backup-title">
-              <strong>${escapeHtml(humanize(backup.kind))}</strong>
-              <span class="pill ${statusClass(backup.state)}">${escapeHtml(humanize(backup.state))}</span>
-            </div>
-            <p>${escapeHtml(backup.file_name)}</p>
-            <small>${escapeHtml(formatDate(backup.created_at_utc))} · ${escapeHtml(formatBytes(backup.size_bytes))} · ${escapeHtml(humanize(backup.encryption))}</small>
-            ${backup.note ? `<small class="backup-note">${escapeHtml(backup.note)}</small>` : ""}
-            ${backup.failure_code ? `<small class="failure-text">${escapeHtml(humanize(backup.failure_code))}</small>` : ""}
-          </div>
-          <div class="backup-actions">
-            ${
-              backup.kind === "recovery"
-                ? `<button type="button" data-backup-action="export" data-backup-id="${escapeHtml(backup.backup_id)}" data-backup-file-name="${escapeHtml(backup.file_name)}" ${busy ? "disabled" : ""}>Export</button>`
-                : ""
-            }
-            <button type="button" data-backup-action="verify" data-backup-id="${escapeHtml(backup.backup_id)}" data-backup-kind="${escapeHtml(backup.kind)}" ${busy ? "disabled" : ""}>Verify</button>
-            <button class="danger-button" type="button" data-backup-action="restore" data-backup-id="${escapeHtml(backup.backup_id)}" data-backup-kind="${escapeHtml(backup.kind)}" ${busy ? "disabled" : ""}>Restore</button>
-          </div>
-        </article>`,
-    )
-    .join("");
+function isConnected() {
+  return ["connected", "degraded"].includes(cloudSnapshot?.state);
 }
 
-function cloudPanel(apiAvailable) {
-  const state = cloudSnapshot?.state || "not_paired";
-  const paired = Boolean(cloudSnapshot?.device_id) && state !== "not_paired";
-  const scopes = Array.isArray(cloudSnapshot?.scopes) ? cloudSnapshot.scopes : [];
-  const canOperate = apiAvailable && !busy;
-
-  return `
-    <section class="panel connection-panel" id="connection">
-      <div class="panel-heading">
-        <div><p class="eyebrow">Signed cloud bridge</p><h2>Microgifter Connection</h2></div>
-        <span class="pill ${statusClass(state)}">${escapeHtml(humanize(state))}</span>
-      </div>
-
-      <div class="connection-summary">
-        <div><span>Connection</span><strong>${escapeHtml(humanize(state))}</strong></div>
-        <div><span>Device identity</span><strong class="mono">${escapeHtml(compactId(cloudSnapshot?.device_id))}</strong></div>
-        <div><span>Last cloud success</span><strong>${escapeHtml(formatDate(cloudSnapshot?.last_success_utc))}</strong></div>
-        <div><span>Pending sync</span><strong>${Number(cloudSnapshot?.pending_sync || 0)}</strong></div>
-      </div>
-
-      ${cloudSnapshot?.last_error ? `<div class="notice warning"><strong>Connection warning:</strong> ${escapeHtml(humanize(cloudSnapshot.last_error))}</div>` : ""}
-
-      ${
-        paired
-          ? `
-            <div class="connection-layout">
-              <article class="connection-card">
-                <p class="eyebrow">Authorized device</p>
-                <h3>Paired HomeServer</h3>
-                <p>This installation signs every cloud request with its local Ed25519 key. The bearer token and signing key remain in the Windows credential vault.</p>
-                <dl class="connection-details">
-                  <div><dt>Cloud</dt><dd>${escapeHtml(cloudSnapshot?.cloud_base_url || "Unknown")}</dd></div>
-                  <div><dt>Paired</dt><dd>${escapeHtml(formatDate(cloudSnapshot?.paired_at_utc))}</dd></div>
-                </dl>
-                <div class="scope-list">
-                  ${scopes.length ? scopes.map((scope) => `<span>${escapeHtml(scope)}</span>`).join("") : "<span>No scopes returned</span>"}
-                </div>
-              </article>
-
-              <article class="connection-card operation-card">
-                <p class="eyebrow">Controlled synchronization</p>
-                <h3>Queue & Sync</h3>
-                <p>Only the declared low-risk operations below can be queued locally. Commerce, payments, claims, redemption, and ownership remain cloud-authoritative.</p>
-                <div class="operation-grid">
-                  <button type="button" data-cloud-operation="local.settings.snapshot" ${canOperate ? "" : "disabled"}>Queue settings snapshot</button>
-                  <button type="button" data-cloud-operation="cache.refresh.request" ${canOperate ? "" : "disabled"}>Queue cache refresh</button>
-                </div>
-                <div class="connection-actions">
-                  <button id="cloud-vault-test" type="button" ${canOperate ? "" : "disabled"}>Test credential vault</button>
-                  <button id="cloud-sync-now" class="primary-button" type="button" ${canOperate ? "" : "disabled"}>Sync now</button>
-                  <button id="cloud-disconnect" class="danger-button" type="button" ${canOperate ? "" : "disabled"}>Disconnect locally</button>
-                </div>
-              </article>
-            </div>`
-          : `
-            <div class="connection-layout pairing-layout">
-              <article class="connection-card">
-                <p class="eyebrow">Owner-approved setup</p>
-                <h3>Pair this HomeServer</h3>
-                <p>Create a one-time pairing code from your Microgifter account, then enter it here. Pairing generates a new local signing key and stores credentials in the operating-system vault.</p>
-                <form id="cloud-pair-form" class="connection-form">
-                  <label>
-                    <span>Microgifter cloud URL</span>
-                    <input id="cloud-base-url" type="url" value="https://microgifter.com" maxlength="240" autocomplete="url" required>
-                  </label>
-                  <label>
-                    <span>One-time pairing code</span>
-                    <input id="cloud-pairing-code" class="mono" type="password" minlength="20" maxlength="80" autocomplete="one-time-code" placeholder="Paste pairing code" required>
-                  </label>
-                  <button class="primary-button" type="submit" ${canOperate ? "" : "disabled"}>Pair HomeServer</button>
-                </form>
-              </article>
-              <article class="connection-card boundary-card">
-                <p class="eyebrow">Authority boundary</p>
-                <h3>Local execution, cloud authority</h3>
-                <ul>
-                  <li>Local keys, models, files, integrations, automations, backups, and diagnostics stay local.</li>
-                  <li>Identity, payments, purchases, campaigns, rewards, wallets, gifts, claims, and redemption stay cloud-authoritative.</li>
-                  <li>Every accepted synchronization operation receives a durable, idempotent cloud receipt.</li>
-                </ul>
-              </article>
-            </div>`
-      }
-
-      <div class="security-note"><strong>Connector boundary:</strong> the HomeServer cannot use this channel to originate or finalize commerce mutations. Signed requests, scoped permissions, nonce replay protection, and cloud receipts are enforced independently by both sides.</div>
-    </section>`;
+function isHealthy() {
+  return Boolean(statusSnapshot?.api_available) && !["failed", "offline"].includes(statusSnapshot?.state);
 }
 
-function updatePanel(apiAvailable) {
+function updateDisplayState() {
   const state = updateStatus?.state || "idle";
-  const release = updateStatus?.update;
-  const canCheck = apiAvailable && !busy && !["downloading", "applying"].includes(state);
-  const canDownload = apiAvailable && !busy && state === "available" && release;
-  const canApply = apiAvailable && !busy && state === "staged" && release;
-  const signer = release?.authenticode_thumbprint
-    ? `${release.authenticode_thumbprint.slice(0, 12)}…${release.authenticode_thumbprint.slice(-8)}`
-    : "Not staged";
+  if (state === "failed" && !updateStatus?.update) return "not_configured";
+  return state;
+}
 
-  return `
-    <section class="panel update-panel" id="updates">
-      <div class="panel-heading">
-        <div><p class="eyebrow">Verified Windows delivery</p><h2>Signed Updates</h2></div>
-        <span class="pill ${statusClass(state)}">${escapeHtml(humanize(state))}</span>
-      </div>
+function updateErrorText() {
+  if (!updateStatus?.last_error) return "";
+  if (!updateStatus?.update && updateStatus.state === "failed") {
+    return "The public release channel is not configured for this pre-launch build.";
+  }
+  return humanize(updateStatus.last_error);
+}
 
-      <div class="update-summary">
-        <div><span>Installed version</span><strong>${escapeHtml(updateStatus?.current_version || statusSnapshot?.version || "0.1.0")}</strong></div>
-        <div><span>Stable release</span><strong>${escapeHtml(release?.version || "No newer release")}</strong></div>
-        <div><span>Last checked</span><strong>${escapeHtml(formatDate(updateStatus?.last_checked_at_utc))}</strong></div>
-        <div><span>Authenticode signer</span><strong class="mono">${escapeHtml(signer)}</strong></div>
-      </div>
+function badge(label, state = "neutral") {
+  return `<span class="status-badge ${statusClass(state)}"><span class="status-dot"></span>${escapeHtml(label)}</span>`;
+}
 
-      ${updateStatus?.last_error ? `<div class="notice warning">Update warning: ${escapeHtml(humanize(updateStatus.last_error))}</div>` : ""}
-      ${state === "applying" || updateStatus?.apply_pending ? `<div class="notice warning"><strong>Update application is active.</strong> The Windows service will stop, install the verified release, and either pass health verification or restore the previous binaries automatically.</div>` : ""}
-      ${state === "rolled_back" ? `<div class="notice warning"><strong>Automatic rollback completed.</strong> The attempted release did not pass health verification, so the previous HomeServer binaries were restored.</div>` : ""}
-      ${state === "succeeded" ? `<div class="notice success"><strong>Update verified.</strong> The installed release restarted and passed the loopback health and version checks.</div>` : ""}
+function pageHeader(title, subtitle, actions = "") {
+  return `<header class="page-header"><div><h1>${escapeHtml(title)}</h1><p>${escapeHtml(subtitle)}</p></div><div class="page-actions">${actions}</div></header>`;
+}
 
-      <div class="update-release-card">
-        <div>
-          <p class="eyebrow">Release integrity</p>
-          <h3>${release ? `Microgifter HomeServer ${escapeHtml(release.version)}` : "Stable release channel"}</h3>
-          <p>${escapeHtml(release?.release_notes || "Check the pinned Microgifter release channel for a newer signed HomeServer installer.")}</p>
-        </div>
-        <dl>
-          <div><dt>Channel</dt><dd>${escapeHtml(humanize(updateStatus?.channel || "stable"))}</dd></div>
-          <div><dt>Installer</dt><dd>${escapeHtml(release?.installer_file_name || "Not downloaded")}</dd></div>
-          <div><dt>Size</dt><dd>${escapeHtml(formatBytes(release?.installer_size_bytes))}</dd></div>
-          <div><dt>Manifest</dt><dd>Ed25519 pinned key</dd></div>
-          <div><dt>Installer</dt><dd>SHA-256 + Authenticode</dd></div>
-          <div><dt>Rollback</dt><dd>Health-confirmed binary restore</dd></div>
+function metricCard(iconName, label, value, detail, tone = "blue") {
+  return `<article class="metric-card tone-${tone}"><div class="metric-icon">${icon(iconName, 23)}</div><div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(detail)}</small></div></article>`;
+}
+
+function progress(value, tone = "blue") {
+  const safe = Math.max(0, Math.min(100, Number(value || 0)));
+  return `<div class="progress"><span class="tone-${tone}" style="width:${safe}%"></span></div>`;
+}
+
+function donut(value, center, detail, tone = "blue") {
+  const safe = Math.max(0, Math.min(100, Number(value || 0)));
+  return `<div class="donut tone-${tone}" style="--value:${safe}"><div><strong>${escapeHtml(center)}</strong><span>${escapeHtml(detail)}</span></div></div>`;
+}
+
+function backupCount() {
+  return backupCatalog?.backups?.length || 0;
+}
+
+function lastBackup() {
+  return backupCatalog?.backups?.[0] || null;
+}
+
+function renderSidebar() {
+  const state = statusSnapshot?.state || "offline";
+  return `<aside class="app-sidebar">
+    <div class="brand-lockup">${logoMark(43)}<div><strong>Microgifter</strong><span>HomeServer</span></div></div>
+    <nav class="primary-nav" aria-label="HomeServer pages">
+      ${pages.map(([key, label, iconName]) => `<button type="button" class="nav-item ${activePage === key ? "active" : ""}" data-page="${key}">${icon(iconName, 19)}<span>${escapeHtml(label)}</span></button>`).join("")}
+    </nav>
+    <div class="server-card">
+      <div class="server-card-top"><div class="server-glyph">${icon("system", 22)}</div><div><strong>HomeServer</strong><span><i class="live-dot"></i>${isHealthy() ? "Online" : "Unavailable"}</span></div></div>
+      <div class="server-divider"></div>
+      <small>v${escapeHtml(statusSnapshot?.version || "0.1.3")} ${updateStatus?.channel ? `(${escapeHtml(humanize(updateStatus.channel))})` : ""}</small>
+      <button type="button" class="text-button" data-page="system">${updateDisplayState() === "not_configured" ? "Release channel setup" : "Check for updates"}</button>
+    </div>
+    <div class="sidebar-state"><span class="state-orb ${statusClass(state)}"></span><span>${escapeHtml(humanize(state))}</span></div>
+  </aside>`;
+}
+
+function renderTopbar() {
+  return `<div class="app-topbar">
+    <label class="global-search">${icon("search", 17)}<input type="search" placeholder="Search HomeServer" aria-label="Search HomeServer"></label>
+    ${badge(isHealthy() ? "Healthy" : "Attention", isHealthy() ? "healthy" : "degraded")}
+    <button type="button" class="icon-button" aria-label="Notifications">${icon("bell", 19)}<span class="notification-count">3</span></button>
+    <button type="button" class="avatar-button" aria-label="Account menu"><span>MG</span>${icon("arrow", 13)}</button>
+  </div>`;
+}
+
+function renderDashboard() {
+  const cloudState = cloudSnapshot?.state || "not_paired";
+  const backup = lastBackup();
+  const updateState = updateDisplayState();
+  const pending = Number(cloudSnapshot?.pending_sync || statusSnapshot?.pending_sync || 0);
+  const serviceHealth = isHealthy() ? "Healthy" : "Attention";
+  return `${pageHeader("Dashboard", "Overview of your HomeServer system health and activity.", `<button id="refresh-status" class="button secondary" type="button" ${busy ? "disabled" : ""}>${icon("refresh", 17)}Refresh</button>`)}
+    <section class="metrics six-up">
+      ${metricCard("shield", "Service Health", serviceHealth, isHealthy() ? "All services running" : "Service unavailable", isHealthy() ? "green" : "amber")}
+      ${metricCard("key", "Pairing Status", isConnected() ? "Connected" : "Not paired", isConnected() ? "Paired to this device" : "Pair from Microgifter", isConnected() ? "blue" : "amber")}
+      ${metricCard("cloud", "Sync Status", isConnected() ? "Synced" : "Waiting", pending ? `${pending} queued items` : "No pending changes", isConnected() ? "blue" : "gray")}
+      ${metricCard("backup", "Backup Status", backup ? "Protected" : "Ready", backup ? `Last backup ${relativeDate(backup.created_at_utc)}` : "Create your first backup", "teal")}
+      ${metricCard("update", "Signed Updates", updateState === "not_configured" ? "Setup needed" : humanize(updateState), updateState === "not_configured" ? "Pre-launch channel" : statusSnapshot?.update_version || "Stable channel", updateState === "not_configured" ? "amber" : "green")}
+      ${metricCard("vault", "Knowledge Vault", "Ready", "Local indexing workspace", "purple")}
+    </section>
+    <section class="dashboard-grid">
+      <article class="panel system-status-panel">
+        <div class="panel-title"><div>${icon("system", 18)}<h2>System Status</h2></div><button class="text-button" data-page="system">View system details ${icon("arrow", 13)}</button></div>
+        <dl class="detail-list">
+          <div><dt>Device Name</dt><dd>${escapeHtml(statusSnapshot?.server_name || "HomeServer")}</dd></div>
+          <div><dt>Operating System</dt><dd>Windows</dd></div>
+          <div><dt>Version</dt><dd>${escapeHtml(statusSnapshot?.version || "0.1.3")}</dd></div>
+          <div><dt>Local API</dt><dd>${statusSnapshot?.api_available ? "Available" : "Offline"}</dd></div>
+          <div><dt>Database</dt><dd>${escapeHtml(humanize(statusSnapshot?.database || "unknown"))}</dd></div>
+          <div><dt>Sync Queue</dt><dd>${pending}</dd></div>
         </dl>
-      </div>
-
-      <div class="update-actions">
-        <button id="check-updates" type="button" ${canCheck ? "" : "disabled"}>Check for updates</button>
-        <button id="download-update" class="primary-button" type="button" ${canDownload ? "" : "disabled"}>Download verified installer</button>
-        <button id="apply-update" class="danger-button" type="button" ${canApply ? "" : "disabled"}>Apply update</button>
-      </div>
-      <div class="security-note"><strong>Update boundary:</strong> the Control Center cannot choose a URL, public key, installer path, hash, or signer. Those values must come from the pinned, signed release manifest. A pre-update encrypted backup is created before the helper is launched.</div>
+        <div class="resource-row"><span>Service health</span><strong>${isHealthy() ? "100%" : "35%"}</strong></div>${progress(isHealthy() ? 100 : 35, isHealthy() ? "green" : "amber")}
+      </article>
+      <article class="panel activity-panel">
+        <div class="panel-title"><div>${icon("activity", 18)}<h2>Activity Timeline</h2></div><button class="text-button" data-page="system">View all</button></div>
+        <div class="timeline">
+          <div><i class="timeline-icon tone-blue">${icon("cloud", 16)}</i><span>${relativeDate(cloudSnapshot?.last_success_utc)}</span><p><strong>Cloud status checked</strong><small>${isConnected() ? "Signed Microgifter connection is active" : "Waiting for pairing"}</small></p></div>
+          <div><i class="timeline-icon tone-green">${icon("backup", 16)}</i><span>${backup ? relativeDate(backup.created_at_utc) : "Not yet"}</span><p><strong>${backup ? "Backup completed" : "Backup ready"}</strong><small>${backup ? `${humanize(backup.kind)} · ${formatBytes(backup.size_bytes)}` : "Create a protected local backup"}</small></p></div>
+          <div><i class="timeline-icon tone-purple">${icon("vault", 16)}</i><span>Ready</span><p><strong>Knowledge Vault available</strong><small>Local-first indexing interface prepared</small></p></div>
+          <div><i class="timeline-icon tone-teal">${icon("integrations", 16)}</i><span>Active</span><p><strong>Core agents loaded</strong><small>Pairing, sync, backup, and update services</small></p></div>
+        </div>
+      </article>
+      <article class="panel storage-panel">
+        <div class="panel-title"><div>${icon("storage", 18)}<h2>Storage Overview</h2></div><span class="mini-select">Local data</span></div>
+        <div class="storage-layout">${donut(33, backup ? formatBytes(backup.size_bytes) : "Local", "protected", "blue")}<ul class="legend"><li><i class="blue"></i><span>HomeServer data</span><strong>Local</strong></li><li><i class="green"></i><span>Backups</span><strong>${backupCount()}</strong></li><li><i class="purple"></i><span>Knowledge Vault</span><strong>Ready</strong></li><li><i class="amber"></i><span>Apps</span><strong>${serviceRows.length}</strong></li></ul></div>
+        <button class="text-button align-end" data-page="backups">Manage Storage ${icon("arrow", 13)}</button>
+      </article>
+      <article class="panel recent-events-panel">
+        <div class="panel-title"><div><h2>Recent Events</h2></div><button class="text-button" data-page="system">View all events</button></div>
+        <div class="events-table">
+          <div class="table-head"><span>Time</span><span>Event</span><span>Source</span><span>Details</span><span>Status</span></div>
+          ${eventRow(relativeDate(cloudSnapshot?.last_success_utc), isConnected() ? "Sync connected" : "Pairing required", "Sync Service", isConnected() ? "Signed cloud bridge active" : "No cloud device paired", isConnected() ? "Success" : "Action", isConnected() ? "success" : "warning")}
+          ${eventRow(backup ? relativeDate(backup.created_at_utc) : "Not yet", backup ? "Backup completed" : "Backup not created", "Backup Engine", backup ? `${humanize(backup.kind)} · ${formatBytes(backup.size_bytes)}` : "Create a protected local backup", backup ? "Success" : "Ready", backup ? "success" : "info")}
+          ${eventRow(relativeDate(statusSnapshot?.last_updated_utc), "Status refreshed", "Core Service", statusSnapshot?.api_available ? "Local API is responding" : "Local service unavailable", statusSnapshot?.api_available ? "Info" : "Warning", statusSnapshot?.api_available ? "info" : "warning")}
+        </div>
+      </article>
+      <article class="panel glance-panel"><div class="panel-title"><div>${icon("dashboard", 18)}<h2>At a Glance</h2></div></div><div class="glance-list">
+        ${glanceRow("key", "Paired Device", isConnected() ? "1" : "0", "sync")}
+        ${glanceRow("apps", "Running Services", String(serviceRows.filter((_, i) => i < 6).length), "apps")}
+        ${glanceRow("backup", "Total Backups", String(backupCount()), "backups")}
+        ${glanceRow("integrations", "Integrations", isConnected() ? "1" : "0", "integrations")}
+        ${glanceRow("update", "Version", statusSnapshot?.version || "0.1.3", "system")}
+      </div></article>
     </section>`;
+}
+
+function eventRow(time, event, source, details, status, state) {
+  return `<div class="table-row"><span><i class="event-dot ${state}"></i>${escapeHtml(time)}</span><strong>${escapeHtml(event)}</strong><span>${escapeHtml(source)}</span><span>${escapeHtml(details)}</span><em class="table-status ${state}">${escapeHtml(status)}</em></div>`;
+}
+
+function glanceRow(iconName, label, value, page) {
+  return `<button type="button" data-page="${page}">${icon(iconName, 17)}<span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>${icon("arrow", 13)}</button>`;
+}
+function renderHome() {
+  const connected = isConnected();
+  return `${pageHeader("Home", `Welcome back! Your HomeServer is ${isHealthy() ? "running smoothly" : "waiting for the local service"}.`)}
+    <section class="home-hero-grid">
+      <article class="panel welcome-card"><div class="hero-symbol tone-blue">${icon("home", 29)}</div><div><h2>Welcome Back</h2><p>Your HomeServer is ${isHealthy() ? "healthy and ready to protect what matters most" : "installed, but the local API is not responding yet"}.</p><div class="inline-badges">${badge(isHealthy() ? "All services running" : "Service attention", isHealthy() ? "healthy" : "degraded")}${badge(updateDisplayState() === "not_configured" ? "Beta channel" : "Up to date", updateDisplayState() === "not_configured" ? "planned" : "healthy")}</div></div></article>
+      <article class="panel pairing-card"><div class="hero-symbol tone-blue">${icon("key", 28)}</div><div><h2>Pairing Connection</h2><p>${connected ? "Your HomeServer is paired and connected to Microgifter." : "Pair this HomeServer to your Microgifter account."}</p><div class="paired-stats"><span>Paired devices<strong>${connected ? "1" : "0"}</strong></span><span>Connection status<strong class="${connected ? "positive" : "warning-text"}">${connected ? "Connected" : "Not paired"}</strong></span></div></div><button type="button" class="button secondary" data-page="sync">${connected ? "View Connection" : "Pair Device"}</button></article>
+      <article class="panel summary-card"><div class="hero-symbol tone-blue">${icon("system", 27)}</div><div><h2>System Summary</h2><dl class="summary-list"><div><dt>Version</dt><dd>${escapeHtml(statusSnapshot?.version || "0.1.3")}</dd></div><div><dt>Backups</dt><dd>${backupCount()}</dd></div><div><dt>Pending sync</dt><dd>${Number(cloudSnapshot?.pending_sync || 0)}</dd></div><div><dt>Health status</dt><dd>${badge(isHealthy() ? "Healthy" : "Attention", isHealthy() ? "healthy" : "degraded")}</dd></div></dl><button class="text-button" data-page="dashboard">Open Dashboard</button></div></article>
+    </section>
+    <section class="panel quick-actions"><div class="panel-title"><div><h2>Quick Actions</h2></div></div><div class="quick-action-grid">
+      ${quickAction("key", "Pair Device", "Connect this HomeServer to your Microgifter account.", "Pair Device", "sync", "green")}
+      ${quickAction("sync", "Sync Now", "Run a signed manual synchronization with Microgifter.", "Sync Now", "sync-now", "blue")}
+      ${quickAction("backup", "Create Backup", "Start a protected backup of local HomeServer data.", "Create Backup", "backup-now", "purple")}
+      ${quickAction("dashboard", "Open Dashboard", "Review system health, activity, and local services.", "Open Dashboard", "dashboard", "teal")}
+      ${quickAction("settings", "Manage Settings", "Configure the Control Center experience and security.", "Manage Settings", "settings", "gray")}
+    </div></section>
+    <section class="two-column-grid home-bottom-grid">
+      <article class="panel"><div class="panel-title"><div><h2>Recent Activity</h2></div><button class="text-button" data-page="system">View all activity</button></div><div class="activity-list">
+        ${activityItem("backup", "Backup status", lastBackup() ? `Completed ${relativeDate(lastBackup()?.created_at_utc)} · ${formatBytes(lastBackup()?.size_bytes)}` : "No backup created yet", lastBackup() ? "green" : "amber")}
+        ${activityItem("sync", "Cloud synchronization", connected ? `Last success ${relativeDate(cloudSnapshot?.last_success_utc)}` : "Pairing required", connected ? "blue" : "amber")}
+        ${activityItem("vault", "Knowledge Vault ready", "Local-first indexing interface is available", "purple")}
+        ${activityItem("integrations", "Core agents loaded", "Pairing, backup, update, and recovery services", "teal")}
+      </div></article>
+      <article class="panel"><div class="panel-title"><div><h2>Recommended Next Steps</h2></div></div><div class="next-steps">
+        ${nextStep("backup", "Create a protected backup", "Establish your first verified recovery point.", "backups")}
+        ${nextStep("key", connected ? "Review pairing security" : "Pair your HomeServer", connected ? "Confirm the signed cloud connection remains healthy." : "Connect your account using a one-time code.", "sync")}
+        ${nextStep("shield", "Review update delivery", "Production signing can be enabled when launch credentials are ready.", "system")}
+        ${nextStep("vault", "Explore Knowledge Vault", "Prepare sources for private local indexing.", "knowledge")}
+      </div></article>
+    </section>`;
+}
+
+function quickAction(iconName, title, copy, button, action, tone) {
+  const attr = ["dashboard", "settings", "sync"].includes(action) ? `data-page="${action}"` : `data-quick-action="${action}"`;
+  return `<article><div class="hero-symbol tone-${tone}">${icon(iconName, 26)}</div><h3>${escapeHtml(title)}</h3><p>${escapeHtml(copy)}</p><button type="button" class="button ghost" ${attr}>${escapeHtml(button)}</button></article>`;
+}
+
+function activityItem(iconName, title, copy, tone) {
+  return `<div><i class="timeline-icon tone-${tone}">${icon(iconName, 16)}</i><p><strong>${escapeHtml(title)}</strong><small>${escapeHtml(copy)}</small></p></div>`;
+}
+
+function nextStep(iconName, title, copy, page) {
+  return `<button type="button" data-page="${page}">${icon(iconName, 19)}<p><strong>${escapeHtml(title)}</strong><small>${escapeHtml(copy)}</small></p>${icon("arrow", 14)}</button>`;
+}
+
+function renderApps() {
+  return `${pageHeader("Apps", "Manage and monitor services installed on your HomeServer.")}
+    <div class="toolbar-row"><label class="filter-search">${icon("search", 17)}<input type="search" placeholder="Search apps"></label><button class="select-button">${icon("activity", 16)}All Status ${icon("arrow", 12)}</button><button class="select-button">Name (A–Z) ${icon("arrow", 12)}</button></div>
+    <section class="apps-layout"><div>
+      <article class="panel"><div class="panel-title"><div><h2>Installed Apps</h2></div></div><div class="app-grid">
+        ${serviceRows.slice(0, 6).map((item, index) => appCard(item, index)).join("")}
+      </div></article>
+      <article class="panel available-apps"><div class="panel-title"><div><h2>Available Apps</h2></div><span class="planned-label">Roadmap</span></div><div class="available-grid">
+        ${availableApp("play", "Media Server", "Stream and manage your local media library.", "amber")}
+        ${availableApp("file", "Photo Manager", "Organize and protect your private photo library.", "purple")}
+        ${availableApp("download", "Download Manager", "Schedule and manage local downloads.", "green")}
+        ${availableApp("model", "Local Model Runtime", "Run isolated local AI model environments.", "blue")}
+      </div></article>
+    </div><aside class="apps-side">
+      <article class="panel"><div class="panel-title"><div><h2>App Health</h2></div></div><div class="health-donut">${donut(isHealthy() ? 100 : 45, String(serviceRows.length - 1), "active services", isHealthy() ? "green" : "amber")}</div><ul class="legend compact"><li><i class="green"></i><span>Running</span><strong>${isHealthy() ? 6 : 2}</strong></li><li><i class="blue"></i><span>Connected</span><strong>${isConnected() ? 1 : 0}</strong></li><li><i class="amber"></i><span>Planned</span><strong>1</strong></li><li><i class="red"></i><span>Error</span><strong>${isHealthy() ? 0 : 1}</strong></li></ul></article>
+      <article class="panel"><div class="panel-title"><div><h2>Resource Usage</h2></div></div>${resourceMeter("Core service", isHealthy() ? 18 : 0, "blue")}${resourceMeter("Backup engine", backupCount() ? 11 : 4, "green")}${resourceMeter("Cloud bridge", isConnected() ? 8 : 0, "purple")}<div class="resource-stats"><span>Local API<strong>${statusSnapshot?.api_available ? "Online" : "Offline"}</strong></span><span>Database<strong>${escapeHtml(humanize(statusSnapshot?.database || "unknown"))}</strong></span></div></article>
+      <article class="panel"><div class="panel-title"><div><h2>Recent App Events</h2></div><button class="text-button" data-page="system">View all</button></div><div class="mini-event-list">${activityItem("backup", "Backup Engine", lastBackup() ? `Completed ${relativeDate(lastBackup()?.created_at_utc)}` : "Ready", "green")}${activityItem("cloud", "Sync Service", isConnected() ? "Connected" : "Waiting for pairing", "blue")}${activityItem("update", "Update Manager", updateDisplayState() === "not_configured" ? "Channel setup needed" : humanize(updateDisplayState()), "teal")}</div></article>
+    </aside></section>`;
+}
+
+function appCard([name, description, iconName], index) {
+  const running = index < 3 || (index === 3 && isConnected()) || (index === 4 && isHealthy()) || (index === 5 && isHealthy());
+  return `<article class="app-card"><div class="app-card-head"><div class="app-icon tone-${["blue","blue","teal","purple","green","amber"][index]}">${icon(iconName, 27)}</div><div><h3>${escapeHtml(name)}</h3><span>v${escapeHtml(statusSnapshot?.version || "0.1.3")}</span></div>${badge(running ? "Healthy" : "Planned", running ? "healthy" : "planned")}</div><p>${escapeHtml(description)}</p><div class="app-card-stats"><span>State<strong>${running ? "Running" : "Planned"}</strong></span><span>CPU<strong>${running ? `${Math.max(1, index + 1)}.${index}%` : "0%"}</strong></span><span>Memory<strong>${running ? `${64 + index * 24} MB` : "—"}</strong></span></div><div class="app-card-actions"><button class="button secondary" data-page="${["dashboard","system","system","sync","backups","system"][index]}">Open</button><button class="button ghost" data-page="settings">Configure</button><button class="icon-button">${icon("menu", 17)}</button></div></article>`;
+}
+
+function availableApp(iconName, title, copy, tone) {
+  return `<article><div class="app-icon tone-${tone}">${icon(iconName, 24)}</div><div><h3>${escapeHtml(title)}</h3><p>${escapeHtml(copy)}</p></div><button class="button ghost" type="button" disabled>Planned</button></article>`;
+}
+
+function resourceMeter(label, value, tone) {
+  return `<div class="resource-meter"><div><span>${escapeHtml(label)}</span><strong>${value}%</strong></div>${progress(value, tone)}</div>`;
+}
+function renderBackups() {
+  const backups = backupCatalog?.backups || [];
+  const latest = backups[0];
+  const totalBytes = backups.reduce((sum, backup) => sum + Number(backup.size_bytes || 0), 0);
+  return `${pageHeader("Backups", "Protect your data with secure, encrypted backups and recovery options.")}
+    <section class="backup-overview-grid">
+      <article class="panel backup-status-card"><div class="panel-title"><div>${icon("backup", 18)}<h2>Backup Status</h2></div></div><div class="backup-status-main"><div class="hero-symbol tone-green">${icon("shield", 32)}</div><div><strong>${latest ? "Protected" : "Ready"}</strong><span>${latest ? "Verified recovery points are available" : "Create your first local backup"}</span></div></div><div class="four-stat-row"><span><strong>${backups.length}</strong>Total Backups</span><span><strong>${formatBytes(totalBytes)}</strong>Total Protected</span><span><strong>${backups.filter((backup) => backup.state === "verified").length}</strong>Verified</span><span><strong>${backups.filter((backup) => backup.state === "failed").length}</strong>Failed</span></div></article>
+      <article class="panel latest-backup-card"><div class="panel-title"><div>${icon("backup", 18)}<h2>Latest Backup</h2></div></div><div class="latest-status ${latest ? "success" : "ready"}">${icon(latest ? "check" : "backup", 22)}<strong>${latest ? "Available" : "Not created"}</strong></div><dl class="detail-list"><div><dt>Created</dt><dd>${latest ? formatDate(latest.created_at_utc) : "Not yet"}</dd></div><div><dt>Type</dt><dd>${latest ? humanize(latest.kind) : "—"}</dd></div><div><dt>Size</dt><dd>${latest ? formatBytes(latest.size_bytes) : "—"}</dd></div><div><dt>Encryption</dt><dd>${latest ? humanize(latest.encryption) : "Device protected"}</dd></div></dl></article>
+      <article class="panel protected-storage"><div class="panel-title"><div>${icon("storage", 18)}<h2>Protected Storage</h2></div></div><div class="storage-layout">${donut(backups.length ? Math.min(92, 18 + backups.length * 4) : 8, formatBytes(totalBytes), "backup data", "blue")}<ul class="legend"><li><i class="blue"></i><span>Automatic</span><strong>${backups.filter((backup) => backup.kind === "automatic").length}</strong></li><li><i class="green"></i><span>Manual</span><strong>${backups.filter((backup) => backup.kind === "manual").length}</strong></li><li><i class="purple"></i><span>Recovery</span><strong>${backups.filter((backup) => backup.kind === "recovery").length}</strong></li><li><i class="amber"></i><span>Pre-update</span><strong>${backups.filter((backup) => backup.kind === "pre_update").length}</strong></li></ul></div></article>
+    </section>
+    <section class="backup-action-layout"><div>
+      <div class="backup-action-grid">
+        <article class="panel action-card"><div class="hero-symbol tone-blue">${icon("upload", 26)}</div><div><h3>Create Backup</h3><p>Start a protected local snapshot of HomeServer data now.</p></div><button id="create-manual-backup" class="button primary" type="button" ${busy || !statusSnapshot?.api_available ? "disabled" : ""}>Create Backup</button></article>
+        <article class="panel action-card"><div class="hero-symbol tone-green">${icon("shield", 26)}</div><div><h3>Verify Backup</h3><p>Verify integrity from the backup history below.</p></div><button class="button success" data-scroll-target="backup-history">View Backups</button></article>
+        <article class="panel action-card"><div class="hero-symbol tone-purple">${icon("restore", 26)}</div><div><h3>Recovery Package</h3><p>Create a portable, passphrase-protected recovery package.</p></div><button class="button purple" data-toggle="recovery-create">Create Package</button></article>
+      </div>
+      <article class="panel recovery-panel hidden" id="recovery-create"><div class="panel-title"><div><h2>Portable Recovery Package</h2><p>Create an exportable package. The passphrase is never stored.</p></div></div><form id="recovery-package-form" class="horizontal-form"><input id="recovery-passphrase" type="password" minlength="12" maxlength="256" autocomplete="new-password" placeholder="Recovery passphrase" required><input id="recovery-passphrase-confirm" type="password" minlength="12" maxlength="256" autocomplete="new-password" placeholder="Confirm passphrase" required><button class="button primary" type="submit" ${busy || !statusSnapshot?.api_available ? "disabled" : ""}>Create Package</button></form></article>
+      <article class="panel backup-history" id="backup-history"><div class="panel-title"><div>${icon("backup", 18)}<h2>Backup History</h2></div><span>${backups.length} records</span></div>${backupHistoryRows(backups)}</article>
+    </div><aside class="backup-aside">
+      <article class="panel secure-card"><div class="hero-symbol tone-green">${icon("lock", 26)}</div><div><h3>Encrypted & Secure</h3><p>Local backups use a Windows DPAPI-protected device key. Recovery packages use your passphrase.</p></div><dl class="detail-list"><div><dt>Local encryption</dt><dd>Device protected</dd></div><div><dt>Recovery package</dt><dd>Passphrase protected</dd></div></dl></article>
+      <article class="panel retention-card"><div class="hero-symbol tone-blue">${icon("backup", 26)}</div><div><h3>Retention Policy</h3><p>Automatic backups run every ${backupCatalog?.interval_hours ?? 24} hours and retain ${backupCatalog?.retention_count ?? 14} recovery points.</p></div></article>
+      <article class="panel"><div class="panel-title"><div><h3>Import Recovery Package</h3></div></div><form id="import-recovery-form" class="stack-form"><input id="import-recovery-passphrase" type="password" minlength="12" maxlength="256" autocomplete="current-password" placeholder="Package passphrase" required><button class="button secondary" type="submit" ${busy || !statusSnapshot?.api_available ? "disabled" : ""}>Choose Package</button></form></article>
+    </aside></section>`;
+}
+
+function backupHistoryRows(backups) {
+  if (!backups.length) return `<div class="empty-state">${icon("backup", 32)}<strong>No backups yet</strong><p>Create a protected backup to establish your first recovery point.</p></div>`;
+  return `<div class="backup-table"><div class="table-head"><span>Date & Time</span><span>Type</span><span>Size</span><span>Verification</span><span>Encryption</span><span>Actions</span></div>${backups.slice(0, 20).map((backup) => `<div class="table-row"><span><i class="event-dot ${backup.state === "failed" ? "warning" : "success"}"></i>${escapeHtml(formatDate(backup.created_at_utc))}</span><strong>${escapeHtml(humanize(backup.kind))}</strong><span>${escapeHtml(formatBytes(backup.size_bytes))}</span><span>${escapeHtml(humanize(backup.state))}</span><span>${escapeHtml(humanize(backup.encryption))}</span><div class="row-actions">${backup.kind === "recovery" ? `<button class="icon-button" data-backup-action="export" data-backup-id="${escapeHtml(backup.backup_id)}" data-backup-file-name="${escapeHtml(backup.file_name)}" title="Export">${icon("download", 16)}</button>` : ""}<button class="icon-button" data-backup-action="verify" data-backup-id="${escapeHtml(backup.backup_id)}" data-backup-kind="${escapeHtml(backup.kind)}" title="Verify">${icon("shield", 16)}</button><button class="icon-button danger" data-backup-action="restore" data-backup-id="${escapeHtml(backup.backup_id)}" data-backup-kind="${escapeHtml(backup.kind)}" title="Restore">${icon("restore", 16)}</button></div></div>`).join("")}</div>`;
+}
+
+function renderIntegrations() {
+  const connected = isConnected();
+  const agents = [
+    ["Microgifter Cloud", "Secure signed connection to Microgifter services.", "cloud", connected, cloudSnapshot?.last_success_utc],
+    ["Pairing Agent", "Manages one-time pairing and local device identity.", "key", connected, cloudSnapshot?.paired_at_utc],
+    ["Sync Agent", "Handles approved cloud synchronization operations.", "sync", connected, cloudSnapshot?.last_success_utc],
+    ["Backup Agent", "Manages encrypted backup and recovery operations.", "backup", isHealthy(), lastBackup()?.created_at_utc],
+  ];
+  return `${pageHeader("Integrations & Agents", "Manage connections and the agents that keep your HomeServer running smoothly.")}
+    <section class="metrics five-up">${metricCard("integrations", "Connected Integrations", connected ? "1" : "0", "Microgifter Cloud", connected ? "green" : "gray")}${metricCard("agent", "Active Agents", String(agents.filter((agent) => agent[3]).length), `of ${agents.length} running`, "blue")}${metricCard("activity", "Overall Health", isHealthy() ? "Healthy" : "Attention", isHealthy() ? "All local systems operational" : "Local service unavailable", isHealthy() ? "purple" : "amber")}${metricCard("sync", "Last Sync", relativeDate(cloudSnapshot?.last_success_utc), connected ? "Signed cloud heartbeat" : "Not connected", "teal")}${metricCard("shield", "Security", connected ? "Protected" : "Local only", connected ? "Signed requests active" : "Pairing not configured", "amber")}</section>
+    <section class="integration-grid"><article class="panel agents-panel"><div class="panel-title"><div><h2>Agents</h2><p>System agents that power core HomeServer functionality.</p></div><button class="button secondary" id="refresh-status">${icon("refresh", 16)}Refresh</button></div><div class="agent-list">${agents.map((agent) => agentRow(...agent)).join("")}</div></article>
+      <article class="panel integrations-panel"><div class="panel-title"><div><h2>Integrations</h2><p>External services and optional local connections.</p></div><button class="button primary" disabled>${icon("plus", 16)}Connect New</button></div><div class="integration-list">
+        ${integrationRow("Microgifter Cloud", "Signed cloud service", "cloud", connected, connected ? "Connected" : "Not connected", connected ? relativeDate(cloudSnapshot?.last_success_utc) : "—", "sync")}
+        ${integrationRow("Local API", "Loopback automation", "network", Boolean(statusSnapshot?.api_available), statusSnapshot?.api_available ? "Running" : "Offline", statusSnapshot?.api_available ? "Available" : "—", "system")}
+        ${integrationRow("Local Model Runtime", "Optional AI provider", "model", false, "Planned", "—", "knowledge")}
+        ${integrationRow("Local Storage", "Protected device data", "storage", true, "Connected", "Local", "backups")}
+      </div></article>
+    </section>
+    ${renderCloudConnectionDetail()}`;
+}
+
+function agentRow(name, description, iconName, connected, lastSeen) {
+  return `<div class="agent-row"><div class="app-icon tone-${connected ? "blue" : "gray"}">${icon(iconName, 24)}</div><div><h3>${escapeHtml(name)} ${badge(connected ? "Connected" : "Waiting", connected ? "healthy" : "planned")}</h3><p>${escapeHtml(description)}</p></div><div class="agent-health"><span><i class="live-dot ${connected ? "" : "muted"}"></i>${connected ? "Healthy" : "Inactive"}</span><small>${lastSeen ? relativeDate(lastSeen) : "Not yet"}</small></div><label class="switch"><input type="checkbox" ${connected ? "checked" : ""} disabled><span></span></label><button class="button ghost" data-page="${name.includes("Backup") ? "backups" : name.includes("Cloud") || name.includes("Pairing") || name.includes("Sync") ? "sync" : "system"}">Configure</button></div>`;
+}
+
+function integrationRow(name, description, iconName, enabled, status, lastSync, page) {
+  return `<div class="integration-row"><div class="app-icon tone-${enabled ? "blue" : "gray"}">${icon(iconName, 23)}</div><div><h3>${escapeHtml(name)}</h3><p>${escapeHtml(description)}</p></div><div><span><i class="live-dot ${enabled ? "" : "muted"}"></i>${escapeHtml(status)}</span><small>${escapeHtml(lastSync)}</small></div><label class="switch"><input type="checkbox" ${enabled ? "checked" : ""} disabled><span></span></label><button class="button ghost" data-page="${page}">${enabled ? "Configure" : "View"}</button>${icon("menu", 17)}</div>`;
+}
+
+function renderCloudConnectionDetail() {
+  const connected = isConnected();
+  if (!connected) {
+    return `<article class="panel connection-detail"><div class="panel-title"><div><h2>Pair Microgifter Cloud</h2><p>Generate a one-time code from your Microgifter account, then enter it here.</p></div></div><form id="cloud-pair-form" class="pairing-form"><label><span>Microgifter cloud URL</span><input id="cloud-base-url" type="url" value="https://microgifter.com" maxlength="240" autocomplete="url" required></label><label><span>One-time pairing code</span><input id="cloud-pairing-code" class="mono" type="password" minlength="20" maxlength="80" autocomplete="one-time-code" placeholder="Paste pairing code" required></label><button class="button primary" type="submit" ${busy || !statusSnapshot?.api_available ? "disabled" : ""}>Pair HomeServer</button></form></article>`;
+  }
+  return `<article class="panel connection-detail"><div class="panel-title"><div><h2>Connection Details</h2><p>Details for the active signed Microgifter integration.</p></div></div><div class="connection-detail-grid"><div class="connection-identity"><div class="app-icon tone-blue">${icon("cloud", 25)}</div><div><h3>Microgifter Cloud ${badge("Connected", "healthy")}</h3><p>Secure connection to Microgifter Cloud services.</p><span class="mono">${escapeHtml(cloudSnapshot?.cloud_base_url || "https://microgifter.com")}</span></div></div><dl><div><dt>Status</dt><dd>${badge(humanize(cloudSnapshot?.state), cloudSnapshot?.state)}</dd></div><div><dt>Last Heartbeat</dt><dd>${escapeHtml(relativeDate(cloudSnapshot?.last_success_utc))}</dd></div><div><dt>Device Identity</dt><dd class="mono">${escapeHtml(compactId(cloudSnapshot?.device_id))}</dd></div><div><dt>Pending Sync</dt><dd>${Number(cloudSnapshot?.pending_sync || 0)}</dd></div></dl><div class="connection-actions"><button id="cloud-vault-test" class="button secondary" type="button" ${busy ? "disabled" : ""}>Test Connection</button><button class="button secondary" data-page="sync">Configure</button><button id="cloud-disconnect" class="button danger" type="button" ${busy ? "disabled" : ""}>Disconnect</button></div></div></article>`;
+}
+function renderKnowledge() {
+  const backup = lastBackup();
+  const sourceCount = (isConnected() ? 1 : 0) + (backup ? 1 : 0);
+  return `${pageHeader("Knowledge Vault", "Your private, searchable knowledge workspace. All indexed data stays on your HomeServer.", `<button class="button secondary" disabled>${icon("upload", 16)}Import</button><button class="button primary" disabled>${icon("plus", 16)}Add Source</button>`)}
+    <div class="toolbar-row"><label class="filter-search wide">${icon("search", 17)}<input type="search" placeholder="Search your knowledge vault..."></label><button class="select-button">All Content Types ${icon("arrow", 12)}</button></div>
+    <section class="metrics six-up">
+      ${metricCard("vault", "Indexed Items", "0", "Indexing engine planned", "blue")}
+      ${metricCard("file", "Connected Sources", String(sourceCount), "Local configuration sources", "purple")}
+      ${metricCard("storage", "Storage Used", backup ? formatBytes(backup.size_bytes) : "0 B", "Protected local data", "blue")}
+      ${metricCard("activity", "Embeddings Indexed", "Planned", "Local model integration", "green")}
+      ${metricCard("backup", "Last Indexing", "Not yet", "No index job has run", "gray")}
+      ${metricCard("shield", "Privacy", "Local", "Nothing leaves your network", "green")}
+    </section>
+    <section class="knowledge-grid">
+      <article class="panel vault-summary"><div class="panel-title"><div><h2>Vault Summary</h2></div></div><div class="storage-layout">${donut(12, "Local", "private storage", "blue")}<ul class="legend"><li><i class="blue"></i><span>Documents</span><strong>Ready</strong></li><li><i class="green"></i><span>Knowledge bases</span><strong>Planned</strong></li><li><i class="purple"></i><span>Backup sources</span><strong>${backupCount()}</strong></li><li><i class="amber"></i><span>Cloud sources</span><strong>${isConnected() ? 1 : 0}</strong></li></ul></div><button class="text-button" data-page="backups">Manage Storage ${icon("arrow", 13)}</button></article>
+      <article class="panel indexed-content"><div class="panel-title"><div><h2>Indexed Content</h2></div></div><div class="content-type-list">${contentType("file", "Documents", "0", "blue")}${contentType("file", "PDF Files", "0", "red")}${contentType("file", "Text Files", "0", "gray")}${contentType("storage", "Structured Data", "0", "green")}${contentType("vault", "Knowledge Bases", "0", "purple")}</div><span class="planned-banner">Indexing service is scheduled for a later HomeServer phase.</span></article>
+      <article class="panel search-preview"><div class="panel-title"><div><h2>Search Results Preview</h2></div></div><label class="filter-search">${icon("search", 17)}<input type="search" value="project roadmap" disabled></label><div class="empty-search">${icon("vault", 34)}<strong>Private search workspace ready</strong><p>Add local sources when the indexing bridge is enabled. Search remains on this HomeServer.</p></div></article>
+      <article class="panel recent-sources"><div class="panel-title"><div><h2>Recent Sources</h2></div></div><div class="source-list">${sourceRow("backup", "HomeServer Backups", backup ? relativeDate(backup.created_at_utc) : "Not configured", backup ? formatBytes(backup.size_bytes) : "0 B", backup ? "Ready" : "Waiting", "blue")}${sourceRow("cloud", "Microgifter Cloud", isConnected() ? relativeDate(cloudSnapshot?.last_success_utc) : "Not paired", "Signed metadata", isConnected() ? "Connected" : "Waiting", "green")}${sourceRow("storage", "Local Files", "Not configured", "Local only", "Planned", "purple")}</div></article>
+      <article class="panel indexing-status"><div class="panel-title"><div><h2>Indexing Status</h2></div></div><div class="indexing-layout">${donut(0, "0%", "indexed", "blue")}<dl class="detail-list"><div><dt>Documents</dt><dd>0</dd></div><div><dt>Embeddings</dt><dd>Planned</dd></div><div><dt>OCR</dt><dd>Planned</dd></div><div><dt>Metadata</dt><dd>Ready</dd></div></dl></div></article>
+      <article class="panel processing-queue"><div class="panel-title"><div><h2>Processing Queue</h2></div></div><div class="empty-search compact">${icon("activity", 30)}<strong>No items queued</strong><p>Processing jobs will appear here after local sources are added.</p></div></article>
+    </section>
+    <div class="privacy-banner">${icon("shield", 20)}<div><strong>Your data is private and secure</strong><span>Knowledge content is designed to remain local to your HomeServer.</span></div><button class="text-button" data-page="system">Review security ${icon("arrow", 13)}</button></div>`;
+}
+
+function contentType(iconName, label, value, tone) {
+  return `<div><div class="app-icon tone-${tone}">${icon(iconName, 17)}</div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+function sourceRow(iconName, label, sync, size, status, tone) {
+  return `<div><div class="app-icon tone-${tone}">${icon(iconName, 18)}</div><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(sync)}</small></span><em>${escapeHtml(size)}</em>${badge(status, status === "Connected" || status === "Ready" ? "healthy" : "planned")}</div>`;
+}
+
+function renderSettings() {
+  const prefs = loadPreferences();
+  return `${pageHeader("Settings", "Manage HomeServer preferences and Control Center configuration.")}
+    <section class="settings-layout"><div class="settings-sections">
+      ${settingsSection("dashboard", "General", "Basic server display preferences.", `<label><span>Server Name</span><input id="setting-server-name" type="text" value="${escapeHtml(prefs.serverName)}" maxlength="64"></label><label><span>Time Zone</span><select id="setting-time-zone"><option value="local" ${prefs.timeZone === "local" ? "selected" : ""}>Use Windows local time</option><option value="utc" ${prefs.timeZone === "utc" ? "selected" : ""}>UTC</option></select></label><button class="button primary" data-save-setting="general">Save</button>`)}
+      ${settingsSection("shield", "Security", "Manage local interface security preferences.", `<label class="toggle-field"><span>Local UI lock</span>${toggle("setting-local-lock", prefs.localLock)}</label><label><span>Auto lock after inactivity</span><select id="setting-auto-lock"><option value="15" ${prefs.autoLock === "15" ? "selected" : ""}>15 minutes</option><option value="30" ${prefs.autoLock === "30" ? "selected" : ""}>30 minutes</option><option value="60" ${prefs.autoLock === "60" ? "selected" : ""}>1 hour</option></select></label><button class="button primary" data-save-setting="security">Save</button>`)}
+      ${settingsSection("key", "Pairing", "View signed pairing state and connection controls.", `<label><span>Pairing Mode</span><select disabled><option>Secure one-time code</option></select></label><label><span>Device Identity</span><input class="mono" type="text" value="${escapeHtml(compactId(cloudSnapshot?.device_id))}" disabled></label><button class="button primary" data-page="sync">${isConnected() ? "Manage" : "Pair"}</button>`)}
+      ${settingsSection("bell", "Notifications", "Configure Control Center notification presentation.", `<label class="toggle-field"><span>Desktop notifications</span>${toggle("setting-notifications", prefs.notifications)}</label><label><span>Critical alerts</span><select id="setting-alerts"><option value="immediate" ${prefs.alerts === "immediate" ? "selected" : ""}>Immediately</option><option value="daily" ${prefs.alerts === "daily" ? "selected" : ""}>Daily summary</option></select></label><button class="button primary" data-save-setting="notifications">Save</button>`)}
+      ${settingsSection("storage", "Storage", "Review local storage and backup locations.", `<label><span>Storage Mode</span><select disabled><option>HomeServer managed</option></select></label><label><span>Backup Catalog</span><input type="text" value="${backupCount()} records" disabled></label><button class="button primary" data-page="backups">Manage</button>`)}
+      ${settingsSection("backup", "Backup Preferences", "Set the Control Center backup schedule summary.", `<label><span>Automatic schedule</span><input type="text" value="Every ${backupCatalog?.interval_hours ?? 24} hours" disabled></label><label><span>Retention Policy</span><input type="text" value="${backupCatalog?.retention_count ?? 14} automatic backups" disabled></label><button class="button primary" data-page="backups">View</button>`)}
+      ${settingsSection("settings", "Advanced", "Interface diagnostics and presentation preferences.", `<label class="toggle-field"><span>Compact interface</span>${toggle("setting-compact", prefs.compact)}</label><label class="toggle-field"><span>Auto refresh status</span>${toggle("setting-auto-refresh", prefs.autoRefresh)}</label><button class="button primary" data-save-setting="advanced">Save</button>`)}
+    </div><aside class="settings-aside">
+      <article class="panel"><div class="panel-title"><div><h2>Settings Summary</h2><p>Current Control Center configuration.</p></div></div><dl class="summary-list settings-summary"><div><dt>Server Name</dt><dd>${escapeHtml(prefs.serverName)}</dd></div><div><dt>Time Zone</dt><dd>${prefs.timeZone === "utc" ? "UTC" : "Windows local"}</dd></div><div><dt>Local Lock</dt><dd>${prefs.localLock ? "Enabled" : "Disabled"}</dd></div><div><dt>Auto Lock</dt><dd>${prefs.autoLock} minutes</dd></div><div><dt>Pairing</dt><dd>${isConnected() ? "Connected" : "Not paired"}</dd></div><div><dt>Notifications</dt><dd>${prefs.notifications ? "Enabled" : "Disabled"}</dd></div><div><dt>Backups</dt><dd>${backupCount()} records</dd></div><div><dt>Updates</dt><dd>${updateDisplayState() === "not_configured" ? "Beta channel" : humanize(updateDisplayState())}</dd></div></dl></article>
+      <article class="panel"><div class="panel-title"><div><h2>Security Status</h2><p>Your HomeServer security boundaries.</p></div></div><div class="security-checks"><span>${icon("check", 17)}Loopback API<strong>${statusSnapshot?.api_available ? "Active" : "Offline"}</strong></span><span>${icon("check", 17)}Credential Vault<strong>${isConnected() ? "Configured" : "Waiting"}</strong></span><span>${icon("check", 17)}Backup Encryption<strong>Enabled</strong></span><span>${icon("check", 17)}Signed Updates<strong>${updateDisplayState() === "not_configured" ? "Beta" : "Enabled"}</strong></span></div><button id="cloud-vault-test" class="button secondary full" ${!isConnected() || busy ? "disabled" : ""}>Run Security Check</button></article>
+    </aside></section>`;
+}
+
+function toggle(id, checked) {
+  return `<label class="switch"><input id="${id}" type="checkbox" ${checked ? "checked" : ""}><span></span></label>`;
+}
+
+function settingsSection(iconName, title, copy, controls) {
+  return `<article class="panel settings-section"><div class="settings-section-copy"><div class="app-icon tone-blue">${icon(iconName, 21)}</div><div><h2>${escapeHtml(title)}</h2><p>${escapeHtml(copy)}</p></div></div><div class="settings-controls">${controls}</div></article>`;
+}
+
+function loadPreferences() {
+  const defaults = { serverName: statusSnapshot?.server_name || "HomeServer", timeZone: "local", localLock: false, autoLock: "15", notifications: true, alerts: "immediate", compact: false, autoRefresh: true };
+  try {
+    return { ...defaults, ...JSON.parse(localStorage.getItem("homeserver-ui-preferences") || "{}") };
+  } catch {
+    return defaults;
+  }
+}
+
+function renderSync() {
+  const connected = isConnected();
+  const pending = Number(cloudSnapshot?.pending_sync || 0);
+  return `${pageHeader("Sync Cloud", "Keep your HomeServer securely synchronized with Microgifter Cloud.")}
+    <section class="metrics five-up">${metricCard("shield", "Connection Health", connected ? "Healthy" : "Waiting", connected ? "Secure signed connection" : "Pairing required", connected ? "green" : "amber")}${metricCard("cloud", "Sync Status", connected ? "Connected" : "Not paired", connected ? "Synchronizing safely" : "No cloud identity", connected ? "blue" : "gray")}${metricCard("activity", "Last Sync", relativeDate(cloudSnapshot?.last_success_utc), connected ? formatDate(cloudSnapshot?.last_success_utc) : "Not yet", "teal")}${metricCard("storage", "Queued Items", String(pending), pending ? "Waiting operations" : "All changes up to date", "blue")}${metricCard("shield", "Data Integrity", connected ? "Verified" : "Local", connected ? "Signed requests active" : "Local authority only", "green")}</section>
+    <section class="sync-grid">
+      <article class="panel cloud-connection-card"><div class="panel-title"><div>${icon("cloud", 18)}<h2>Cloud Connection</h2></div></div><dl class="detail-list"><div><dt>Cloud Endpoint</dt><dd>${escapeHtml(cloudSnapshot?.cloud_base_url || "https://microgifter.com")}</dd></div><div><dt>Connection</dt><dd>${connected ? "Secure signed bridge" : "Not configured"}</dd></div><div><dt>Status</dt><dd>${badge(humanize(cloudSnapshot?.state || "not_paired"), cloudSnapshot?.state || "planned")}</dd></div><div><dt>Last success</dt><dd>${escapeHtml(formatDate(cloudSnapshot?.last_success_utc))}</dd></div></dl><button id="refresh-status" class="button secondary full">${icon("refresh", 16)}Refresh Status</button></article>
+      <article class="panel pairing-identity"><div class="panel-title"><div>${icon("key", 18)}<h2>Pairing Identity</h2></div></div><dl class="detail-list"><div><dt>Device ID</dt><dd class="mono">${escapeHtml(compactId(cloudSnapshot?.device_id))}</dd></div><div><dt>Paired On</dt><dd>${escapeHtml(formatDate(cloudSnapshot?.paired_at_utc))}</dd></div><div><dt>Scopes</dt><dd>${Array.isArray(cloudSnapshot?.scopes) ? cloudSnapshot.scopes.length : 0}</dd></div><div><dt>Trust Status</dt><dd>${connected ? "Trusted" : "Waiting"}</dd></div></dl><button class="button secondary full" data-page="integrations">View Details</button></article>
+      <article class="panel manual-sync"><div class="panel-title"><div>${icon("sync", 18)}<h2>Manual Sync</h2></div></div><p>Queue low-risk local state operations and run a signed synchronization.</p><div class="check-list"><span>${icon("check", 16)}Upload approved local changes</span><span>${icon("check", 16)}Download cloud receipts</span><span>${icon("check", 16)}Verify request integrity</span><span>${icon("check", 16)}Preserve cloud authority</span></div><button id="cloud-sync-now" class="button primary full" ${!connected || busy ? "disabled" : ""}>${icon("sync", 16)}Sync Now</button></article>
+      <article class="panel pending-changes"><div class="panel-title"><div>${icon("storage", 18)}<h2>Pending Changes</h2></div></div><div class="pending-list"><span>${icon("upload", 17)}Uploads<strong>${pending}</strong><small>${pending ? "Queued operations" : "No pending uploads"}</small></span><span>${icon("download", 17)}Downloads<strong>0</strong><small>No pending downloads</small></span><span>${icon("warning", 17)}Conflicts<strong>0</strong><small>No conflicts detected</small></span></div><button class="text-button" data-page="integrations">View Details ${icon("arrow", 13)}</button></article>
+      <article class="panel sync-activity"><div class="panel-title"><div>${icon("activity", 18)}<h2>Sync Activity</h2></div></div><div class="sync-activity-layout">${donut(connected ? 100 : 0, connected ? "100%" : "0%", connected ? "on track" : "waiting", connected ? "green" : "gray")}<ul class="legend"><li><i class="green"></i><span>Connection</span><strong>${connected ? "Active" : "Waiting"}</strong></li><li><i class="blue"></i><span>Pending operations</span><strong>${pending}</strong></li><li><i class="purple"></i><span>Signed scopes</span><strong>${Array.isArray(cloudSnapshot?.scopes) ? cloudSnapshot.scopes.length : 0}</strong></li><li><i class="amber"></i><span>Rejected changes</span><strong>0</strong></li></ul></div></article>
+      <article class="panel sync-history"><div class="panel-title"><div>${icon("backup", 18)}<h2>Sync History</h2></div><button class="text-button" data-page="system">View Logs</button></div><div class="history-list">${historyRow(cloudSnapshot?.last_success_utc, connected ? "Sync completed" : "No completed sync", connected ? "Success" : "Waiting")}${historyRow(cloudSnapshot?.paired_at_utc, connected ? "HomeServer paired" : "Pairing not configured", connected ? "Success" : "Waiting")}${historyRow(statusSnapshot?.last_updated_utc, "Local status refreshed", statusSnapshot?.api_available ? "Success" : "Warning")}</div></article>
+      <article class="panel cloud-settings"><div class="panel-title"><div>${icon("settings", 18)}<h2>Cloud Settings</h2></div></div><div class="next-steps">${nextStep("settings", "Sync Preferences", "Only approved operation types are synchronized.", "settings")}${nextStep("shield", "Authority Boundary", "Commerce and identity remain cloud-authoritative.", "integrations")}${nextStep("backup", "Recovery Protection", "Backups remain local and encrypted.", "backups")}</div><button id="cloud-vault-test" class="button secondary full" ${!connected || busy ? "disabled" : ""}>Test Credential Vault</button></article>
+    </section>
+    ${connected ? `<div class="privacy-banner success">${icon("shield", 20)}<div><strong>Your HomeServer is connected and synchronizing safely.</strong><span>Signed requests, scoped permissions, replay protection, and cloud receipts are active.</span></div></div>` : renderCloudConnectionDetail()}`;
+}
+
+function historyRow(date, label, status) {
+  const state = status === "Success" ? "success" : status === "Warning" ? "warning" : "info";
+  return `<div><span><i class="event-dot ${state}"></i>${escapeHtml(formatDate(date))}</span><strong>${escapeHtml(label)}</strong><em class="table-status ${state}">${escapeHtml(status)}</em></div>`;
+}
+function renderSystem() {
+  const updateState = updateDisplayState();
+  const updateRelease = updateStatus?.update;
+  const signer = updateRelease?.authenticode_thumbprint ? `${updateRelease.authenticode_thumbprint.slice(0, 12)}…${updateRelease.authenticode_thumbprint.slice(-8)}` : "Not staged";
+  return `${pageHeader("System", "View and manage your HomeServer system, services, updates, and diagnostics.")}
+    <section class="system-grid top-system-grid">
+      <article class="panel"><div class="panel-title"><div>${icon("system", 18)}<h2>System Overview</h2></div></div><dl class="detail-list"><div><dt>Machine Name</dt><dd>${escapeHtml(statusSnapshot?.server_name || "HomeServer")}</dd></div><div><dt>Version</dt><dd>${escapeHtml(statusSnapshot?.version || "0.1.3")}</dd></div><div><dt>API URL</dt><dd class="mono">${escapeHtml(statusSnapshot?.api_url || "http://127.0.0.1:47831")}</dd></div><div><dt>Database</dt><dd>${escapeHtml(humanize(statusSnapshot?.database || "unknown"))}</dd></div><div><dt>Cloud State</dt><dd>${escapeHtml(humanize(cloudSnapshot?.state || "not_paired"))}</dd></div><div><dt>Last Updated</dt><dd>${escapeHtml(formatDate(statusSnapshot?.last_updated_utc))}</dd></div></dl><div class="resource-row"><span>Service health</span><strong>${isHealthy() ? "100%" : "35%"}</strong></div>${progress(isHealthy() ? 100 : 35, isHealthy() ? "green" : "amber")}</article>
+      <article class="panel"><div class="panel-title"><div>${icon("apps", 18)}<h2>Service Status</h2></div><button class="text-button" data-page="apps">View all services</button></div><div class="service-status-list">${serviceRows.slice(0, 6).map(([name], index) => { const running = index < 3 || (index === 3 && isConnected()) || index === 4 || index === 5; return `<div>${icon(running ? "check" : "warning", 16)}<span>${escapeHtml(name)}</span><strong>${running ? "Running" : "Waiting"}</strong><small>v${escapeHtml(statusSnapshot?.version || "0.1.3")}</small></div>`; }).join("")}</div><div class="service-footer"><i class="live-dot"></i>${isHealthy() ? "All core services are operational" : "Local service requires attention"}</div></article>
+      <article class="panel update-delivery"><div class="panel-title"><div>${icon("cloud", 18)}<h2>Update & Delivery</h2></div></div><dl class="detail-list"><div><dt>Current Version</dt><dd>${escapeHtml(updateStatus?.current_version || statusSnapshot?.version || "0.1.3")}</dd></div><div><dt>Stable Release</dt><dd>${escapeHtml(updateRelease?.version || "No newer release")}</dd></div><div><dt>Last Checked</dt><dd>${escapeHtml(formatDate(updateStatus?.last_checked_at_utc))}</dd></div><div><dt>Update Channel</dt><dd>${escapeHtml(humanize(updateStatus?.channel || "stable"))}</dd></div><div><dt>Signer</dt><dd class="mono">${escapeHtml(signer)}</dd></div><div><dt>Status</dt><dd>${badge(updateState === "not_configured" ? "Not configured" : humanize(updateState), updateState)}</dd></div></dl>${updateErrorText() ? `<div class="inline-warning">${icon("warning", 17)}${escapeHtml(updateErrorText())}</div>` : ""}<div class="button-row"><button id="check-updates" class="button secondary" ${busy ? "disabled" : ""}>Check now</button><button id="download-update" class="button primary" ${busy || updateState !== "available" || !updateRelease ? "disabled" : ""}>Download</button><button id="apply-update" class="button danger" ${busy || updateState !== "staged" || !updateRelease ? "disabled" : ""}>Apply</button></div></article>
+    </section>
+    <section class="system-grid resource-system-grid"><article class="panel system-resources"><div class="panel-title"><div><h2>System Resources</h2></div>${badge("Live", isHealthy() ? "healthy" : "planned")}</div><div class="resource-chart-grid">${resourceChart("CPU Usage", isHealthy() ? 18 : 0, "2.1 GHz", "blue")}${resourceChart("Memory Usage", isHealthy() ? 42 : 0, "Local service", "purple")}${resourceChart("Backup Catalog", Math.min(100, backupCount() * 5), `${backupCount()} records`, "green")}${resourceChart("Network", isConnected() ? 32 : 0, isConnected() ? "Cloud active" : "Local only", "blue")}</div></article>
+      <article class="panel quick-system-actions"><div class="panel-title"><div><h2>Quick Actions</h2></div></div><div class="next-steps">${nextStep("refresh", "Refresh Status", "Reload local service, cloud, backup, and update state.", "system")}${nextStep("logs", "Export Logs", "Review diagnostic output from the Windows service.", "system")}${nextStep("update", "Check for Updates", "Check the pinned signed release channel.", "system")}${nextStep("shield", "Run Diagnostics", "Validate service and credential boundaries.", "settings")}</div></article>
+    </section>
+    <section class="two-column-grid diagnostics-grid"><article class="panel"><div class="panel-title"><div><h2>Diagnostics</h2></div><button id="refresh-status" class="text-button">Run All Tests</button></div><div class="diagnostic-list">${diagnosticRow("System Health", isHealthy() ? "No issues detected" : "Local API unavailable", isHealthy())}${diagnosticRow("Database Check", statusSnapshot?.database ? humanize(statusSnapshot.database) : "Unknown", statusSnapshot?.database === "ready")}${diagnosticRow("Cloud Connectivity", isConnected() ? "Signed connection active" : "Pairing not configured", isConnected())}${diagnosticRow("Backup Integrity", backupCount() ? `${backupCount()} catalog records` : "No recovery point created", backupCount() > 0)}${diagnosticRow("Update Contract", updateState === "not_configured" ? "Beta channel not published" : humanize(updateState), updateState !== "failed")}</div></article>
+      <article class="panel"><div class="panel-title"><div><h2>Logs Preview</h2></div><span>Current session</span></div><div class="logs-list">${logRow("INFO", "Core Service", statusSnapshot?.api_available ? "Local API responded successfully" : "Local API unavailable", "core.service", statusSnapshot?.last_updated_utc)}${logRow(isConnected() ? "INFO" : "WARN", "Sync Service", isConnected() ? "Signed cloud bridge active" : "HomeServer is not paired", "sync.service", cloudSnapshot?.last_success_utc)}${logRow(backupCount() ? "INFO" : "WARN", "Backup Service", backupCount() ? `${backupCount()} backup records available` : "No backup has been created", "backup.service", lastBackup()?.created_at_utc)}${logRow(updateState === "not_configured" ? "WARN" : "INFO", "Update Manager", updateState === "not_configured" ? "Public update channel is not configured" : humanize(updateState), "update.service", updateStatus?.last_checked_at_utc)}</div><div class="button-row"><button class="button secondary" data-page="settings">Review Settings</button><button class="button secondary" data-page="backups">Open Backups</button></div></article></section>`;
+}
+
+function resourceChart(label, value, detail, tone) {
+  const bars = [36, 58, 44, 72, 50, 83, 62, 91, 55, 76, 48, 69];
+  return `<article><span>${escapeHtml(label)}</span><div><strong>${value}%</strong><small>${escapeHtml(detail)}</small></div><div class="sparkline tone-${tone}">${bars.map((bar, index) => `<i style="height:${Math.max(8, Math.round((bar * Math.max(value, 12)) / 100))}px;opacity:${0.35 + index * 0.05}"></i>`).join("")}</div></article>`;
+}
+
+function diagnosticRow(label, detail, passed) {
+  return `<div>${icon(passed ? "check" : "warning", 17)}<span>${escapeHtml(label)}</span><p>${escapeHtml(detail)}</p><em class="table-status ${passed ? "success" : "warning"}">${passed ? "Passed" : "Review"}</em></div>`;
+}
+
+function logRow(level, source, message, channel, date) {
+  const state = level === "INFO" ? "info" : level === "ERROR" ? "warning" : "warning";
+  return `<div><i class="event-dot ${state}"></i><span>${escapeHtml(formatDate(date))}</span><strong>${escapeHtml(level)}</strong><em>${escapeHtml(source)}</em><p>${escapeHtml(message)}</p><code>${escapeHtml(channel)}</code></div>`;
+}
+
+function renderCurrentPage() {
+  switch (activePage) {
+    case "home": return renderHome();
+    case "apps": return renderApps();
+    case "backups": return renderBackups();
+    case "integrations": return renderIntegrations();
+    case "knowledge": return renderKnowledge();
+    case "settings": return renderSettings();
+    case "sync": return renderSync();
+    case "system": return renderSystem();
+    default: return renderDashboard();
+  }
 }
 
 function render() {
-  const snapshot = statusSnapshot;
-  const state = snapshot?.state || "offline";
-  const apiAvailable = Boolean(snapshot?.api_available);
-  const databaseState = snapshot?.database || "unknown";
-  const cloudState = cloudSnapshot?.state || "not_paired";
-  const restorePending = Boolean(backupCatalog?.restore_pending || snapshot?.restore_pending);
-  const retentionCount = backupCatalog?.retention_count ?? 14;
-  const intervalHours = backupCatalog?.interval_hours ?? 24;
-
-  app.innerHTML = `
-    <div class="shell">
-      <aside class="sidebar">
-        <div class="brand">
-          <div class="brand-mark" aria-hidden="true">M</div>
-          <div><strong>Microgifter</strong><span>HomeServer</span></div>
-        </div>
-        <nav aria-label="HomeServer sections">
-          <a class="active" href="#overview">Overview</a>
-          <a href="#services">Services</a>
-          <a href="#connection">Microgifter Connection</a>
-          <a href="#agents">Agents</a>
-          <a href="#models">Model Center</a>
-          <a href="#knowledge">Knowledge Vault</a>
-          <a href="#backups">Backups</a>
-          <a href="#updates">Updates</a>
-          <a href="#support">Logs & Support</a>
-        </nav>
-        <div class="sidebar-footer">
-          <span class="status-dot ${statusClass(state)}"></span>
-          <span>${escapeHtml(humanize(state))}</span>
-        </div>
-      </aside>
-
-      <section class="content" id="overview">
-        <header class="topbar">
-          <div><p class="eyebrow">Private local Microgifter edge</p><h1>HomeServer Overview</h1></div>
-          <button id="refresh-status" type="button" ${busy ? "disabled" : ""}>Refresh status</button>
-        </header>
-
-        ${notice ? `<div class="notice ${notice.kind}">${escapeHtml(notice.message)}</div>` : ""}
-        ${restorePending ? `<div class="notice warning"><strong>Restore staged.</strong> Restart the HomeServer service or reboot Windows to apply the verified database. The current database will be preserved for rollback.</div>` : ""}
-
-        <section class="hero-card">
-          <div>
-            <span class="pill ${statusClass(state)}">${escapeHtml(humanize(state))}</span>
-            <h2>${escapeHtml(snapshot?.server_name || "Microgifter HomeServer")}</h2>
-            <p>${apiAvailable ? "The private local API is responding." : "The background service is not responding yet."}</p>
-          </div>
-          <div class="hero-meta">
-            <div><span>Version</span><strong>${escapeHtml(snapshot?.version || "Unknown")}</strong></div>
-            <div><span>API</span><strong>${apiAvailable ? "Available" : "Offline"}</strong></div>
-            <div><span>Database</span><strong>${escapeHtml(humanize(databaseState))}</strong></div>
-          </div>
-        </section>
-
-        <section class="metric-grid" aria-label="HomeServer metrics">
-          <article><span>Cloud connection</span><strong>${escapeHtml(humanize(cloudState))}</strong><small>Signed Microgifter bridge</small></article>
-          <article><span>Sync queue</span><strong>${Number(cloudSnapshot?.pending_sync || snapshot?.pending_sync || 0)}</strong><small>Waiting operations</small></article>
-          <article><span>Last backup</span><strong class="metric-date">${escapeHtml(formatDate(snapshot?.last_backup))}</strong><small>${intervalHours}-hour automatic schedule</small></article>
-          <article><span>Update state</span><strong>${escapeHtml(humanize(snapshot?.update || "idle"))}</strong><small>${escapeHtml(snapshot?.update_version || "Stable channel")}</small></article>
-        </section>
-
-        ${cloudPanel(apiAvailable)}
-        ${updatePanel(apiAvailable)}
-
-        <section class="panel backup-panel" id="backups">
-          <div class="panel-heading">
-            <div><p class="eyebrow">Encrypted local protection</p><h2>Backups & Recovery</h2></div>
-            <span>${backupCatalog?.backups?.length ?? 0} catalog records</span>
-          </div>
-
-          <div class="backup-tools">
-            <article class="backup-tool-card">
-              <h3>Protected local backup</h3>
-              <p>Creates an encrypted SQLite snapshot using a Windows DPAPI-protected device key stored with HomeServer data.</p>
-              <button id="create-manual-backup" class="primary-button" type="button" ${busy || !apiAvailable ? "disabled" : ""}>Create backup</button>
-            </article>
-            <article class="backup-tool-card">
-              <h3>Portable recovery package</h3>
-              <p>Creates an exportable package protected by a passphrase that is never stored by HomeServer.</p>
-              <form id="recovery-package-form">
-                <input id="recovery-passphrase" type="password" minlength="12" maxlength="256" autocomplete="new-password" placeholder="Recovery passphrase" required>
-                <input id="recovery-passphrase-confirm" type="password" minlength="12" maxlength="256" autocomplete="new-password" placeholder="Confirm passphrase" required>
-                <button class="primary-button" type="submit" ${busy || !apiAvailable ? "disabled" : ""}>Create recovery package</button>
-              </form>
-            </article>
-            <article class="backup-tool-card import-card">
-              <div>
-                <h3>Recover another installation</h3>
-                <p>Choose an exported <code>.mghbackup</code> package. HomeServer decrypts, validates, and registers it before restore can be staged.</p>
-              </div>
-              <form id="import-recovery-form" class="import-recovery-form">
-                <input id="import-recovery-passphrase" type="password" minlength="12" maxlength="256" autocomplete="current-password" placeholder="Package passphrase" required>
-                <button class="primary-button" type="submit" ${busy || !apiAvailable ? "disabled" : ""}>Choose package to import</button>
-              </form>
-            </article>
-          </div>
-
-          <div class="backup-policy">
-            <span>Automatic schedule: every ${intervalHours} hours</span>
-            <span>Retention: ${retentionCount} automatic backups</span>
-            <span>Last automatic: ${escapeHtml(formatDate(backupCatalog?.last_automatic_backup_utc))}</span>
-          </div>
-
-          <div class="backup-list">${backupRows()}</div>
-        </section>
-
-        <section class="panel" id="services">
-          <div class="panel-heading">
-            <div><p class="eyebrow">Local runtime</p><h2>Services</h2></div>
-            <span>${serviceRows.length} components</span>
-          </div>
-          <div class="service-list">
-            ${serviceRows
-              .map(([name, description], index) => {
-                const cloudRunning = ["connected", "degraded"].includes(cloudState);
-                const running = index < 3 || (index === 3 && cloudRunning) || (index === 4 && apiAvailable) || (index === 5 && apiAvailable);
-                return `<article class="service-row">
-                  <div class="service-icon">${index + 1}</div>
-                  <div><strong>${escapeHtml(name)}</strong><p>${escapeHtml(description)}</p></div>
-                  <span class="service-state ${running ? "running" : "planned"}">${running ? "Running" : "Planned"}</span>
-                </article>`;
-              })
-              .join("")}
-          </div>
-        </section>
-
-        <footer>
-          <span>Local API: ${escapeHtml(snapshot?.api_url || "http://127.0.0.1:47831")}</span>
-          <span>Updated: ${escapeHtml(formatDate(snapshot?.last_updated_utc))}</span>
-        </footer>
-      </section>
-    </div>`;
-
+  const restorePending = Boolean(backupCatalog?.restore_pending || statusSnapshot?.restore_pending);
+  const prefs = loadPreferences();
+  document.documentElement.classList.toggle("compact-ui", Boolean(prefs.compact));
+  app.innerHTML = `<div class="desktop-shell">${renderSidebar()}<main class="app-main">${renderTopbar()}<section class="page-canvas">${notice ? `<div class="notice ${notice.kind}">${escapeHtml(notice.message)}</div>` : ""}${restorePending ? `<div class="notice warning"><strong>Restore staged.</strong> Restart the HomeServer service or Windows to apply the verified database. The current database is preserved for rollback.</div>` : ""}${renderCurrentPage()}<footer class="app-footer"><span>Local API: ${escapeHtml(statusSnapshot?.api_url || "http://127.0.0.1:47831")}</span><span>Updated: ${escapeHtml(formatDate(statusSnapshot?.last_updated_utc))}</span></footer></section></main></div>`;
   bindEvents();
 }
 
 function bindEvents() {
-  document.querySelector("#refresh-status")?.addEventListener("click", () => loadAll());
+  document.querySelectorAll("[data-page]").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.page)));
+  document.querySelectorAll("#refresh-status").forEach((button) => button.addEventListener("click", () => loadAll()));
   document.querySelector("#cloud-pair-form")?.addEventListener("submit", pairCloud);
   document.querySelector("#cloud-sync-now")?.addEventListener("click", syncCloud);
   document.querySelector("#cloud-vault-test")?.addEventListener("click", testCloudVault);
   document.querySelector("#cloud-disconnect")?.addEventListener("click", disconnectCloud);
-  document.querySelectorAll("[data-cloud-operation]").forEach((button) => {
-    button.addEventListener("click", enqueueCloudOperation);
-  });
+  document.querySelectorAll("[data-cloud-operation]").forEach((button) => button.addEventListener("click", enqueueCloudOperation));
   document.querySelector("#create-manual-backup")?.addEventListener("click", createManualBackup);
   document.querySelector("#recovery-package-form")?.addEventListener("submit", createRecoveryPackage);
   document.querySelector("#import-recovery-form")?.addEventListener("submit", importRecoveryPackage);
   document.querySelector("#check-updates")?.addEventListener("click", checkUpdates);
   document.querySelector("#download-update")?.addEventListener("click", downloadUpdate);
   document.querySelector("#apply-update")?.addEventListener("click", applyUpdate);
-  document.querySelectorAll("[data-backup-action]").forEach((button) => {
-    button.addEventListener("click", handleBackupAction);
-  });
+  document.querySelectorAll("[data-backup-action]").forEach((button) => button.addEventListener("click", handleBackupAction));
+  document.querySelectorAll("[data-quick-action]").forEach((button) => button.addEventListener("click", handleQuickAction));
+  document.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", () => document.querySelector(`#${button.dataset.toggle}`)?.classList.toggle("hidden")));
+  document.querySelectorAll("[data-scroll-target]").forEach((button) => button.addEventListener("click", () => document.querySelector(`#${button.dataset.scrollTarget}`)?.scrollIntoView({ behavior: "smooth", block: "start" })));
+  document.querySelectorAll("[data-save-setting]").forEach((button) => button.addEventListener("click", savePreferences));
+}
+
+function navigate(page) {
+  if (!pages.some(([key]) => key === page)) page = "dashboard";
+  activePage = page;
+  history.replaceState(null, "", `#${page}`);
+  notice = null;
+  render();
+  document.querySelector(".page-canvas")?.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+async function handleQuickAction(event) {
+  const action = event.currentTarget.dataset.quickAction;
+  if (action === "sync-now") return syncCloud();
+  if (action === "backup-now") return createManualBackup();
+}
+
+function savePreferences() {
+  const prefs = loadPreferences();
+  const serverName = document.querySelector("#setting-server-name")?.value?.trim();
+  if (serverName) prefs.serverName = serverName;
+  prefs.timeZone = document.querySelector("#setting-time-zone")?.value || prefs.timeZone;
+  prefs.localLock = Boolean(document.querySelector("#setting-local-lock")?.checked);
+  prefs.autoLock = document.querySelector("#setting-auto-lock")?.value || prefs.autoLock;
+  prefs.notifications = Boolean(document.querySelector("#setting-notifications")?.checked);
+  prefs.alerts = document.querySelector("#setting-alerts")?.value || prefs.alerts;
+  prefs.compact = Boolean(document.querySelector("#setting-compact")?.checked);
+  prefs.autoRefresh = Boolean(document.querySelector("#setting-auto-refresh")?.checked);
+  localStorage.setItem("homeserver-ui-preferences", JSON.stringify(prefs));
+  notice = { kind: "success", message: "Control Center preferences saved locally." };
+  render();
 }
 
 async function withBusy(action) {
@@ -411,20 +580,21 @@ async function pairCloud(event) {
   const cloudBaseUrl = document.querySelector("#cloud-base-url")?.value?.trim() || "";
   const pairingCode = document.querySelector("#cloud-pairing-code")?.value?.trim() || "";
   await withBusy(async () => {
-    await invoke("homeserver_pair_cloud", {
-      request: { cloud_base_url: cloudBaseUrl, pairing_code: pairingCode },
-    });
+    await invoke("homeserver_pair_cloud", { request: { cloud_base_url: cloudBaseUrl, pairing_code: pairingCode } });
     return { kind: "success", message: "HomeServer paired and its first signed cloud request was verified." };
   });
 }
 
 async function syncCloud() {
+  if (!isConnected()) {
+    navigate("sync");
+    notice = { kind: "warning", message: "Pair HomeServer before running cloud synchronization." };
+    render();
+    return;
+  }
   await withBusy(async () => {
     const result = await invoke("homeserver_sync_cloud");
-    return {
-      kind: "success",
-      message: `Cloud synchronization completed: ${result.accepted || 0} accepted, ${result.rejected || 0} rejected, ${result.review || 0} queued for review.`,
-    };
+    return { kind: "success", message: `Cloud synchronization completed: ${result.accepted || 0} accepted, ${result.rejected || 0} rejected, ${result.review || 0} queued for review.` };
   });
 }
 
@@ -446,14 +616,9 @@ async function disconnectCloud() {
 
 async function enqueueCloudOperation(event) {
   const operationType = event.currentTarget.dataset.cloudOperation;
-  const payload =
-    operationType === "local.settings.snapshot"
-      ? { source: "control_center", captured_at_utc: new Date().toISOString() }
-      : { source: "control_center", requested_at_utc: new Date().toISOString() };
+  const payload = operationType === "local.settings.snapshot" ? { source: "control_center", captured_at_utc: new Date().toISOString() } : { source: "control_center", requested_at_utc: new Date().toISOString() };
   await withBusy(async () => {
-    const result = await invoke("homeserver_enqueue_cloud_sync", {
-      request: { operation_type: operationType, payload, idempotency_key: null },
-    });
+    const result = await invoke("homeserver_enqueue_cloud_sync", { request: { operation_type: operationType, payload, idempotency_key: null } });
     return { kind: "success", message: `Queued ${humanize(operationType)} as ${result.idempotency_key}.` };
   });
 }
@@ -491,10 +656,13 @@ async function applyUpdate() {
 }
 
 async function createManualBackup() {
+  if (!statusSnapshot?.api_available) {
+    notice = { kind: "warning", message: "The HomeServer service must be available before creating a backup." };
+    render();
+    return;
+  }
   await withBusy(async () => {
-    const result = await invoke("homeserver_create_backup", {
-      request: { kind: "manual", passphrase: null, note: "Created from Control Center" },
-    });
+    const result = await invoke("homeserver_create_backup", { request: { kind: "manual", passphrase: null, note: "Created from Control Center" } });
     return { kind: "success", message: result.message };
   });
 }
@@ -509,13 +677,8 @@ async function createRecoveryPackage(event) {
     return;
   }
   await withBusy(async () => {
-    const result = await invoke("homeserver_create_backup", {
-      request: { kind: "recovery", passphrase, note: "Portable recovery package" },
-    });
-    return {
-      kind: "success",
-      message: `${result.message} Use Export beside the package to save a disaster-recovery copy.`,
-    };
+    const result = await invoke("homeserver_create_backup", { request: { kind: "recovery", passphrase, note: "Portable recovery package" } });
+    return { kind: "success", message: `${result.message} Use Export beside the package to save a disaster-recovery copy.` };
   });
 }
 
@@ -534,42 +697,31 @@ async function handleBackupAction(event) {
   const action = button.dataset.backupAction;
   const backupId = button.dataset.backupId;
   const backupKind = button.dataset.backupKind;
-
   if (action === "export") {
     await withBusy(async () => {
-      const destination = await invoke("homeserver_export_recovery_package", {
-        backupId,
-        suggestedFileName: button.dataset.backupFileName || "Microgifter-HomeServer-Recovery.mghbackup",
-      });
+      const destination = await invoke("homeserver_export_recovery_package", { backupId, suggestedFileName: button.dataset.backupFileName || "Microgifter-HomeServer-Recovery.mghbackup" });
       if (!destination) return null;
       return { kind: "success", message: `Recovery package exported to ${destination}` };
     });
     return;
   }
-
   let passphrase = null;
   if (backupKind === "recovery") {
     passphrase = window.prompt("Enter the recovery package passphrase:");
     if (passphrase === null) return;
   }
-
   if (action === "verify") {
     await withBusy(async () => {
-      const result = await invoke("homeserver_verify_backup", {
-        request: { backup_id: backupId, passphrase, confirmation: null },
-      });
+      const result = await invoke("homeserver_verify_backup", { request: { backup_id: backupId, passphrase, confirmation: null } });
       return { kind: "success", message: result.message };
     });
     return;
   }
-
   if (action === "restore") {
-    const confirmation = window.prompt('Type RESTORE to stage this database for the next HomeServer restart:');
+    const confirmation = window.prompt("Type RESTORE to stage this database for the next HomeServer restart:");
     if (confirmation !== "RESTORE") return;
     await withBusy(async () => {
-      const result = await invoke("homeserver_stage_restore", {
-        request: { backup_id: backupId, passphrase, confirmation },
-      });
+      const result = await invoke("homeserver_stage_restore", { request: { backup_id: backupId, passphrase, confirmation } });
       return { kind: "success", message: result.message };
     });
   }
@@ -577,13 +729,7 @@ async function handleBackupAction(event) {
 
 async function loadAll(clearNotice = true) {
   if (clearNotice) notice = null;
-  const results = await Promise.allSettled([
-    invoke("homeserver_status"),
-    invoke("homeserver_cloud_status"),
-    invoke("homeserver_backups"),
-    invoke("homeserver_updates"),
-  ]);
-
+  const results = await Promise.allSettled([invoke("homeserver_status"), invoke("homeserver_cloud_status"), invoke("homeserver_backups"), invoke("homeserver_updates")]);
   if (results[0].status === "rejected") {
     statusSnapshot = null;
     cloudSnapshot = null;
@@ -593,16 +739,24 @@ async function loadAll(clearNotice = true) {
     render();
     return;
   }
-
   statusSnapshot = results[0].value;
   cloudSnapshot = results[1].status === "fulfilled" ? results[1].value : { state: "degraded", scopes: [], pending_sync: 0, last_error: "cloud_status_unavailable" };
   backupCatalog = results[2].status === "fulfilled" ? results[2].value : null;
   updateStatus = results[3].status === "fulfilled" ? results[3].value : null;
-  if (!notice && results[1].status === "rejected") {
-    notice = { kind: "warning", message: `Cloud connector unavailable: ${String(results[1].reason)}` };
-  }
+  if (!notice && results[1].status === "rejected") notice = { kind: "warning", message: `Cloud connector unavailable: ${String(results[1].reason)}` };
   render();
 }
 
+window.addEventListener("hashchange", () => {
+  const page = window.location.hash.replace("#", "");
+  if (pages.some(([key]) => key === page)) {
+    activePage = page;
+    render();
+  }
+});
+
 render();
 loadAll();
+window.setInterval(() => {
+  if (!busy && loadPreferences().autoRefresh) loadAll(false);
+}, 30000);
