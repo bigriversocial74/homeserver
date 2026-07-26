@@ -44,26 +44,26 @@
   Delete "${MG_TEMP_INSTALL_LOG_PATH}"
   !insertmacro MG_WRITE_INSTALL_LOG "Starting HomeServer installer security and service registration"
 
-  ; Protect the root first. Keeping this separate from the grant operation is
-  ; required because a combined recursive icacls invocation can leave the root
-  ; ACL inheriting from ProgramData on some Windows builds.
-  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\Microgifter\HomeServer" /inheritance:r'
-  !insertmacro MG_REQUIRE_SUCCESS "Unable to disable inherited HomeServer data permissions"
-
+  ; Establish explicit SYSTEM and Administrators access before removing any
+  ; inherited ACEs. Removing inheritance first can make retained databases and
+  ; logs inaccessible between icacls commands during an upgrade.
   nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\Microgifter\HomeServer" /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"'
   !insertmacro MG_REQUIRE_SUCCESS "Unable to grant restricted HomeServer data permissions"
 
   nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\Microgifter\HomeServer" /setowner "*S-1-5-18"'
   !insertmacro MG_REQUIRE_SUCCESS "Unable to set the HomeServer data directory owner"
 
-  ; Harden retained data during upgrades as well as the root directory itself.
-  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\Microgifter\HomeServer" /inheritance:r /T /C'
-  !insertmacro MG_REQUIRE_SUCCESS "Unable to remove inherited permissions from retained HomeServer data"
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\Microgifter\HomeServer" /inheritance:r'
+  !insertmacro MG_REQUIRE_SUCCESS "Unable to disable inherited HomeServer data permissions"
 
-  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\Microgifter\HomeServer" /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C'
-  !insertmacro MG_REQUIRE_SUCCESS "Unable to apply restricted permissions to retained HomeServer data"
+  ; Reset every retained child to inherit only the protected root ACL. This
+  ; removes stale explicit access without creating a no-access interval. Do not
+  ; continue on ACL failures: an update must abort rather than leave data files
+  ; unreadable to the LocalSystem service.
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\Microgifter\HomeServer\*" /reset /T'
+  !insertmacro MG_REQUIRE_SUCCESS "Unable to reset retained HomeServer data permissions"
 
-  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\Microgifter\HomeServer" /setowner "*S-1-5-18" /T /C'
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\Microgifter\HomeServer\*" /setowner "*S-1-5-18" /T'
   !insertmacro MG_REQUIRE_SUCCESS "Unable to set retained HomeServer data ownership"
 
   ; Keep the existing service registration during upgrades. Deleting and
