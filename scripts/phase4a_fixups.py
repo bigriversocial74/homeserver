@@ -93,5 +93,55 @@ replace_once(
     "SELECT COUNT(*),SUM(CASE WHEN state='indexed' THEN 1 ELSE 0 END),SUM(CASE WHEN state='changed' THEN 1 ELSE 0 END),SUM(CASE WHEN state='missing' THEN 1 ELSE 0 END),SUM(CASE WHEN state='failed' THEN 1 ELSE 0 END),COALESCE(SUM(size_bytes),0),MAX(indexed_at_utc) FROM vault_documents",
     "SELECT COUNT(*),COALESCE(SUM(CASE WHEN state='indexed' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN state='changed' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN state='missing' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN state='failed' THEN 1 ELSE 0 END),0),COALESCE(SUM(size_bytes),0),MAX(indexed_at_utc) FROM vault_documents",
 )
+replace_once(
+    SERVICE,
+    '''    fn vault_snapshot(&self) -> Result<VaultSnapshot> {
+        snapshot(&self.connection()?)
+    }''',
+    '''    fn vault_snapshot(&self) -> Result<VaultSnapshot> {
+        let connection = self.connection()?;
+        snapshot(&connection)
+    }''',
+)
+replace_once(
+    SERVICE,
+    '''    ) -> Result<VaultActionResult> {
+        import(&self.connection()?, &self.config, &file_name, tags, &bytes)
+    }''',
+    '''    ) -> Result<VaultActionResult> {
+        let connection = self.connection()?;
+        import(&connection, &self.config, &file_name, tags, &bytes)
+    }''',
+)
+replace_once(
+    SERVICE,
+    '''    fn search_vault(&self, request: VaultSearchRequest) -> Result<VaultSearchResult> {
+        search(&self.connection()?, request)
+    }''',
+    '''    fn search_vault(&self, request: VaultSearchRequest) -> Result<VaultSearchResult> {
+        let connection = self.connection()?;
+        search(&connection, request)
+    }''',
+)
+replace_once(
+    SERVICE,
+    '''    fn reindex_vault(&self) -> Result<VaultActionResult> {
+        reindex(&self.connection()?, &self.config)
+    }''',
+    '''    fn reindex_vault(&self) -> Result<VaultActionResult> {
+        let connection = self.connection()?;
+        reindex(&connection, &self.config)
+    }''',
+)
+replace_once(
+    SERVICE,
+    '''    fn delete_vault_document(&self, request: VaultDeleteRequest) -> Result<VaultActionResult> {
+        delete(&self.connection()?, &self.config, request)
+    }''',
+    '''    fn delete_vault_document(&self, request: VaultDeleteRequest) -> Result<VaultActionResult> {
+        let connection = self.connection()?;
+        delete(&connection, &self.config, request)
+    }''',
+)
 
 print("Phase 4A compile and empty-state fixups applied.")
