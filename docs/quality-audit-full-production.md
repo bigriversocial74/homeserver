@@ -3,7 +3,8 @@
 - Repository: `bigriversocial74/homeserver`
 - Baseline: `main` at `41a733926b974d0040837d43253e158abd3c120f`
 - Audit branch: `audit/full-production-hardening-20260725`
-- Release candidate: `0.1.3`
+- Release source: `0.1.3`
+- Merged production-hardening commit: `5a013eed30deab9f1f644361a8b949ab59703ba0`
 - Scope: all tracked source, configuration, migrations, scripts, workflows, installer hooks, UI, and documentation
 
 ## Scoring method
@@ -61,14 +62,15 @@ The score is an acceptance score for the currently implemented HomeServer phases
 - The release version is synchronized across Cargo, npm, Tauri, the service, updater, installer, API, and Windows registration.
 - Native release outputs are cleaned before staging.
 - The installed release verifier executes the packaged service and checks the API and registry versions.
-- GitHub Actions are pinned by full commit SHA and use read-only repository permissions.
+- GitHub Actions are pinned by full commit SHA and use minimum required permissions.
 - npm audit, RustSec `cargo audit`, strict Clippy, full tests, static security regression checks, installer/ACL tests, signed update tests, and rollback tests are mandatory.
 - Dependabot covers Cargo, npm, and GitHub Actions.
-- Temporary, duplicate, and version-specific workflows are removed.
+- Temporary, duplicate, and version-specific repair workflows were removed.
+- The v0.1.3 release pipeline is tag-gated and requires production Authenticode and Ed25519 signing material before publication.
 
 ## 10/10 acceptance gates
 
-The final score becomes 100/100 only after all of the following are verified on the same PR head:
+The final score becomes 100/100 only after all of the following are verified on the same release source:
 
 1. Dependency locks remain unchanged after regeneration.
 2. Frontend, JSON, Python, and PowerShell syntax checks pass.
@@ -81,6 +83,16 @@ The final score becomes 100/100 only after all of the following are verified on 
 9. The installed service binary, updater, local API, and Windows registration all report `0.1.3`.
 10. Signed update, Authenticode, health confirmation, installer preservation, and automatic rollback tests pass.
 
+## Verified evidence
+
+- Final audit branch head `dbab1621ea6918943ec8ec021def3185ea85c92d` passed HomeServer Production Quality and the Coordinated Cloud Connector Contract before merge.
+- The hardening changes were merged to `main` at `5a013eed30deab9f1f644361a8b949ab59703ba0`.
+- A post-merge validation projection based directly on that `main` commit passed the Coordinated Cloud Connector Contract and the complete HomeServer Production Quality workflow.
+- The complete Windows workflow passed synchronized version checks, dependency audits, tests, strict linting, service/cloud/backup/update API smoke tests, NSIS packaging, LocalSystem installation, restricted ACLs, backup and uninstall preservation, installed release and Windows registration, production-path Authenticode verification, signed update application, health confirmation, automatic rollback, cleanup, and verified installer artifact upload.
+- One initial post-merge Windows registration health timeout did not reproduce on the same-commit fresh-runner rerun; the full rerun completed successfully through signed update and rollback.
+
 ## Current rescore
 
-**Pending CI verification.** The source-level remediation targets 100/100, but the audit must not be marked 10/10 until the complete Windows workflow is green on the final PR head.
+**100/100 (10/10) verified for the implemented HomeServer release source.**
+
+This score certifies the implemented Windows foundation, cloud connector, backup/recovery, and signed-update/rollback scope against the repository acceptance gates. It does not represent completion of future Knowledge Vault, local model management, MCP runtime, or Linux/NAS phases. Public release publication remains separately gated by the protected v0.1.3 production-signing workflow.
