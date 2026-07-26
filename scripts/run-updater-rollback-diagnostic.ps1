@@ -51,8 +51,20 @@ $diagnostic = @'
     Save-DiagnosticText "service-qsidtype.txt" { & "$env:SystemRoot\System32\sc.exe" qsidtype $serviceName }
     Save-DiagnosticText "service-cim.txt" { Get-CimInstance Win32_Service -Filter "Name='$serviceName'" | Format-List * }
     Save-DiagnosticText "service-registry.txt" { Get-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName" | Format-List * }
+    Save-DiagnosticText "microgifter-processes.txt" {
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'microgifter*' -or $_.ExecutablePath -like '*Microgifter HomeServer*' } |
+            Select-Object ProcessId, ParentProcessId, Name, ExecutablePath, CommandLine, CreationDate | Format-List
+    }
+    Save-DiagnosticText "port-47831.txt" {
+        Get-NetTCPConnection -LocalPort 47831 -ErrorAction SilentlyContinue |
+            Select-Object LocalAddress, LocalPort, RemoteAddress, RemotePort, State, OwningProcess | Format-Table -AutoSize
+        & "$env:SystemRoot\System32\netstat.exe" -ano | Select-String ':47831'
+    }
     Save-DiagnosticText "install-tree.txt" { Get-ChildItem -LiteralPath $installDirectory -Recurse -Force | Select-Object FullName, Length, LastWriteTimeUtc | Format-Table -AutoSize }
     Save-DiagnosticText "data-tree.txt" { Get-ChildItem -LiteralPath $dataDirectory -Recurse -Force | Select-Object FullName, Length, LastWriteTimeUtc | Format-Table -AutoSize }
+    Save-DiagnosticText "install-acl.txt" { & "$env:SystemRoot\System32\icacls.exe" $installDirectory /T /C }
+    Save-DiagnosticText "data-acl.txt" { & "$env:SystemRoot\System32\icacls.exe" $dataDirectory /T /C }
 
     $serviceBinary = Join-Path $installDirectory "resources\microgifter-homeserver-service.exe"
     Save-DiagnosticText "service-binary.txt" {
@@ -79,8 +91,13 @@ $diagnostic = @'
     $logsDirectory = Join-Path $dataDirectory "logs"
     if (Test-Path -LiteralPath $logsDirectory) {
         foreach ($logFile in Get-ChildItem -LiteralPath $logsDirectory -File -ErrorAction SilentlyContinue) {
-            Copy-Item -LiteralPath $logFile.FullName -Destination (Join-Path $evidenceRoot $logFile.Name) -Force -ErrorAction SilentlyContinue
-            Save-DiagnosticText ("tail-" + $logFile.Name + ".txt") { Get-Content -LiteralPath $logFile.FullName -Tail 300 }
+            try {
+                Copy-Item -LiteralPath $logFile.FullName -Destination (Join-Path $evidenceRoot $logFile.Name) -Force -ErrorAction Stop
+            }
+            catch {
+                Save-DiagnosticText ("copy-error-" + $logFile.Name + ".txt") { $_ | Format-List * -Force }
+            }
+            Save-DiagnosticText ("tail-" + $logFile.Name + ".txt") { Get-Content -LiteralPath $logFile.FullName -Tail 300 -ErrorAction Stop }
         }
     }
 
@@ -139,7 +156,7 @@ try {
             }
             foreach ($probeFile in @($probeMarker, $probeStdout, $probeStderr, $probeHealth, $probePid)) {
                 if (Test-Path -LiteralPath $probeFile) {
-                    Copy-Item -LiteralPath $probeFile -Destination $evidenceRoot -Force
+                    Copy-Item -LiteralPath $probeFile -Destination $evidenceRoot -Force -ErrorAction SilentlyContinue
                 }
             }
             Save-DiagnosticText "direct-console-probe.txt" {
@@ -148,6 +165,9 @@ try {
                 if (Test-Path -LiteralPath $probeStdout) { "STDOUT:`n"; Get-Content -LiteralPath $probeStdout -Raw }
                 if (Test-Path -LiteralPath $probeStderr) { "STDERR:`n"; Get-Content -LiteralPath $probeStderr -Raw }
             }
+        }
+        catch {
+            Save-DiagnosticText "direct-console-probe-error.txt" { $_ | Format-List * -Force }
         }
         finally {
             & "$env:SystemRoot\System32\schtasks.exe" /Delete /TN $taskName /F 2>$null | Out-Null
