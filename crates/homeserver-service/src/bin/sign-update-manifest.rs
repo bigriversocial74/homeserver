@@ -163,8 +163,12 @@ fn decode_signing_key(value: &str) -> Result<SigningKey> {
 }
 
 fn required_env(name: &str) -> Result<String> {
-    let value = env::var(name).with_context(|| format!("required environment variable {name} is missing"))?;
-    ensure!(!value.trim().is_empty(), "required environment variable {name} is empty");
+    let value = env::var(name)
+        .with_context(|| format!("required environment variable {name} is missing"))?;
+    ensure!(
+        !value.trim().is_empty(),
+        "required environment variable {name} is empty"
+    );
     Ok(value)
 }
 
