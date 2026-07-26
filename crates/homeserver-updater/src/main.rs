@@ -672,7 +672,9 @@ fn start_service(service_name: &str) -> Result<()> {
 
         match service_state(service_name)? {
             Some(state) if state == "RUNNING" => return Ok(()),
-            None => bail!("unable to start HomeServer service: service registration is unavailable"),
+            None => {
+                bail!("unable to start HomeServer service: service registration is unavailable")
+            }
             Some(_) => std::thread::sleep(Duration::from_millis(500)),
         }
     }
