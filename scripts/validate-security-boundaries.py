@@ -136,7 +136,7 @@ for marker in ("icacls", "S-1-5-18", "S-1-5-32-544", "/inheritance:r"):
 # Production logging and synchronization histories must have retention.
 require("crates/homeserver-service/src/main.rs", "prune_old_service_logs", "service log retention is missing")
 
-# Supply-chain workflows must be read-only and every external action pinned by SHA.
+# Supply-chain workflows must default to read-only and every external action must be pinned by SHA.
 workflow_dir = ROOT / ".github" / "workflows"
 obsolete = {
     "audit-source-snapshot.yml",
@@ -151,8 +151,25 @@ uses_pattern = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)@([^\s#]+)", re.MULTILINE)
 sha_pattern = re.compile(r"^[0-9a-f]{40}$")
 for workflow in sorted(workflow_dir.glob("*.yml")):
     content = workflow.read_text(encoding="utf-8")
-    if re.search(r"(?m)^\s*contents:\s*write\s*$", content):
-        ERRORS.append(f"workflow has unnecessary contents write permission: {workflow.name}")
+    has_contents_write = re.search(r"(?m)^\s*contents:\s*write\s*$", content) is not None
+    if has_contents_write:
+        if workflow.name != "release-v013.yml":
+            ERRORS.append(f"workflow has unnecessary contents write permission: {workflow.name}")
+        else:
+            required_release_markers = (
+                "permissions:\n  contents: read",
+                "permissions:\n      contents: write",
+                "environment: production-release",
+                "if: github.event_name != 'pull_request'",
+                "tags:\n      - 'v*.*.*'",
+                "gh release create",
+                "--verify-tag",
+            )
+            for marker in required_release_markers:
+                if marker not in content:
+                    ERRORS.append(
+                        f"protected release workflow write permission is missing guard: {marker}"
+                    )
     for action, ref in uses_pattern.findall(content):
         if action.startswith("./"):
             continue
