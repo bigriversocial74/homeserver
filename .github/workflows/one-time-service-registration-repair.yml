@@ -1,16 +1,19 @@
 name: One-time service registration repair
 
 on:
-  push:
+  pull_request:
     branches:
-      - audit/full-production-hardening-20260725
+      - main
+    paths:
+      - '.github/workflows/one-time-service-registration-repair.yml'
+      - 'crates/homeserver-updater/src/main.rs'
 
 permissions:
   contents: write
 
 jobs:
   repair:
-    if: github.actor != 'github-actions[bot]'
+    if: github.head_ref == 'audit/full-production-hardening-20260725' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repair branch
