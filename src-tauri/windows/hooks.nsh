@@ -2,12 +2,24 @@
 
 !define MG_SERVICE_NAME "MicrogifterHomeServer"
 !define MG_SERVICE_DISPLAY "Microgifter HomeServer"
+!define MG_INSTALL_LOG "$COMMONAPPDATA\Microgifter\HomeServer\logs\microgifter-homeserver-service.log-installer"
+
+!macro MG_INSTALL_LOG MESSAGE
+  CreateDirectory "$COMMONAPPDATA\Microgifter\HomeServer\logs"
+  FileOpen $1 "${MG_INSTALL_LOG}" a
+  FileWrite $1 "${MESSAGE}$\r$\n"
+  FileClose $1
+!macroend
 
 !macro MG_REQUIRE_SUCCESS MESSAGE
   Pop $0
   ${If} $0 != 0
-    MessageBox MB_ICONSTOP "${MESSAGE} (exit code $0)."
-    Abort
+    DetailPrint "${MESSAGE} (exit code $0)."
+    FileOpen $1 "${MG_INSTALL_LOG}" a
+    FileWrite $1 "${MESSAGE} (exit code $0).$\r$\n"
+    FileClose $1
+    SetErrorLevel $0
+    Quit
   ${EndIf}
 !macroend
 
@@ -22,6 +34,9 @@
 
   DetailPrint "Hardening Microgifter HomeServer data permissions"
   CreateDirectory "$COMMONAPPDATA\Microgifter\HomeServer"
+  CreateDirectory "$COMMONAPPDATA\Microgifter\HomeServer\logs"
+  Delete "${MG_INSTALL_LOG}"
+  !insertmacro MG_INSTALL_LOG "Starting HomeServer installer security and service registration"
 
   ; Protect the root first. Keeping this separate from the grant operation is
   ; required because a combined recursive icacls invocation can leave the root
@@ -65,6 +80,8 @@
 
   nsExec::ExecToLog '"$SYSDIR\sc.exe" start "${MG_SERVICE_NAME}"'
   !insertmacro MG_REQUIRE_SUCCESS "Unable to start the Microgifter HomeServer service"
+
+  !insertmacro MG_INSTALL_LOG "HomeServer installer security and service registration completed successfully"
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
