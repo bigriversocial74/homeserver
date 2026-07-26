@@ -20,7 +20,16 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - name: Restore installer repair build cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-installer-repair-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+
+      - uses: actions/setup-node@49933ea5288ca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: npm
@@ -47,6 +56,15 @@ jobs:
       - name: Build NSIS package
         run: npm run tauri:build
 
+      - name: Save installer repair build cache
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-installer-repair-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+
       - name: Resolve installer
         id: installer
         shell: pwsh
@@ -64,6 +82,8 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: installer-repair-diagnostics
-          path: installer-verification.log
+          path: |
+            installer-verification.log
+            ${{ runner.temp }}/Microgifter-HomeServer-install.log
           if-no-files-found: warn
           retention-days: 7
