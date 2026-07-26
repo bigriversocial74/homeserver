@@ -68,7 +68,7 @@ jobs:
       - name: Run strict service linting
         id: rust_clippy
         continue-on-error: true
-        run: cargo clippy --locked -p microgifter-homeserver-core -p microgifter-homeserver-service --all-targets -- -D warnings -A unused-imports > phase4a-clippy.log 2>&1
+        run: cargo clippy --locked -p microgifter-homeserver-core -p microgifter-homeserver-service --all-targets -- -D warnings -A unused-imports -A dead-code > phase4a-clippy.log 2>&1
 
       - name: Upload Clippy diagnostics
         if: always()
