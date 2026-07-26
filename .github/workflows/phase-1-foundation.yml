@@ -16,7 +16,8 @@ permissions:
 jobs:
   validate:
     runs-on: windows-latest
-    timeout-minutes: 75
+    timeout-minutes: 90
+
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
@@ -34,7 +35,7 @@ jobs:
           key: windows-cargo-${{ hashFiles('Cargo.toml', '**/Cargo.toml', 'Cargo.lock') }}
           restore-keys: windows-cargo-
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: 22
           cache: npm
@@ -48,13 +49,12 @@ jobs:
           $match = [regex]::Match($cargo, '(?ms)\[workspace\.package\].*?^version\s*=\s*"([^"]+)"')
           if (-not $match.Success) { throw "Unable to resolve workspace release version" }
           $version = $match.Groups[1].Value
-          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Release version must be strict semantic versioning" }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Release version must use strict semantic versioning" }
           $package = Get-Content package.json -Raw | ConvertFrom-Json
           $tauri = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
           if ($package.version -ne $version) { throw "package.json version does not match $version" }
           if ($tauri.version -ne $version) { throw "tauri.conf.json version does not match $version" }
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          Write-Host "Verified release metadata: $version"
 
       - name: Verify dependency lock stability
         shell: pwsh
@@ -64,37 +64,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo generate-lockfile
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          New-Item -ItemType Directory -Force generated-locks | Out-Null
-          Copy-Item Cargo.lock generated-locks/Cargo.lock -Force
-          Copy-Item package-lock.json generated-locks/package-lock.json -Force
-          git diff -- Cargo.lock package-lock.json | Set-Content dependency-lock-diff.log
-          git diff --quiet -- Cargo.lock package-lock.json
-          $lockExit = $LASTEXITCODE
-          if ($lockExit -ne 0) {
-            Get-Content dependency-lock-diff.log -Tail 240
-            exit $lockExit
-          }
-
-      - name: Upload dependency lock diagnostics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: dependency-lock-diagnostics
-          path: |
-            dependency-lock-diff.log
-            generated-locks
-          if-no-files-found: warn
-          retention-days: 7
+          git diff --exit-code -- Cargo.lock package-lock.json
 
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Frontend and script syntax
+      - name: Frontend and PowerShell syntax
         shell: pwsh
         run: |
           npm run check:frontend
-          $scripts = Get-ChildItem scripts -Filter "*.ps1"
-          foreach ($script in $scripts) {
+          foreach ($script in Get-ChildItem scripts -Filter "*.ps1") {
             $tokens = $null
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors) | Out-Null
@@ -107,13 +86,13 @@ jobs:
       - name: Security boundary regression checks
         run: python scripts/validate-security-boundaries.py
 
-      - name: Frontend build
-        run: npm run build
+      - name: Frontend build and dependency audit
+        shell: pwsh
+        run: |
+          npm run build
+          npm audit --audit-level=high
 
-      - name: Frontend dependency vulnerability audit
-        run: npm audit --audit-level=high
-
-      - name: RustSec dependency vulnerability audit
+      - name: Rust dependency audit
         shell: pwsh
         run: |
           if (-not (Get-Command cargo-audit -ErrorAction SilentlyContinue)) {
@@ -127,34 +106,24 @@ jobs:
       - name: Rust formatting
         run: cargo fmt --all --check
 
-      - name: Build updater and Windows service resources from clean output
+      - name: Build native service and updater from clean output
         shell: pwsh
         run: |
-          cargo clean --package microgifter-homeserver-updater --package microgifter-homeserver-service
+          cargo clean --package microgifter-homeserver-service --package microgifter-homeserver-updater
           Remove-Item target/release/microgifter-homeserver-service.exe -Force -ErrorAction SilentlyContinue
           Remove-Item target/release/microgifter-homeserver-updater.exe -Force -ErrorAction SilentlyContinue
           Remove-Item src-tauri/resources/microgifter-homeserver-service.exe -Force -ErrorAction SilentlyContinue
           Remove-Item src-tauri/resources/microgifter-homeserver-updater.exe -Force -ErrorAction SilentlyContinue
-          cargo build --release --package microgifter-homeserver-updater --locked *> updater-build.log
-          $updaterCode = $LASTEXITCODE
-          if ($updaterCode -ne 0) {
-            Get-Content updater-build.log -Tail 180
-            exit $updaterCode
-          }
           cargo build --release --package microgifter-homeserver-service --locked *> service-build.log
-          $serviceCode = $LASTEXITCODE
-          if ($serviceCode -ne 0) {
-            Get-Content service-build.log -Tail 180
-            exit $serviceCode
-          }
-          Get-Content updater-build.log -Tail 20
-          Get-Content service-build.log -Tail 20
+          if ($LASTEXITCODE -ne 0) { Get-Content service-build.log -Tail 200; exit $LASTEXITCODE }
+          cargo build --release --package microgifter-homeserver-updater --locked *> updater-build.log
+          if ($LASTEXITCODE -ne 0) { Get-Content updater-build.log -Tail 200; exit $LASTEXITCODE }
           $expectedService = "MicrogifterHomeServer ${{ steps.release.outputs.version }}"
           $expectedUpdater = "MicrogifterHomeServerUpdater ${{ steps.release.outputs.version }}"
-          $serviceVersion = (& target/release/microgifter-homeserver-service.exe --version | Out-String).Trim()
-          $updaterVersion = (& target/release/microgifter-homeserver-updater.exe --version | Out-String).Trim()
-          if ($serviceVersion -ne $expectedService) { throw "Service version mismatch: $serviceVersion" }
-          if ($updaterVersion -ne $expectedUpdater) { throw "Updater version mismatch: $updaterVersion" }
+          if ((& target/release/microgifter-homeserver-service.exe --version | Out-String).Trim() -ne $expectedService) { throw "Service version mismatch" }
+          if ((& target/release/microgifter-homeserver-updater.exe --version | Out-String).Trim() -ne $expectedUpdater) { throw "Updater version mismatch" }
+          Copy-Item target/release/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
+          Copy-Item target/release/microgifter-homeserver-updater.exe src-tauri/resources/microgifter-homeserver-updater.exe -Force
 
       - name: Upload native compiler logs
         if: always()
@@ -162,93 +131,43 @@ jobs:
         with:
           name: native-build-logs
           path: |
-            updater-build.log
             service-build.log
+            updater-build.log
           if-no-files-found: warn
           retention-days: 7
-
-      - name: Stage and verify native resources for desktop targets
-        shell: pwsh
-        run: |
-          Copy-Item target/release/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
-          Copy-Item target/release/microgifter-homeserver-updater.exe src-tauri/resources/microgifter-homeserver-updater.exe -Force
-          $expectedService = "MicrogifterHomeServer ${{ steps.release.outputs.version }}"
-          $expectedUpdater = "MicrogifterHomeServerUpdater ${{ steps.release.outputs.version }}"
-          if ((& src-tauri/resources/microgifter-homeserver-service.exe --version | Out-String).Trim() -ne $expectedService) { throw "Staged service version mismatch" }
-          if ((& src-tauri/resources/microgifter-homeserver-updater.exe --version | Out-String).Trim() -ne $expectedUpdater) { throw "Staged updater version mismatch" }
 
       - name: Full workspace tests
         shell: pwsh
         run: |
           cargo test --workspace --locked *> cargo-test.log
-          $testCode = $LASTEXITCODE
-          if ($testCode -ne 0) {
-            Get-Content cargo-test.log -Tail 220
-            exit $testCode
-          }
-          Get-Content cargo-test.log -Tail 50
-
-      - name: Upload workspace test log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: cargo-test-log
-          path: cargo-test.log
-          if-no-files-found: warn
-          retention-days: 7
+          if ($LASTEXITCODE -ne 0) { Get-Content cargo-test.log -Tail 240; exit $LASTEXITCODE }
 
       - name: Full workspace lint
         shell: pwsh
         run: |
           cargo clippy --workspace --all-targets --locked -- -D warnings *> cargo-clippy.log
-          $lintCode = $LASTEXITCODE
-          if ($lintCode -ne 0) {
-            Get-Content cargo-clippy.log -Tail 220
-            exit $lintCode
-          }
-          Get-Content cargo-clippy.log -Tail 40
+          if ($LASTEXITCODE -ne 0) { Get-Content cargo-clippy.log -Tail 240; exit $LASTEXITCODE }
 
-      - name: Upload workspace lint log
+      - name: Upload workspace logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: cargo-clippy-log
-          path: cargo-clippy.log
+          name: workspace-quality-logs
+          path: |
+            cargo-test.log
+            cargo-clippy.log
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Encrypted backup and restore console smoke test
+      - name: Service, cloud, backup, and update API smoke tests
         shell: pwsh
         run: |
           & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-service.ps1 *> service-smoke.log
-          $smokeCode = $LASTEXITCODE
-          if ($smokeCode -ne 0) {
-            Get-Content service-smoke.log -Tail 220
-            exit $smokeCode
-          }
-          Get-Content service-smoke.log -Tail 50
-
-      - name: Cloud connector local boundary smoke test
-        shell: pwsh
-        run: |
-          & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-cloud-connector.ps1 *> cloud-connector-smoke.log
-          $smokeCode = $LASTEXITCODE
-          if ($smokeCode -ne 0) {
-            Get-Content cloud-connector-smoke.log -Tail 220
-            exit $smokeCode
-          }
-          Get-Content cloud-connector-smoke.log -Tail 80
-
-      - name: Signed update loopback API smoke test
-        shell: pwsh
-        run: |
+          if ($LASTEXITCODE -ne 0) { Get-Content service-smoke.log -Tail 240; exit $LASTEXITCODE }
+          & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-cloud-connector.ps1 *> cloud-smoke.log
+          if ($LASTEXITCODE -ne 0) { Get-Content cloud-smoke.log -Tail 240; exit $LASTEXITCODE }
           & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-update-api.ps1 *> update-api-smoke.log
-          $smokeCode = $LASTEXITCODE
-          if ($smokeCode -ne 0) {
-            Get-Content update-api-smoke.log -Tail 180
-            exit $smokeCode
-          }
-          Get-Content update-api-smoke.log -Tail 40
+          if ($LASTEXITCODE -ne 0) { Get-Content update-api-smoke.log -Tail 240; exit $LASTEXITCODE }
 
       - name: Upload service smoke logs
         if: always()
@@ -257,7 +176,7 @@ jobs:
           name: service-smoke-logs
           path: |
             service-smoke.log
-            cloud-connector-smoke.log
+            cloud-smoke.log
             update-api-smoke.log
           if-no-files-found: warn
           retention-days: 7
@@ -266,24 +185,7 @@ jobs:
         shell: pwsh
         run: |
           npm run tauri:build *> tauri-build.log
-          $buildCode = $LASTEXITCODE
-          if ($buildCode -ne 0) {
-            Get-Content tauri-build.log -Tail 220
-            exit $buildCode
-          }
-
-      - name: Upload Tauri build log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: tauri-build-log
-          path: tauri-build.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Normalize versioned installer filename
-        shell: pwsh
-        run: |
+          if ($LASTEXITCODE -ne 0) { Get-Content tauri-build.log -Tail 240; exit $LASTEXITCODE }
           $bundle = "target/release/bundle/nsis"
           $installer = Get-ChildItem $bundle -Filter "*-setup.exe" | Select-Object -First 1
           if (-not $installer) { throw "NSIS installer was not produced" }
@@ -293,27 +195,16 @@ jobs:
         shell: pwsh
         run: ./scripts/smoke-test-installer.ps1 -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe
 
-      - name: Verify installed release version and Windows registration
+      - name: Verify installed release and Windows registration
         shell: pwsh
         run: |
           & pwsh -NoLogo -NoProfile -NonInteractive `
             -File ./scripts/verify-installer-release.ps1 `
             -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe `
             -ExpectedVersion "${{ steps.release.outputs.version }}" *> installer-verification.log
-          $verifyCode = $LASTEXITCODE
-          Get-Content installer-verification.log -Tail 240
-          if ($verifyCode -ne 0) { exit $verifyCode }
+          if ($LASTEXITCODE -ne 0) { Get-Content installer-verification.log -Tail 260; exit $LASTEXITCODE }
 
-      - name: Upload installed release verification log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: installer-release-verification-log
-          path: installer-verification.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Create trusted CI Authenticode update installer
+      - name: Create trusted CI Authenticode update package
         id: sign_update
         shell: pwsh
         run: |
@@ -325,8 +216,8 @@ jobs:
           Export-Certificate -Cert $cert -FilePath "$bundle/Microgifter-CI-Update-Test.cer" | Out-Null
           Import-Certificate -FilePath "$bundle/Microgifter-CI-Update-Test.cer" -CertStoreLocation "Cert:\LocalMachine\Root" | Out-Null
           Import-Certificate -FilePath "$bundle/Microgifter-CI-Update-Test.cer" -CertStoreLocation "Cert:\LocalMachine\TrustedPublisher" | Out-Null
-          $signedResult = Set-AuthenticodeSignature -FilePath $signed -Certificate $cert -HashAlgorithm SHA256
-          if ($signedResult.Status -ne "Valid") { throw "Unable to create a trusted CI Authenticode installer: $($signedResult.StatusMessage)" }
+          $signature = Set-AuthenticodeSignature -FilePath $signed -Certificate $cert -HashAlgorithm SHA256
+          if ($signature.Status -ne "Valid") { throw "Unable to create trusted CI update installer: $($signature.StatusMessage)" }
           $cert.Thumbprint | Set-Content update-test-thumbprint.txt -NoNewline
           "thumbprint=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
@@ -338,28 +229,15 @@ jobs:
             (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\Modules")
             (Join-Path $env:ProgramFiles "WindowsPowerShell\Modules")
           ) -join [System.IO.Path]::PathSeparator
-          Write-Host "Updater Windows PowerShell module path: $env:PSModulePath"
           ./scripts/smoke-test-updater.ps1 `
             -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe `
             -UpdateInstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Update-Test.exe `
             -SignerThumbprint "${{ steps.sign_update.outputs.thumbprint }}" `
             -ExpectedVersion "${{ steps.release.outputs.version }}" *> updater-smoke.log
           $log = Get-Content updater-smoke.log -Raw
-          Get-Content updater-smoke.log -Tail 260
-          $successMarker = "HomeServer signed update, Authenticode verification, health confirmation, automatic rollback, installer preservation, and cleanup smoke tests passed."
-          if ($log -match "HomeServer updater smoke failure:" -or -not $log.Contains($successMarker)) {
-            exit 1
-          }
-          exit 0
-
-      - name: Upload updater smoke log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: updater-smoke-log
-          path: updater-smoke.log
-          if-no-files-found: warn
-          retention-days: 7
+          Get-Content updater-smoke.log -Tail 280
+          $marker = "HomeServer signed update, Authenticode verification, health confirmation, automatic rollback, installer preservation, and cleanup smoke tests passed."
+          if ($log -match "HomeServer updater smoke failure:" -or -not $log.Contains($marker)) { exit 1 }
 
       - name: Remove CI Authenticode trust material
         if: always()
@@ -371,6 +249,18 @@ jobs:
             Remove-Item "Cert:\LocalMachine\Root\$thumbprint" -Force -ErrorAction SilentlyContinue
             Remove-Item "Cert:\LocalMachine\TrustedPublisher\$thumbprint" -Force -ErrorAction SilentlyContinue
           }
+
+      - name: Upload release verification artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-verification-logs
+          path: |
+            tauri-build.log
+            installer-verification.log
+            updater-smoke.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload verified versioned installer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
