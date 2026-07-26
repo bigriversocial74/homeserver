@@ -567,12 +567,10 @@ fn ensure_service_registration(service_name: &str, install_dir: &Path) -> Result
         vec![
             "config".to_owned(),
             service_name.to_owned(),
-            "binPath=".to_owned(),
-            binary_command,
             "start=".to_owned(),
             "delayed-auto".to_owned(),
         ],
-        "configure restored HomeServer service",
+        "configure restored HomeServer service startup",
     )?;
     run_sc(
         vec![
