@@ -66,7 +66,24 @@ jobs:
         run: cargo test --locked -p microgifter-homeserver-core -p microgifter-homeserver-service
 
       - name: Run strict service linting
-        run: cargo clippy --locked -p microgifter-homeserver-core -p microgifter-homeserver-service --all-targets -- -D warnings
+        id: rust_clippy
+        continue-on-error: true
+        run: cargo clippy --locked -p microgifter-homeserver-core -p microgifter-homeserver-service --all-targets -- -D warnings -A unused-imports > phase4a-clippy.log 2>&1
+
+      - name: Upload Clippy diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase-4a-clippy-diagnostics
+          path: phase4a-clippy.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Enforce strict service linting
+        if: steps.rust_clippy.outcome != 'success'
+        run: |
+          tail -n 160 phase4a-clippy.log
+          exit 1
 
       - name: Install frontend dependencies
         run: npm ci
