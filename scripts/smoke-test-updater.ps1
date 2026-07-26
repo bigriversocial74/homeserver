@@ -25,7 +25,7 @@ $stagingDirectory = Join-Path $dataDirectory "updates\staging"
 $rollbackRoot = Join-Path $dataDirectory "updates\rollback"
 $installedArchive = Join-Path $dataDirectory "updates\installed"
 $resultPath = Join-Path $dataDirectory "updates\last-update-result.json"
-$diagnosticDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "Microgifter-HomeServer-Updater-Smoke"
+$diagnosticDirectory = Join-Path $env:SystemRoot "Temp\Microgifter-HomeServer-Updater-Smoke"
 $uninstallerPath = $null
 $scriptExitCode = 0
 $currentUserTrustStores = @("Root", "TrustedPublisher")
@@ -34,7 +34,7 @@ function Read-TrimmedText {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Path,
-        [ValidateRange(1, 180)]
+        [ValidateRange(1, 600)]
         [int]$TimeoutSeconds = 30
     )
 
@@ -240,48 +240,125 @@ function Invoke-UpdatePlan {
 
     New-Item -ItemType Directory -Force $diagnosticDirectory | Out-Null
     $diagnosticId = [guid]::NewGuid().ToString("N")
+    $taskName = "MicrogifterHomeServerUpdaterSmoke-$diagnosticId"
+    $taskDirectory = Join-Path $diagnosticDirectory $diagnosticId
     $updaterCopy = Join-Path $stagingDirectory "updater-smoke-$diagnosticId.exe"
-    $stdoutPath = Join-Path $diagnosticDirectory "updater-smoke-$diagnosticId.stdout.log"
-    $stderrPath = Join-Path $diagnosticDirectory "updater-smoke-$diagnosticId.stderr.log"
+    $taskConfigPath = Join-Path $taskDirectory "task-config.json"
+    $taskScriptPath = Join-Path $taskDirectory "run-updater.ps1"
+    $completionPath = Join-Path $taskDirectory "completion.json"
+    $stdoutPath = Join-Path $taskDirectory "updater.stdout.log"
+    $stderrPath = Join-Path $taskDirectory "updater.stderr.log"
+
+    New-Item -ItemType Directory -Force $taskDirectory | Out-Null
     Copy-Item $installedUpdater $updaterCopy -Force
     Remove-Item $resultPath -Force -ErrorAction SilentlyContinue
 
+    [ordered]@{
+        updater_path = $updaterCopy
+        plan_path = $Plan.PlanPath
+        result_path = $resultPath
+        stdout_path = $stdoutPath
+        stderr_path = $stderrPath
+        completion_path = $completionPath
+    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $taskConfigPath -Encoding UTF8
+
+    @'
+$ErrorActionPreference = "Stop"
+$config = Get-Content -LiteralPath (Join-Path $PSScriptRoot "task-config.json") -Raw | ConvertFrom-Json
+
+function Read-TaskText {
+    param([string]$Path)
+    for ($attempt = 0; $attempt -lt 120; $attempt++) {
+        try {
+            if (Test-Path -LiteralPath $Path) {
+                $value = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+                if ($null -eq $value) { return "" }
+                return $value.Trim()
+            }
+        }
+        catch {
+            Start-Sleep -Milliseconds 250
+            continue
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    return ""
+}
+
+$exitCode = 1
+$taskError = $null
+try {
+    $process = Start-Process -FilePath $config.updater_path -ArgumentList @("apply", $config.plan_path) -RedirectStandardOutput $config.stdout_path -RedirectStandardError $config.stderr_path -PassThru -Wait
+    $exitCode = $process.ExitCode
+}
+catch {
+    $taskError = $_.Exception.ToString()
+}
+
+$stdout = Read-TaskText -Path $config.stdout_path
+$stderr = Read-TaskText -Path $config.stderr_path
+$resultJson = Read-TaskText -Path $config.result_path
+[ordered]@{
+    exit_code = $exitCode
+    task_error = $taskError
+    stdout = $stdout
+    stderr = $stderr
+    result_json = $resultJson
+} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $config.completion_path -Encoding UTF8
+'@ | Set-Content -LiteralPath $taskScriptPath -Encoding UTF8
+
     try {
-        $process = Start-Process -FilePath $updaterCopy -ArgumentList @("apply", $Plan.PlanPath) -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru -Wait
-        $stdout = Read-TrimmedText -Path $stdoutPath -TimeoutSeconds 60
-        $stderr = Read-TrimmedText -Path $stderrPath -TimeoutSeconds 60
-        $resultJson = Read-TrimmedText -Path $resultPath -TimeoutSeconds 60
-
-        if ($stdout) {
-            Write-Host "HomeServer updater stdout:`n$stdout"
+        $taskTime = (Get-Date).AddMinutes(1).ToString("HH:mm")
+        $windowsPowerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+        $taskCommand = "`"$windowsPowerShell`" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$taskScriptPath`""
+        $createOutput = & "$env:SystemRoot\System32\schtasks.exe" /Create /TN $taskName /TR $taskCommand /SC ONCE /ST $taskTime /RU SYSTEM /RL HIGHEST /F 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to create LocalSystem updater task: $($createOutput.Trim())"
         }
-        if ($stderr) {
-            Write-Host "HomeServer updater stderr:`n$stderr"
-        }
-        if ($resultJson) {
-            Write-Host "HomeServer updater result:`n$resultJson"
+        $runOutput = & "$env:SystemRoot\System32\schtasks.exe" /Run /TN $taskName 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to start LocalSystem updater task: $($runOutput.Trim())"
         }
 
-        if ($process.ExitCode -ne 0) {
-            $detail = if ($resultJson) {
-                $result = $resultJson | ConvertFrom-Json
+        $completionJson = Read-TrimmedText -Path $completionPath -TimeoutSeconds 420
+        if (-not $completionJson) {
+            throw "LocalSystem updater task did not produce a completion record"
+        }
+        $completion = $completionJson | ConvertFrom-Json
+
+        if ($completion.stdout) {
+            Write-Host "HomeServer updater stdout:`n$($completion.stdout)"
+        }
+        if ($completion.stderr) {
+            Write-Host "HomeServer updater stderr:`n$($completion.stderr)"
+        }
+        if ($completion.result_json) {
+            Write-Host "HomeServer updater result:`n$($completion.result_json)"
+        }
+        if ($completion.task_error) {
+            throw "LocalSystem updater task failed to launch the helper: $($completion.task_error)"
+        }
+        if ([int]$completion.exit_code -ne 0) {
+            $detail = if ($completion.result_json) {
+                $result = $completion.result_json | ConvertFrom-Json
                 "state=$($result.state), failure_code=$($result.failure_code), message=$($result.message)"
             }
-            elseif ($stderr) {
-                $stderr
+            elseif ($completion.stderr) {
+                $completion.stderr
             }
             else {
                 "no updater result or stderr was produced"
             }
-            throw "HomeServer updater helper failed with exit code $($process.ExitCode): $detail"
+            throw "HomeServer updater helper failed with exit code $($completion.exit_code): $detail"
         }
-        if (-not $resultJson) {
+        if (-not $completion.result_json) {
             throw "HomeServer updater did not write an application result"
         }
-        $resultJson | ConvertFrom-Json
+        $completion.result_json | ConvertFrom-Json
     }
     finally {
-        Remove-Item $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+        & "$env:SystemRoot\System32\schtasks.exe" /Delete /TN $taskName /F 2>$null | Out-Null
+        Remove-Item $taskDirectory -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
