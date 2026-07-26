@@ -42,6 +42,36 @@ function Write-DiagnosticBlock {
     Write-Diagnostic "$Label END"
 }
 
+function Invoke-BoundedProcess {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [Parameter(Mandatory = $true)]
+        [string[]]$ArgumentList,
+        [Parameter(Mandatory = $true)]
+        [ValidateRange(1, 600)]
+        [int]$TimeoutSeconds,
+        [Parameter(Mandatory = $true)]
+        [string]$Label
+    )
+
+    $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -PassThru
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        Write-Diagnostic "$Label exceeded its $TimeoutSeconds-second process deadline"
+        try {
+            Stop-Process -Id $process.Id -Force -ErrorAction Stop
+        }
+        catch {
+            Write-Diagnostic "Unable to terminate timed-out $Label process $($process.Id): $($_.Exception.Message)"
+        }
+        throw "$Label timed out after $TimeoutSeconds seconds"
+    }
+
+    $process.Refresh()
+    Write-Diagnostic "$Label exited with code $($process.ExitCode)"
+    return $process.ExitCode
+}
+
 function Wait-ForHomeServerHealth {
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         try {
@@ -91,10 +121,9 @@ function Resolve-HomeServerUninstaller {
 
 try {
     Write-Diagnostic "Starting installed LocalSystem smoke test with installer '$installer'"
-    $install = Start-Process -FilePath $installer -ArgumentList "/S" -PassThru -Wait
-    Write-Diagnostic "Installer exited with code $($install.ExitCode)"
-    if ($install.ExitCode -ne 0) {
-        throw "HomeServer installer failed with exit code $($install.ExitCode)"
+    $installExitCode = Invoke-BoundedProcess -FilePath $installer -ArgumentList @("/S") -TimeoutSeconds 180 -Label "HomeServer installer"
+    if ($installExitCode -ne 0) {
+        throw "HomeServer installer failed with exit code $installExitCode"
     }
 
     Wait-ForHomeServerHealth
@@ -192,10 +221,9 @@ try {
     Write-Diagnostic "Preservation marker written"
     $uninstallerPath = Resolve-HomeServerUninstaller
     Write-Diagnostic "Resolved uninstaller '$uninstallerPath'"
-    $uninstall = Start-Process -FilePath $uninstallerPath -ArgumentList "/S" -PassThru -Wait
-    Write-Diagnostic "Uninstaller exited with code $($uninstall.ExitCode)"
-    if ($uninstall.ExitCode -ne 0) {
-        throw "HomeServer uninstaller failed with exit code $($uninstall.ExitCode)"
+    $uninstallExitCode = Invoke-BoundedProcess -FilePath $uninstallerPath -ArgumentList @("/S") -TimeoutSeconds 180 -Label "HomeServer uninstaller"
+    if ($uninstallExitCode -ne 0) {
+        throw "HomeServer uninstaller failed with exit code $uninstallExitCode"
     }
 
     for ($attempt = 0; $attempt -lt 30; $attempt++) {
@@ -259,7 +287,12 @@ finally {
         & "$env:SystemRoot\System32\sc.exe" delete $serviceName | Out-Null
     }
     if ($uninstallerPath -and (Test-Path $uninstallerPath)) {
-        Start-Process -FilePath $uninstallerPath -ArgumentList "/S" -Wait -ErrorAction SilentlyContinue
+        try {
+            [void](Invoke-BoundedProcess -FilePath $uninstallerPath -ArgumentList @("/S") -TimeoutSeconds 45 -Label "HomeServer cleanup uninstaller")
+        }
+        catch {
+            Write-Diagnostic "Cleanup uninstaller did not complete: $($_.Exception.Message)"
+        }
     }
     if (Test-Path $dataDirectory) {
         Remove-Item $dataDirectory -Recurse -Force -ErrorAction SilentlyContinue
