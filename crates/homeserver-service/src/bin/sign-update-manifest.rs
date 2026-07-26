@@ -9,6 +9,7 @@ use microgifter_homeserver_core::{
     SignedUpdateManifest, UpdateChannel, UpdateInstallerContract, UpdateManifestPayload,
     PRODUCT_NAME, UPDATE_MANIFEST_SCHEMA_VERSION,
 };
+use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
 use std::{env, fs, path::PathBuf};
 
@@ -28,10 +29,47 @@ struct Arguments {
 }
 
 fn main() {
-    if let Err(error) = run() {
+    let result = if env::args().nth(1).as_deref() == Some("--generate-test-key-pair") {
+        generate_test_key_pair()
+    } else {
+        run()
+    };
+
+    if let Err(error) = result {
         eprintln!("HomeServer release manifest failure: {error:#}");
         std::process::exit(1);
     }
+}
+
+fn generate_test_key_pair() -> Result<()> {
+    let output = env::args()
+        .nth(2)
+        .context("--generate-test-key-pair requires an output path")?;
+    ensure!(
+        env::args().nth(3).is_none(),
+        "--generate-test-key-pair accepts only an output path"
+    );
+
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let material = serde_json::json!({
+        "private_key_base64": STANDARD.encode(signing_key.to_bytes()),
+        "public_key_base64": STANDARD.encode(signing_key.verifying_key().to_bytes()),
+    });
+    let output = PathBuf::from(output);
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&output, serde_json::to_vec_pretty(&material)?).with_context(|| {
+        format!(
+            "unable to write ephemeral release key material {}",
+            output.display()
+        )
+    })?;
+    println!(
+        "Created ephemeral HomeServer internal-test update keys at {}",
+        output.display()
+    );
+    Ok(())
 }
 
 fn run() -> Result<()> {
