@@ -10,6 +10,7 @@ on:
       - synchronize
     paths:
       - .github/workflows/apply-control-center-ui.yml
+      - .ui-payload-*
 
 permissions:
   contents: write
@@ -26,33 +27,15 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Reconstruct validated UI payload
-        env:
-          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          : > /tmp/homeserver-ui.b64
-          for sha in \
-            e7cbcb057f8fe386b7271d92088d429cb1a19bf7 \
-            6490df9d22c8557099e501c533b274311433869f \
-            f507d1755d10e1a9bf2f04415fd8f52b17a034a9 \
-            cbfc14665b970cf64ae63ecfccbb66f74e7fe0f5 \
-            d2fa9e83e8531fc3513dfcb98cd24d564366c0ab \
-            772fb562f79d0c95874489da8d2d064aadfc5acc \
-            cded8c4de6d50ca998c9ca5c064e3df7176176f4 \
-            01246a038817f649ab09a34e9cf66e8e8a08644a \
-            41ad418bf1d1322506d8ad36dada6290b7d40069 \
-            105ccdf2bf10b5d0de7f3b4cc2049c74c3e6979b \
-            1f30bb1a28fe8beb7790ae2b3682d0fab6bc8db7
-          do
-            gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${sha}" --jq .content \
-              | tr -d '\n' \
-              | base64 --decode >> /tmp/homeserver-ui.b64
-          done
+          cat .ui-payload-* > /tmp/homeserver-ui.b64
           test "$(wc -c < /tmp/homeserver-ui.b64 | tr -d ' ')" = "41060"
           base64 --decode /tmp/homeserver-ui.b64 > /tmp/homeserver-ui.tar.gz
           echo "abfaf87e6aa3dbef0c7255f8abf2efd6e6f668be12a5154a69a80fbcae744572  /tmp/homeserver-ui.tar.gz" | sha256sum --check
           tar -xzf /tmp/homeserver-ui.tar.gz
+          rm -f .ui-payload-*
           rm -f .github/workflows/apply-control-center-ui.yml
 
       - name: Set up Node.js
