@@ -2,11 +2,11 @@
 
 !define MG_SERVICE_NAME "MicrogifterHomeServer"
 !define MG_SERVICE_DISPLAY "Microgifter HomeServer"
-!define MG_INSTALL_LOG_PATH "$COMMONAPPDATA\Microgifter\HomeServer\logs\microgifter-homeserver-service.log-installer"
+!define MG_INSTALL_LOG_PATH "$COMMONPROGRAMDATA\Microgifter\HomeServer\logs\microgifter-homeserver-service.log-installer"
 !define MG_TEMP_INSTALL_LOG_PATH "$TEMP\Microgifter-HomeServer-install.log"
 
 !macro MG_WRITE_INSTALL_LOG MESSAGE
-  CreateDirectory "$COMMONAPPDATA\Microgifter\HomeServer\logs"
+  CreateDirectory "$COMMONPROGRAMDATA\Microgifter\HomeServer\logs"
   FileOpen $1 "${MG_INSTALL_LOG_PATH}" a
   FileWrite $1 "${MESSAGE}$\r$\n"
   FileClose $1
@@ -40,8 +40,8 @@
   Sleep 1500
 
   DetailPrint "Hardening Microgifter HomeServer data permissions"
-  CreateDirectory "$COMMONAPPDATA\Microgifter\HomeServer"
-  CreateDirectory "$COMMONAPPDATA\Microgifter\HomeServer\logs"
+  CreateDirectory "$COMMONPROGRAMDATA\Microgifter\HomeServer"
+  CreateDirectory "$COMMONPROGRAMDATA\Microgifter\HomeServer\logs"
   Delete "${MG_INSTALL_LOG_PATH}"
   Delete "${MG_TEMP_INSTALL_LOG_PATH}"
   !insertmacro MG_WRITE_INSTALL_LOG "Starting HomeServer installer security and service registration"
@@ -49,23 +49,23 @@
   ; Protect the root first. Keeping this separate from the grant operation is
   ; required because a combined recursive icacls invocation can leave the root
   ; ACL inheriting from ProgramData on some Windows builds.
-  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONAPPDATA\Microgifter\HomeServer" /inheritance:r'
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\Microgifter\HomeServer" /inheritance:r'
   !insertmacro MG_REQUIRE_SUCCESS "Unable to disable inherited HomeServer data permissions"
 
-  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONAPPDATA\Microgifter\HomeServer" /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"'
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\Microgifter\HomeServer" /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"'
   !insertmacro MG_REQUIRE_SUCCESS "Unable to grant restricted HomeServer data permissions"
 
-  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONAPPDATA\Microgifter\HomeServer" /setowner "*S-1-5-18"'
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\Microgifter\HomeServer" /setowner "*S-1-5-18"'
   !insertmacro MG_REQUIRE_SUCCESS "Unable to set the HomeServer data directory owner"
 
   ; Harden retained data during upgrades as well as the root directory itself.
-  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONAPPDATA\Microgifter\HomeServer" /inheritance:r /T /C'
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\Microgifter\HomeServer" /inheritance:r /T /C'
   !insertmacro MG_REQUIRE_SUCCESS "Unable to remove inherited permissions from retained HomeServer data"
 
-  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONAPPDATA\Microgifter\HomeServer" /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C'
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\Microgifter\HomeServer" /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C'
   !insertmacro MG_REQUIRE_SUCCESS "Unable to apply restricted permissions to retained HomeServer data"
 
-  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONAPPDATA\Microgifter\HomeServer" /setowner "*S-1-5-18" /T /C'
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\Microgifter\HomeServer" /setowner "*S-1-5-18" /T /C'
   !insertmacro MG_REQUIRE_SUCCESS "Unable to set retained HomeServer data ownership"
 
   nsExec::ExecToLog '"$SYSDIR\sc.exe" create "${MG_SERVICE_NAME}" binPath= "\"$INSTDIR\resources\microgifter-homeserver-service.exe\" service" start= auto DisplayName= "${MG_SERVICE_DISPLAY}"'
