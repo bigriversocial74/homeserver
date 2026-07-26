@@ -34,31 +34,19 @@ jobs:
 
           path = Path("crates/homeserver-updater/src/main.rs")
           source = path.read_text(encoding="utf-8")
-          old = '''    run_sc(
-              vec![
-                  "config".to_owned(),
-                  service_name.to_owned(),
-                  "binPath=".to_owned(),
-                  binary_command,
-                  "start=".to_owned(),
-                  "delayed-auto".to_owned(),
-              ],
-              "configure restored HomeServer service",
-          )?;
-          '''
-          new = '''    run_sc(
-              vec![
-                  "config".to_owned(),
-                  service_name.to_owned(),
-                  "start=".to_owned(),
-                  "delayed-auto".to_owned(),
-              ],
-              "configure restored HomeServer service startup",
-          )?;
-          '''
-          if old not in source:
-              raise SystemExit("Expected rollback service configuration block was not found")
-          path.write_text(source.replace(old, new, 1), encoding="utf-8")
+          command_lines = '            "binPath=".to_owned(),\n            binary_command,\n'
+          action_text = '        "configure restored HomeServer service",\n'
+          if source.count(command_lines) != 1:
+              raise SystemExit(f"Expected one rollback binPath block, found {source.count(command_lines)}")
+          if source.count(action_text) != 1:
+              raise SystemExit(f"Expected one rollback configuration label, found {source.count(action_text)}")
+          source = source.replace(command_lines, "", 1)
+          source = source.replace(
+              action_text,
+              '        "configure restored HomeServer service startup",\n',
+              1,
+          )
+          path.write_text(source, encoding="utf-8")
 
       - name: Format and commit scoped repair
         shell: bash
