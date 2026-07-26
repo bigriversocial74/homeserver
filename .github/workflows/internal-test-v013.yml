@@ -1,0 +1,286 @@
+name: HomeServer v0.1.3 Internal Test Build
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/internal-test-v013.yml'
+      - 'crates/homeserver-service/src/bin/sign-update-manifest.rs'
+      - 'scripts/validate-internal-test-contract.py'
+      - 'docs/internal-test-v0.1.3.md'
+      - 'docs/releases/v0.1.3.md'
+  workflow_dispatch:
+    inputs:
+      run_anyway:
+        description: 'RUN ANYWAY: build with temporary self-signed test credentials'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homeserver-v013-internal-test-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Validate internal test contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+      - name: Validate internal test files
+        run: python scripts/validate-internal-test-contract.py
+      - name: Compile manifest signer
+        run: cargo check --locked --package microgifter-homeserver-service --bin sign-update-manifest
+
+  internal_test:
+    name: Build and verify Run Anyway installer
+    if: github.event_name == 'pull_request' || inputs.run_anyway == true
+    needs: contract
+    runs-on: windows-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Resolve and verify source version
+        id: release
+        shell: pwsh
+        run: |
+          $cargo = Get-Content Cargo.toml -Raw
+          $cargoMatch = [regex]::Match($cargo, '(?ms)\[workspace\.package\].*?^version\s*=\s*"([^"]+)"')
+          if (-not $cargoMatch.Success) { throw 'Cargo workspace version is missing' }
+          $version = $cargoMatch.Groups[1].Value
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid source version: $version" }
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $tauri = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          if ($package.version -ne $version -or $tauri.version -ne $version) {
+            throw 'Cargo, npm, and Tauri versions do not match'
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "label=v$version-internal-test-${{ github.run_number }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Generate ephemeral Ed25519 update keys
+        id: test_keys
+        shell: pwsh
+        run: |
+          $keyPath = Join-Path $env:RUNNER_TEMP 'homeserver-internal-test-keys.json'
+          cargo run --locked --package microgifter-homeserver-service --bin sign-update-manifest -- `
+            --generate-test-key-pair $keyPath
+          $keys = Get-Content $keyPath -Raw | ConvertFrom-Json
+          if ([string]::IsNullOrWhiteSpace($keys.private_key_base64) -or [string]::IsNullOrWhiteSpace($keys.public_key_base64)) {
+            throw 'Ephemeral update key generation failed'
+          }
+          Write-Output "::add-mask::$($keys.private_key_base64)"
+          Write-Output "::add-mask::$($keys.public_key_base64)"
+          "MG_HOMESERVER_RELEASE_PRIVATE_KEY_BASE64=$($keys.private_key_base64)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "MG_HOMESERVER_RELEASE_PUBLIC_KEY_BASE64=$($keys.public_key_base64)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "MG_HOMESERVER_RELEASE_KEY_ID=homeserver-internal-test-${{ github.run_id }}" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "key_path=$keyPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Create trusted self-signed Authenticode certificate
+        id: certificate
+        shell: pwsh
+        run: |
+          $subject = 'CN=Microgifter HomeServer Internal Test'
+          $certificate = New-SelfSignedCertificate `
+            -Type CodeSigningCert `
+            -Subject $subject `
+            -CertStoreLocation 'Cert:\CurrentUser\My' `
+            -KeyAlgorithm RSA `
+            -KeyLength 2048 `
+            -HashAlgorithm SHA256 `
+            -KeyExportPolicy Exportable `
+            -NotAfter (Get-Date).AddDays(14)
+          if (-not $certificate) { throw 'Unable to create internal-test Authenticode certificate' }
+          $cerPath = Join-Path $env:RUNNER_TEMP 'homeserver-internal-test.cer'
+          Export-Certificate -Cert $certificate -FilePath $cerPath | Out-Null
+          Import-Certificate -FilePath $cerPath -CertStoreLocation 'Cert:\LocalMachine\Root' | Out-Null
+          Import-Certificate -FilePath $cerPath -CertStoreLocation 'Cert:\LocalMachine\TrustedPublisher' | Out-Null
+          "thumbprint=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "cer_path=$cerPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Verify dependencies and source quality
+        shell: pwsh
+        run: |
+          npm ci
+          npm run check:frontend
+          npm audit --audit-level=high
+          if (-not (Get-Command cargo-audit -ErrorAction SilentlyContinue)) {
+            cargo install cargo-audit --version 0.22.2 --locked
+          }
+          cargo audit
+          cargo fmt --all --check
+          cargo test --workspace --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          python scripts/validate-security-boundaries.py
+          python scripts/validate-release-contract.py
+          python scripts/validate-internal-test-contract.py
+
+      - name: Build and sign native service resources
+        shell: pwsh
+        run: |
+          cargo clean --package microgifter-homeserver-service --package microgifter-homeserver-updater
+          npm run prepare:icons
+          cargo build --release --locked --package microgifter-homeserver-service --bin microgifter-homeserver-service
+          cargo build --release --locked --package microgifter-homeserver-updater
+          $certificate = Get-Item "Cert:\CurrentUser\My\${{ steps.certificate.outputs.thumbprint }}"
+          $nativeFiles = @(
+            'target/release/microgifter-homeserver-service.exe',
+            'target/release/microgifter-homeserver-updater.exe'
+          )
+          foreach ($file in $nativeFiles) {
+            $signature = Set-AuthenticodeSignature -LiteralPath $file -Certificate $certificate -HashAlgorithm SHA256
+            if ($signature.Status -ne 'Valid') { throw "Unable to sign $file: $($signature.StatusMessage)" }
+            $verified = Get-AuthenticodeSignature -LiteralPath $file
+            if ($verified.Status -ne 'Valid' -or $verified.SignerCertificate.Thumbprint -ne '${{ steps.certificate.outputs.thumbprint }}') {
+              throw "Internal-test signature verification failed for $file"
+            }
+          }
+          Copy-Item $nativeFiles[0] src-tauri/resources/microgifter-homeserver-service.exe -Force
+          Copy-Item $nativeFiles[1] src-tauri/resources/microgifter-homeserver-updater.exe -Force
+
+      - name: Configure Tauri internal-test signing
+        shell: pwsh
+        run: |
+          $path = 'src-tauri/tauri.conf.json'
+          $config = Get-Content $path -Raw | ConvertFrom-Json
+          $config.bundle.windows | Add-Member -NotePropertyName certificateThumbprint -NotePropertyValue '${{ steps.certificate.outputs.thumbprint }}' -Force
+          $config | ConvertTo-Json -Depth 32 | Set-Content $path -Encoding utf8
+
+      - name: Build and sign internal-test installer
+        shell: pwsh
+        run: |
+          npm run tauri:build *> tauri-internal-test-build.log
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content tauri-internal-test-build.log -Tail 300
+            exit $LASTEXITCODE
+          }
+          $bundle = 'target/release/bundle/nsis'
+          $source = Join-Path $bundle "Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe"
+          if (-not (Test-Path $source)) {
+            $source = (Get-ChildItem $bundle -Filter '*-setup.exe' | Select-Object -First 1).FullName
+          }
+          if ([string]::IsNullOrWhiteSpace($source) -or -not (Test-Path $source)) {
+            throw 'NSIS installer was not produced'
+          }
+          New-Item -ItemType Directory -Force release | Out-Null
+          $versioned = "release/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Internal-Test-Setup.exe"
+          Copy-Item $source $versioned -Force
+          $certificate = Get-Item "Cert:\CurrentUser\My\${{ steps.certificate.outputs.thumbprint }}"
+          $signature = Set-AuthenticodeSignature -LiteralPath $versioned -Certificate $certificate -HashAlgorithm SHA256
+          if ($signature.Status -ne 'Valid') { throw "Unable to sign internal-test installer: $($signature.StatusMessage)" }
+          $verified = Get-AuthenticodeSignature -LiteralPath $versioned
+          if ($verified.Status -ne 'Valid' -or $verified.SignerCertificate.Thumbprint -ne '${{ steps.certificate.outputs.thumbprint }}') {
+            throw 'Internal-test installer signature verification failed'
+          }
+          Copy-Item $versioned 'release/Microgifter-HomeServer-Setup.exe' -Force
+
+      - name: Verify installed internal-test release
+        shell: pwsh
+        run: |
+          ./scripts/smoke-test-installer.ps1 `
+            -InstallerPath "release/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Internal-Test-Setup.exe"
+          ./scripts/verify-installer-release.ps1 `
+            -InstallerPath "release/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Internal-Test-Setup.exe" `
+            -ExpectedVersion '${{ steps.release.outputs.version }}'
+
+      - name: Verify internal signed update and rollback
+        shell: pwsh
+        run: |
+          ./scripts/smoke-test-updater.ps1 `
+            -InstallerPath "release/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Internal-Test-Setup.exe" `
+            -UpdateInstallerPath 'release/Microgifter-HomeServer-Setup.exe' `
+            -SignerThumbprint '${{ steps.certificate.outputs.thumbprint }}' `
+            -ExpectedVersion '${{ steps.release.outputs.version }}' *> internal-test-updater-smoke.log
+          $log = Get-Content internal-test-updater-smoke.log -Raw
+          Get-Content internal-test-updater-smoke.log -Tail 300
+          $marker = 'HomeServer signed update, Authenticode verification, health confirmation, automatic rollback, installer preservation, and cleanup smoke tests passed.'
+          if ($log -match 'HomeServer updater smoke failure:' -or -not $log.Contains($marker)) {
+            throw 'Internal signed-update verification failed'
+          }
+
+      - name: Create internal-test manifest and warning
+        shell: pwsh
+        run: |
+          Copy-Item 'docs/releases/v0.1.3.md' 'release/release-notes.md' -Force
+          @'
+          INTERNAL TEST BUILD — NOT A PUBLIC RELEASE
+
+          This HomeServer installer uses a temporary self-signed Windows certificate and ephemeral update keys.
+          Windows may display an Unknown publisher or SmartScreen warning.
+          Use More info > Run anyway only when this complete artifact came directly from an approved Microgifter test coordinator and its SHA-256 checksum matches SHA256SUMS.txt.
+          Do not repost or publicly distribute this installer.
+          '@ | Set-Content 'release/INTERNAL-TEST-WARNING.txt' -Encoding utf8
+          $runUrl = "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          cargo run --release --locked --package microgifter-homeserver-service --bin sign-update-manifest -- `
+            --version '${{ steps.release.outputs.version }}' `
+            --minimum-version '0.1.2' `
+            --installer 'release/Microgifter-HomeServer-Setup.exe' `
+            --installer-url $runUrl `
+            --authenticode-thumbprint '${{ steps.certificate.outputs.thumbprint }}' `
+            --release-notes 'release/release-notes.md' `
+            --output 'release/homeserver-internal-test.json'
+
+      - name: Generate internal-test checksums
+        shell: pwsh
+        run: |
+          $files = @(
+            'Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Internal-Test-Setup.exe',
+            'Microgifter-HomeServer-Setup.exe',
+            'homeserver-internal-test.json',
+            'release-notes.md',
+            'INTERNAL-TEST-WARNING.txt'
+          )
+          $lines = foreach ($file in $files) {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path 'release' $file)).Hash.ToLowerInvariant()
+            "$hash  $file"
+          }
+          $lines | Set-Content 'release/SHA256SUMS.txt' -Encoding ascii
+          Get-Content 'release/SHA256SUMS.txt'
+
+      - name: Upload verified internal-test bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Microgifter-HomeServer-${{ steps.release.outputs.label }}-Run-Anyway
+          path: |
+            release/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Internal-Test-Setup.exe
+            release/Microgifter-HomeServer-Setup.exe
+            release/homeserver-internal-test.json
+            release/release-notes.md
+            release/INTERNAL-TEST-WARNING.txt
+            release/SHA256SUMS.txt
+            tauri-internal-test-build.log
+            internal-test-updater-smoke.log
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove temporary internal-test signing material
+        if: always()
+        shell: pwsh
+        run: |
+          $thumbprint = '${{ steps.certificate.outputs.thumbprint }}'
+          if (-not [string]::IsNullOrWhiteSpace($thumbprint)) {
+            Remove-Item "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
+            Remove-Item "Cert:\LocalMachine\Root\$thumbprint" -Force -ErrorAction SilentlyContinue
+            Remove-Item "Cert:\LocalMachine\TrustedPublisher\$thumbprint" -Force -ErrorAction SilentlyContinue
+          }
+          $cerPath = '${{ steps.certificate.outputs.cer_path }}'
+          if (-not [string]::IsNullOrWhiteSpace($cerPath)) {
+            Remove-Item $cerPath -Force -ErrorAction SilentlyContinue
+          }
+          $keyPath = '${{ steps.test_keys.outputs.key_path }}'
+          if (-not [string]::IsNullOrWhiteSpace($keyPath)) {
+            Remove-Item $keyPath -Force -ErrorAction SilentlyContinue
+          }
