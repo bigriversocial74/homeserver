@@ -17,7 +17,7 @@ def replace_once(path: str, old: str, new: str) -> None:
 def replace_regex(path: str, pattern: str, replacement: str) -> None:
     target = ROOT / path
     content = target.read_text(encoding="utf-8")
-    updated, count = re.subn(pattern, replacement, content, count=1, flags=re.S)
+    updated, count = re.subn(pattern, lambda _match: replacement, content, count=1, flags=re.S)
     if count != 1:
         raise RuntimeError(f"expected one regex match in {path}: {pattern!r}")
     target.write_text(updated, encoding="utf-8")
@@ -52,8 +52,31 @@ replace_once(
 )
 replace_regex(
     SERVICE,
-    r"    body: Body,\n\) -> ApiResult<VaultActionResult> \{(.*?)    let mut stream = body\.into_data_stream\(\);\n    let mut bytes = Vec::new\(\);\n    while let Some\(chunk\) = stream\.next\(\)\.await \{.*?    \}\n    if bytes\.is_empty\(\) \{",
-    r"    body: Bytes,\n) -> ApiResult<VaultActionResult> {\1    let bytes = body.to_vec();\n    if bytes.len() > MAX_DOCUMENT_BYTES {\n        return Err(action_error(\n            \"vault_import_too_large\",\n            anyhow::anyhow!(\"document exceeds the 16 MB import limit\"),\n        ));\n    }\n    if bytes.is_empty() {",
+    r'''    body: Body,
+\) -> ApiResult<VaultActionResult> \{
+    let file_name = decode_header\(&headers, FILE_NAME_HEADER, 1024, "vault_file_name_invalid"\)\?;
+    let tags_json = decode_header\(&headers, TAGS_HEADER, 8192, "vault_tags_invalid"\)\?;
+    let tags: Vec<String> = serde_json::from_str\(&tags_json\)
+        \.map_err\(\|error\| action_error\("vault_tags_invalid", error\.into\(\)\)\)\?;
+    let mut stream = body\.into_data_stream\(\);
+    let mut bytes = Vec::new\(\);
+    while let Some\(chunk\) = stream\.next\(\)\.await \{
+.*?    \}
+    if bytes\.is_empty\(\) \{''',
+    '''    body: Bytes,
+) -> ApiResult<VaultActionResult> {
+    let file_name = decode_header(&headers, FILE_NAME_HEADER, 1024, "vault_file_name_invalid")?;
+    let tags_json = decode_header(&headers, TAGS_HEADER, 8192, "vault_tags_invalid")?;
+    let tags: Vec<String> = serde_json::from_str(&tags_json)
+        .map_err(|error| action_error("vault_tags_invalid", error.into()))?;
+    let bytes = body.to_vec();
+    if bytes.len() > MAX_DOCUMENT_BYTES {
+        return Err(action_error(
+            "vault_import_too_large",
+            anyhow::anyhow!("document exceeds the 16 MB import limit"),
+        ));
+    }
+    if bytes.is_empty() {''',
 )
 replace_once(
     SERVICE,
