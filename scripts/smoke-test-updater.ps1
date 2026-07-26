@@ -25,21 +25,41 @@ $stagingDirectory = Join-Path $dataDirectory "updates\staging"
 $rollbackRoot = Join-Path $dataDirectory "updates\rollback"
 $installedArchive = Join-Path $dataDirectory "updates\installed"
 $resultPath = Join-Path $dataDirectory "updates\last-update-result.json"
+$diagnosticDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "Microgifter-HomeServer-Updater-Smoke"
 $uninstallerPath = $null
 $scriptExitCode = 0
 $currentUserTrustStores = @("Root", "TrustedPublisher")
 
 function Read-TrimmedText {
-    param([Parameter(Mandatory = $true)][string]$Path)
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [ValidateRange(1, 180)]
+        [int]$TimeoutSeconds = 30
+    )
 
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return ""
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $lastError = $null
+    do {
+        try {
+            if (Test-Path -LiteralPath $Path) {
+                $content = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+                if ($null -eq $content) {
+                    return ""
+                }
+                return $content.Trim()
+            }
+        }
+        catch {
+            $lastError = $_
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    if ($lastError) {
+        throw "Unable to read '$Path' after $TimeoutSeconds seconds: $($lastError.Exception.Message)"
     }
-    $content = Get-Content -LiteralPath $Path -Raw
-    if ($null -eq $content) {
-        return ""
-    }
-    return $content.Trim()
+    return ""
 }
 
 function Set-CurrentUserPublisherTrust {
@@ -67,23 +87,35 @@ function Remove-CurrentUserPublisherTrust {
     param([Parameter(Mandatory = $true)][string]$Thumbprint)
 
     foreach ($storeName in $currentUserTrustStores) {
-        $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-            $storeName,
-            [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
-        )
-        try {
-            $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-            $matches = $store.Certificates.Find(
-                [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
-                $Thumbprint,
-                $false
+        $removed = $false
+        $lastError = $null
+        for ($attempt = 0; $attempt -lt 20 -and -not $removed; $attempt++) {
+            $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+                $storeName,
+                [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
             )
-            foreach ($certificate in $matches) {
-                $store.Remove($certificate)
+            try {
+                $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+                $matches = $store.Certificates.Find(
+                    [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+                    $Thumbprint,
+                    $false
+                )
+                foreach ($certificate in $matches) {
+                    $store.Remove($certificate)
+                }
+                $removed = $true
+            }
+            catch {
+                $lastError = $_
+                Start-Sleep -Milliseconds 500
+            }
+            finally {
+                $store.Close()
             }
         }
-        finally {
-            $store.Close()
+        if (-not $removed -and $lastError) {
+            throw $lastError
         }
     }
 }
@@ -206,18 +238,19 @@ function Invoke-UpdatePlan {
         throw "Installed HomeServer updater helper is missing"
     }
 
+    New-Item -ItemType Directory -Force $diagnosticDirectory | Out-Null
     $diagnosticId = [guid]::NewGuid().ToString("N")
     $updaterCopy = Join-Path $stagingDirectory "updater-smoke-$diagnosticId.exe"
-    $stdoutPath = Join-Path $stagingDirectory "updater-smoke-$diagnosticId.stdout.log"
-    $stderrPath = Join-Path $stagingDirectory "updater-smoke-$diagnosticId.stderr.log"
+    $stdoutPath = Join-Path $diagnosticDirectory "updater-smoke-$diagnosticId.stdout.log"
+    $stderrPath = Join-Path $diagnosticDirectory "updater-smoke-$diagnosticId.stderr.log"
     Copy-Item $installedUpdater $updaterCopy -Force
     Remove-Item $resultPath -Force -ErrorAction SilentlyContinue
 
     try {
         $process = Start-Process -FilePath $updaterCopy -ArgumentList @("apply", $Plan.PlanPath) -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru -Wait
-        $stdout = Read-TrimmedText -Path $stdoutPath
-        $stderr = Read-TrimmedText -Path $stderrPath
-        $resultJson = Read-TrimmedText -Path $resultPath
+        $stdout = Read-TrimmedText -Path $stdoutPath -TimeoutSeconds 60
+        $stderr = Read-TrimmedText -Path $stderrPath -TimeoutSeconds 60
+        $resultJson = Read-TrimmedText -Path $resultPath -TimeoutSeconds 60
 
         if ($stdout) {
             Write-Host "HomeServer updater stdout:`n$stdout"
@@ -317,8 +350,14 @@ catch {
     if ($_.ScriptStackTrace) {
         Write-Host "Script stack:`n$($_.ScriptStackTrace)"
     }
-    if (Test-Path $resultPath) {
-        Write-Host "Last updater result:`n$(Get-Content $resultPath -Raw)"
+    try {
+        $lastResult = Read-TrimmedText -Path $resultPath -TimeoutSeconds 10
+        if ($lastResult) {
+            Write-Host "Last updater result:`n$lastResult"
+        }
+    }
+    catch {
+        Write-Host "Unable to read the last updater result: $($_.Exception.Message)"
     }
     $serviceQuery = & "$env:SystemRoot\System32\sc.exe" query $serviceName 2>&1 | Out-String
     Write-Host "Service query:`n$serviceQuery"
@@ -340,6 +379,9 @@ finally {
     }
     if (Test-Path $dataDirectory) {
         Remove-Item $dataDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $diagnosticDirectory) {
+        Remove-Item $diagnosticDirectory -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
