@@ -6,19 +6,26 @@ The dedicated `bigriversocial74/homeserver` repository is the implementation aut
 
 ## Current release line
 
-- Current installed release: `0.1.2`.
-- Production-hardening candidate: `0.1.3`.
+- Current release source version: `0.1.3`.
 - Windows 11 x64 first.
 - Tauri 2 Control Center.
 - Native delayed-auto Windows service with recovery actions.
 - Loopback-only API at `127.0.0.1:47831`.
 - Embedded SQLite database using WAL, foreign keys, and integrity checks.
 - NSIS per-machine installer.
-- No public production-code-signed installer has been released yet.
+- Tag-gated production release pipeline with Authenticode signing, Ed25519 update-manifest signing, checksums, installed verification, signed-update testing, and rollback testing.
 
 The customer-facing installer artifact is versioned as:
 
 `Microgifter-HomeServer-v<version>-Setup.exe`
+
+The stable update channel also publishes:
+
+- `Microgifter-HomeServer-Setup.exe`
+- `homeserver-stable.json`
+- `SHA256SUMS.txt`
+
+See `docs/release-v0.1.3.md` for the protected production-release procedure and required GitHub environment secrets. GitHub Releases is the source of truth for whether a production-signed installer has been publicly published.
 
 ## Security boundaries
 
@@ -67,6 +74,8 @@ Build the service, tests, Control Center, and NSIS installer:
 ```
 
 The production-quality workflow validates synchronized release metadata, immutable dependency locks, pinned GitHub Actions, frontend and PowerShell syntax, static security boundaries, npm and RustSec dependency audits, clean native compilation, workspace tests, strict Clippy, encrypted backup/recovery, cloud contract behavior, loopback API defenses, NSIS packaging, installed LocalSystem behavior, ProgramData ACLs, installed binary/API/registry versions, signed updates, health confirmation, and automatic rollback.
+
+The v0.1.3 release workflow additionally requires an exact semantic-version tag, a protected production-release environment, a matching production Authenticode certificate, a matching Ed25519 release key pair, production-signed native binaries and installer, a signed stable update manifest, SHA-256 checksums, and successful installed update/rollback verification before GitHub Release publication.
 
 ## Implemented phases
 
