@@ -1,7 +1,9 @@
 #[path = "cloud_connector.rs"]
 mod cloud_connector;
 
-use crate::{backup, config::AppConfig, database, http, update, update_store, AppState};
+use crate::{
+    backup, config::AppConfig, database, http, knowledge_vault, update, update_store, AppState,
+};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use microgifter_homeserver_core::{API_HOST, API_PORT};
@@ -27,6 +29,7 @@ pub async fn run(
     let connection = database::initialize(&config.database_path)?;
     update_store::initialize(&connection)?;
     cloud_connector::initialize(&connection)?;
+    knowledge_vault::initialize(&connection, &config)?;
     if let Some(outcome) = restore_outcome {
         match outcome {
             backup::RestoreOutcome::Applied {
@@ -86,7 +89,11 @@ pub async fn run(
         let _ = ready.send(());
     }
 
-    let router = http::secure(http::router(state.clone()).merge(cloud_connector::router(state)));
+    let router = http::secure(
+        http::router(state.clone())
+            .merge(cloud_connector::router(state.clone()))
+            .merge(knowledge_vault::router(state)),
+    );
     let result = axum::serve(listener, router)
         .with_graceful_shutdown(wait_for_shutdown(shutdown))
         .await;

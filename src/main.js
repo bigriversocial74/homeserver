@@ -7,6 +7,8 @@ let statusSnapshot = null;
 let cloudSnapshot = null;
 let backupCatalog = null;
 let updateStatus = null;
+let vaultSnapshot = null;
+let vaultSearchResult = null;
 let notice = null;
 let busy = false;
 let activePage = window.location.hash.replace("#", "") || "dashboard";
@@ -370,27 +372,40 @@ function renderCloudConnectionDetail() {
   return `<article class="panel connection-detail"><div class="panel-title"><div><h2>Connection Details</h2><p>Details for the active signed Microgifter integration.</p></div></div><div class="connection-detail-grid"><div class="connection-identity"><div class="app-icon tone-blue">${icon("cloud", 25)}</div><div><h3>Microgifter Cloud ${badge("Connected", "healthy")}</h3><p>Secure connection to Microgifter Cloud services.</p><span class="mono">${escapeHtml(cloudSnapshot?.cloud_base_url || "https://microgifter.com")}</span></div></div><dl><div><dt>Status</dt><dd>${badge(humanize(cloudSnapshot?.state), cloudSnapshot?.state)}</dd></div><div><dt>Last Heartbeat</dt><dd>${escapeHtml(relativeDate(cloudSnapshot?.last_success_utc))}</dd></div><div><dt>Device Identity</dt><dd class="mono">${escapeHtml(compactId(cloudSnapshot?.device_id))}</dd></div><div><dt>Pending Sync</dt><dd>${Number(cloudSnapshot?.pending_sync || 0)}</dd></div></dl><div class="connection-actions"><button id="cloud-vault-test" class="button secondary" type="button" ${busy ? "disabled" : ""}>Test Connection</button><button class="button secondary" data-page="sync">Configure</button><button id="cloud-disconnect" class="button danger" type="button" ${busy ? "disabled" : ""}>Disconnect</button></div></div></article>`;
 }
 function renderKnowledge() {
-  const backup = lastBackup();
-  const sourceCount = (isConnected() ? 1 : 0) + (backup ? 1 : 0);
-  return `${pageHeader("Knowledge Vault", "Your private, searchable knowledge workspace. All indexed data stays on your HomeServer.", `<button class="button secondary" disabled>${icon("upload", 16)}Import</button><button class="button primary" disabled>${icon("plus", 16)}Add Source</button>`)}
-    <div class="toolbar-row"><label class="filter-search wide">${icon("search", 17)}<input type="search" placeholder="Search your knowledge vault..."></label><button class="select-button">All Content Types ${icon("arrow", 12)}</button></div>
+  const documents = vaultSnapshot?.documents || [];
+  const indexed = Number(vaultSnapshot?.indexed_count || 0);
+  const attention = Number(vaultSnapshot?.changed_count || 0) + Number(vaultSnapshot?.missing_count || 0) + Number(vaultSnapshot?.failed_count || 0);
+  const lastIndexed = vaultSnapshot?.last_indexed_at_utc;
+  return `${pageHeader("Knowledge Vault", "Your private, searchable knowledge workspace. Imported content stays on this HomeServer.", `<button id="vault-reindex" class="button secondary" type="button" ${busy || !statusSnapshot?.api_available ? "disabled" : ""}>${icon("refresh", 16)}Reindex</button><button id="vault-import" class="button primary" type="button" ${busy || !statusSnapshot?.api_available ? "disabled" : ""}>${icon("upload", 16)}Import Document</button>`)}
+    <form id="vault-search-form" class="toolbar-row"><label class="filter-search wide">${icon("search", 17)}<input id="vault-search-query" type="search" maxlength="200" placeholder="Search your knowledge vault..." value="${escapeHtml(vaultSearchResult?.query || "")}" required></label><button class="button secondary" type="submit" ${busy || !indexed ? "disabled" : ""}>Search</button><span class="planned-label">Local only · TXT MD CSV JSON LOG</span></form>
     <section class="metrics six-up">
-      ${metricCard("vault", "Indexed Items", "0", "Indexing engine planned", "blue")}
-      ${metricCard("file", "Connected Sources", String(sourceCount), "Local configuration sources", "purple")}
-      ${metricCard("storage", "Storage Used", backup ? formatBytes(backup.size_bytes) : "0 B", "Protected local data", "blue")}
-      ${metricCard("activity", "Embeddings Indexed", "Planned", "Local model integration", "green")}
-      ${metricCard("backup", "Last Indexing", "Not yet", "No index job has run", "gray")}
-      ${metricCard("shield", "Privacy", "Local", "Nothing leaves your network", "green")}
+      ${metricCard("vault", "Indexed Items", String(indexed), attention ? `${attention} need attention` : "Managed local documents", attention ? "amber" : "blue")}
+      ${metricCard("file", "Managed Documents", String(documents.length), "Copied into protected storage", "purple")}
+      ${metricCard("storage", "Storage Used", formatBytes(vaultSnapshot?.total_size_bytes || 0), "Vault document copies", "blue")}
+      ${metricCard("activity", "Search Index", indexed ? "Ready" : "Empty", "Bounded local text index", indexed ? "green" : "gray")}
+      ${metricCard("backup", "Last Indexing", lastIndexed ? relativeDate(lastIndexed) : "Not yet", lastIndexed ? formatDate(lastIndexed) : "Import a supported document", "gray")}
+      ${metricCard("shield", "Privacy", vaultSnapshot?.local_only === false ? "Review" : "Local", "No cloud content sync", "green")}
     </section>
     <section class="knowledge-grid">
-      <article class="panel vault-summary"><div class="panel-title"><div><h2>Vault Summary</h2></div></div><div class="storage-layout">${donut(12, "Local", "private storage", "blue")}<ul class="legend"><li><i class="blue"></i><span>Documents</span><strong>Ready</strong></li><li><i class="green"></i><span>Knowledge bases</span><strong>Planned</strong></li><li><i class="purple"></i><span>Backup sources</span><strong>${backupCount()}</strong></li><li><i class="amber"></i><span>Cloud sources</span><strong>${isConnected() ? 1 : 0}</strong></li></ul></div><button class="text-button" data-page="backups">Manage Storage ${icon("arrow", 13)}</button></article>
-      <article class="panel indexed-content"><div class="panel-title"><div><h2>Indexed Content</h2></div></div><div class="content-type-list">${contentType("file", "Documents", "0", "blue")}${contentType("file", "PDF Files", "0", "red")}${contentType("file", "Text Files", "0", "gray")}${contentType("storage", "Structured Data", "0", "green")}${contentType("vault", "Knowledge Bases", "0", "purple")}</div><span class="planned-banner">Indexing service is scheduled for a later HomeServer phase.</span></article>
-      <article class="panel search-preview"><div class="panel-title"><div><h2>Search Results Preview</h2></div></div><label class="filter-search">${icon("search", 17)}<input type="search" value="project roadmap" disabled></label><div class="empty-search">${icon("vault", 34)}<strong>Private search workspace ready</strong><p>Add local sources when the indexing bridge is enabled. Search remains on this HomeServer.</p></div></article>
-      <article class="panel recent-sources"><div class="panel-title"><div><h2>Recent Sources</h2></div></div><div class="source-list">${sourceRow("backup", "HomeServer Backups", backup ? relativeDate(backup.created_at_utc) : "Not configured", backup ? formatBytes(backup.size_bytes) : "0 B", backup ? "Ready" : "Waiting", "blue")}${sourceRow("cloud", "Microgifter Cloud", isConnected() ? relativeDate(cloudSnapshot?.last_success_utc) : "Not paired", "Signed metadata", isConnected() ? "Connected" : "Waiting", "green")}${sourceRow("storage", "Local Files", "Not configured", "Local only", "Planned", "purple")}</div></article>
-      <article class="panel indexing-status"><div class="panel-title"><div><h2>Indexing Status</h2></div></div><div class="indexing-layout">${donut(0, "0%", "indexed", "blue")}<dl class="detail-list"><div><dt>Documents</dt><dd>0</dd></div><div><dt>Embeddings</dt><dd>Planned</dd></div><div><dt>OCR</dt><dd>Planned</dd></div><div><dt>Metadata</dt><dd>Ready</dd></div></dl></div></article>
-      <article class="panel processing-queue"><div class="panel-title"><div><h2>Processing Queue</h2></div></div><div class="empty-search compact">${icon("activity", 30)}<strong>No items queued</strong><p>Processing jobs will appear here after local sources are added.</p></div></article>
+      <article class="panel vault-summary"><div class="panel-title"><div><h2>Vault Summary</h2></div></div><div class="storage-layout">${donut(documents.length ? Math.min(100, indexed / documents.length * 100) : 0, `${indexed}/${documents.length}`, "indexed", attention ? "amber" : "blue")}<ul class="legend"><li><i class="blue"></i><span>Indexed</span><strong>${indexed}</strong></li><li><i class="amber"></i><span>Changed</span><strong>${Number(vaultSnapshot?.changed_count || 0)}</strong></li><li><i class="red"></i><span>Missing / failed</span><strong>${Number(vaultSnapshot?.missing_count || 0) + Number(vaultSnapshot?.failed_count || 0)}</strong></li><li><i class="purple"></i><span>Supported types</span><strong>${vaultSnapshot?.supported_extensions?.length || 5}</strong></li></ul></div><button id="vault-reindex" class="text-button" type="button" ${busy || !documents.length ? "disabled" : ""}>Check managed files ${icon("arrow", 13)}</button></article>
+      <article class="panel indexed-content"><div class="panel-title"><div><h2>Indexed Content</h2></div></div><div class="content-type-list">${contentType("file", "Text & logs", String(documents.filter((document) => ["text/plain", "text/markdown"].includes(document.content_type)).length), "blue")}${contentType("file", "CSV Files", String(documents.filter((document) => document.content_type === "text/csv").length), "green")}${contentType("storage", "JSON Data", String(documents.filter((document) => document.content_type === "application/json").length), "purple")}${contentType("activity", "Needs Attention", String(attention), attention ? "amber" : "gray")}</div><span class="planned-banner">PDF, OCR, embeddings, and semantic search are deferred to later Phase 4 scopes.</span></article>
+      <article class="panel search-preview"><div class="panel-title"><div><h2>Search Results</h2></div><span>${vaultSearchResult ? `${vaultSearchResult.hits?.length || 0} matches` : "Run a local search"}</span></div>${renderVaultSearchResults()}</article>
+      <article class="panel recent-sources"><div class="panel-title"><div><h2>Managed Documents</h2></div><span>${documents.length} records</span></div><div class="source-list">${documents.length ? documents.slice(0, 20).map(vaultDocumentRow).join("") : `<div class="empty-search compact">${icon("vault", 30)}<strong>No documents imported</strong><p>Import an approved UTF-8 text document to create the first local index.</p></div>`}</div></article>
+      <article class="panel indexing-status"><div class="panel-title"><div><h2>Indexing Status</h2></div></div><div class="indexing-layout">${donut(documents.length ? indexed / documents.length * 100 : 0, documents.length ? `${Math.round(indexed / documents.length * 100)}%` : "0%", "indexed", attention ? "amber" : "blue")}<dl class="detail-list"><div><dt>Indexed</dt><dd>${indexed}</dd></div><div><dt>Changed</dt><dd>${Number(vaultSnapshot?.changed_count || 0)}</dd></div><div><dt>Missing</dt><dd>${Number(vaultSnapshot?.missing_count || 0)}</dd></div><div><dt>Failed</dt><dd>${Number(vaultSnapshot?.failed_count || 0)}</dd></div></dl></div></article>
+      <article class="panel processing-queue"><div class="panel-title"><div><h2>Processing Boundary</h2></div></div><div class="empty-search compact">${icon("shield", 30)}<strong>Local managed storage</strong><p>Imports are copied into HomeServer storage. Source files remain unchanged and no content is synchronized to cloud services.</p></div></article>
     </section>
-    <div class="privacy-banner">${icon("shield", 20)}<div><strong>Your data is private and secure</strong><span>Knowledge content is designed to remain local to your HomeServer.</span></div><button class="text-button" data-page="system">Review security ${icon("arrow", 13)}</button></div>`;
+    <div class="privacy-banner">${icon("shield", 20)}<div><strong>Your document content remains local</strong><span>The service accepts document bytes from the trusted Control Center, never caller-supplied source paths.</span></div><button class="text-button" data-page="system">Review security ${icon("arrow", 13)}</button></div>`;
+}
+
+function renderVaultSearchResults() {
+  if (!vaultSearchResult) return `<div class="empty-search">${icon("search", 34)}<strong>Search managed documents</strong><p>Search the bounded local text index without sending content to a cloud service.</p></div>`;
+  const hits = vaultSearchResult.hits || [];
+  if (!hits.length) return `<div class="empty-search">${icon("search", 34)}<strong>No matching documents</strong><p>Try another phrase or reindex the managed files.</p></div>`;
+  return `<div class="source-list">${hits.map((hit) => `<div><div class="app-icon tone-blue">${icon("file", 18)}</div><span><strong>${escapeHtml(hit.document.title)}</strong><small>${escapeHtml(hit.snippet)}</small></span><em>Score ${Number(hit.score || 0)}</em>${badge(humanize(hit.document.state), hit.document.state === "indexed" ? "healthy" : "warning")}</div>`).join("")}</div>`;
+}
+
+function vaultDocumentRow(document) {
+  return `<div><div class="app-icon tone-${document.state === "indexed" ? "blue" : "amber"}">${icon("file", 18)}</div><span><strong>${escapeHtml(document.title)}</strong><small>${escapeHtml(document.file_name)} · ${formatBytes(document.size_bytes)} · ${relativeDate(document.indexed_at_utc)}</small></span><em>${escapeHtml(document.content_type)}</em>${badge(humanize(document.state), document.state === "indexed" ? "healthy" : "warning")}<button class="icon-button danger" type="button" data-vault-delete="${escapeHtml(document.document_id)}" title="Delete managed copy">${icon("trash", 16)}</button></div>`;
 }
 
 function contentType(iconName, label, value, tone) {
@@ -528,6 +543,10 @@ function bindEvents() {
   document.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", () => document.querySelector(`#${button.dataset.toggle}`)?.classList.toggle("hidden")));
   document.querySelectorAll("[data-scroll-target]").forEach((button) => button.addEventListener("click", () => document.querySelector(`#${button.dataset.scrollTarget}`)?.scrollIntoView({ behavior: "smooth", block: "start" })));
   document.querySelectorAll("[data-save-setting]").forEach((button) => button.addEventListener("click", savePreferences));
+  document.querySelector("#vault-import")?.addEventListener("click", importVaultDocument);
+  document.querySelector("#vault-search-form")?.addEventListener("submit", searchVault);
+  document.querySelector("#vault-reindex")?.addEventListener("click", reindexVault);
+  document.querySelectorAll("[data-vault-delete]").forEach((button) => button.addEventListener("click", deleteVaultDocument));
 }
 
 function navigate(page) {
@@ -727,14 +746,61 @@ async function handleBackupAction(event) {
   }
 }
 
+
+async function importVaultDocument() {
+  await withBusy(async () => {
+    const result = await invoke("homeserver_import_vault_document", { tags: [] });
+    if (!result) return null;
+    vaultSearchResult = null;
+    return { kind: result.affected ? "success" : "info", message: result.message };
+  });
+}
+
+async function searchVault(event) {
+  event.preventDefault();
+  const query = document.querySelector("#vault-search-query")?.value?.trim() || "";
+  if (!query) return;
+  busy = true;
+  notice = null;
+  render();
+  try {
+    vaultSearchResult = await invoke("homeserver_search_vault", { query });
+  } catch (error) {
+    notice = { kind: "warning", message: String(error) };
+  } finally {
+    busy = false;
+    render();
+  }
+}
+
+async function reindexVault() {
+  await withBusy(async () => {
+    const result = await invoke("homeserver_reindex_vault");
+    vaultSearchResult = null;
+    return { kind: "success", message: result.message };
+  });
+}
+
+async function deleteVaultDocument(event) {
+  const documentId = event.currentTarget.dataset.vaultDelete;
+  const confirmation = window.prompt("Type DELETE to remove the HomeServer-managed copy and its local index. The source file will not be changed:");
+  if (confirmation !== "DELETE") return;
+  await withBusy(async () => {
+    const result = await invoke("homeserver_delete_vault_document", { documentId, confirmation });
+    vaultSearchResult = null;
+    return { kind: "success", message: result.message };
+  });
+}
+
 async function loadAll(clearNotice = true) {
   if (clearNotice) notice = null;
-  const results = await Promise.allSettled([invoke("homeserver_status"), invoke("homeserver_cloud_status"), invoke("homeserver_backups"), invoke("homeserver_updates")]);
+  const results = await Promise.allSettled([invoke("homeserver_status"), invoke("homeserver_cloud_status"), invoke("homeserver_backups"), invoke("homeserver_updates"), invoke("homeserver_vault")]);
   if (results[0].status === "rejected") {
     statusSnapshot = null;
     cloudSnapshot = null;
     backupCatalog = null;
     updateStatus = null;
+    vaultSnapshot = null;
     notice = { kind: "warning", message: `HomeServer service unavailable: ${String(results[0].reason)}` };
     render();
     return;
@@ -743,6 +809,7 @@ async function loadAll(clearNotice = true) {
   cloudSnapshot = results[1].status === "fulfilled" ? results[1].value : { state: "degraded", scopes: [], pending_sync: 0, last_error: "cloud_status_unavailable" };
   backupCatalog = results[2].status === "fulfilled" ? results[2].value : null;
   updateStatus = results[3].status === "fulfilled" ? results[3].value : null;
+  vaultSnapshot = results[4].status === "fulfilled" ? results[4].value : null;
   if (!notice && results[1].status === "rejected") notice = { kind: "warning", message: `Cloud connector unavailable: ${String(results[1].reason)}` };
   render();
 }

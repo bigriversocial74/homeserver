@@ -92,5 +92,6 @@ The v0.1.3 production workflow additionally requires an exact semantic-version t
 - Phase 2: cloud pairing and bounded signed synchronization.
 - Phase 3A: encrypted backup, portable recovery, restore, and rollback.
 - Phase 3B foundation: signed update verification, application, health validation, and rollback.
+- Phase 4A foundation: managed local text-document import, indexing, search, change detection, and deletion.
 
-Knowledge Vault, local model management, MCP runtime, and broader Linux/NAS deployment remain future phases and are not represented as complete.
+PDF/OCR and semantic Knowledge Vault indexing, local model management, MCP runtime, and broader Linux/NAS deployment remain future phases and are not represented as complete.
