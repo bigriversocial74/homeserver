@@ -90,6 +90,11 @@ replace_once(
 )
 replace_once(
     SERVICE,
+    '        snippet.insert_str(0, "…");',
+    "        snippet.insert(0, '…');",
+)
+replace_once(
+    SERVICE,
     "SELECT COUNT(*),SUM(CASE WHEN state='indexed' THEN 1 ELSE 0 END),SUM(CASE WHEN state='changed' THEN 1 ELSE 0 END),SUM(CASE WHEN state='missing' THEN 1 ELSE 0 END),SUM(CASE WHEN state='failed' THEN 1 ELSE 0 END),COALESCE(SUM(size_bytes),0),MAX(indexed_at_utc) FROM vault_documents",
     "SELECT COUNT(*),COALESCE(SUM(CASE WHEN state='indexed' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN state='changed' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN state='missing' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN state='failed' THEN 1 ELSE 0 END),0),COALESCE(SUM(size_bytes),0),MAX(indexed_at_utc) FROM vault_documents",
 )
