@@ -653,16 +653,34 @@ fn service_state(service_name: &str) -> Result<Option<String>> {
 }
 
 fn start_service(service_name: &str) -> Result<()> {
-    let output = Command::new("sc.exe")
-        .args(["start", service_name])
-        .output()
-        .context("unable to start HomeServer service")?;
-    ensure!(
-        output.status.success()
-            || wait_for_service_state(service_name, "RUNNING", Duration::from_secs(5)).is_ok(),
-        "unable to start HomeServer service"
-    );
-    Ok(())
+    if service_state(service_name)?.as_deref() == Some("RUNNING") {
+        return Ok(());
+    }
+
+    let started = std::time::Instant::now();
+    let mut last_output = "no service start attempt was made".to_owned();
+    while started.elapsed() < Duration::from_secs(45) {
+        let output = Command::new("sc.exe")
+            .args(["start", service_name])
+            .output()
+            .context("unable to request HomeServer service start")?;
+        last_output = command_output(&output);
+
+        if wait_for_service_state(service_name, "RUNNING", Duration::from_secs(8)).is_ok() {
+            return Ok(());
+        }
+
+        match service_state(service_name)? {
+            Some(state) if state == "RUNNING" => return Ok(()),
+            None => bail!("unable to start HomeServer service: service registration is unavailable"),
+            Some(_) => std::thread::sleep(Duration::from_millis(500)),
+        }
+    }
+
+    let final_state = service_state(service_name)?.unwrap_or_else(|| "ABSENT".to_owned());
+    bail!(
+        "unable to start HomeServer service after 45 seconds (final state: {final_state}; last sc.exe output: {last_output})"
+    )
 }
 
 fn wait_for_service_state(service_name: &str, state: &str, timeout: Duration) -> Result<()> {
