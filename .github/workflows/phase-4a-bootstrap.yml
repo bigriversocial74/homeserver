@@ -1,0 +1,87 @@
+name: Phase 4A Knowledge Vault Bootstrap
+
+on:
+  push:
+    branches:
+      - feature/phase-4a-knowledge-vault-20260726
+    paths:
+      - scripts/phase4a_bootstrap.py
+      - scripts/phase4a_fixups.py
+      - .github/workflows/phase-4a-bootstrap.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase-4a-knowledge-vault-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out scoped branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/phase-4a-knowledge-vault-20260726
+          fetch-depth: 0
+
+      - name: Apply scoped Knowledge Vault build
+        run: |
+          python scripts/phase4a_bootstrap.py
+          python scripts/phase4a_fixups.py
+
+      - name: Install Rust 1.80
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.80.0
+          components: rustfmt, clippy
+
+      - name: Format Rust source
+        run: cargo fmt --all
+
+      - name: Check service and shared contracts
+        run: cargo check --locked -p microgifter-homeserver-core -p microgifter-homeserver-service
+
+      - name: Test service and shared contracts
+        run: cargo test --locked -p microgifter-homeserver-core -p microgifter-homeserver-service
+
+      - name: Run strict service linting
+        run: cargo clippy --locked -p microgifter-homeserver-core -p microgifter-homeserver-service --all-targets -- -D warnings
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Validate frontend syntax
+        run: npm run check:frontend
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Validate patch whitespace
+        run: git diff --check
+
+      - name: Package validated payload
+        run: |
+          mkdir -p phase4a-payload
+          cp --parents \
+            README.md \
+            crates/homeserver-service/src/main.rs \
+            crates/homeserver-service/src/app.rs \
+            crates/homeserver-service/src/knowledge_vault.rs \
+            database/migrations/0005_knowledge_vault.sql \
+            docs/phase-4a-knowledge-vault.md \
+            src-tauri/src/lib.rs \
+            src-tauri/src/vault.rs \
+            src/main.js \
+            phase4a-payload/
+          git diff --binary > phase4a-payload/phase4a.patch
+
+      - name: Upload validated payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase-4a-knowledge-vault-payload
+          path: phase4a-payload
+          if-no-files-found: error
+          retention-days: 7
