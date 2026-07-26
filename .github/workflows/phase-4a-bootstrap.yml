@@ -12,7 +12,7 @@ on:
       - docs/phase-4a-pr-scope.md
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: phase-4a-knowledge-vault-bootstrap
@@ -97,10 +97,13 @@ jobs:
       - name: Validate patch whitespace
         run: git diff --check
 
-      - name: Package validated payload
+      - name: Commit validated product files
+        env:
+          BRANCH_NAME: feature/phase-4a-knowledge-vault-20260726
         run: |
-          mkdir -p phase4a-payload
-          cp --parents \
+          git config user.name "Microgifter HomeServer Build"
+          git config user.email "actions@users.noreply.github.com"
+          git add \
             README.md \
             crates/homeserver-service/src/main.rs \
             crates/homeserver-service/src/app.rs \
@@ -109,14 +112,7 @@ jobs:
             docs/phase-4a-knowledge-vault.md \
             src-tauri/src/lib.rs \
             src-tauri/src/vault.rs \
-            src/main.js \
-            phase4a-payload/
-          git diff --binary > phase4a-payload/phase4a.patch
-
-      - name: Upload validated payload
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: phase-4a-knowledge-vault-payload
-          path: phase4a-payload
-          if-no-files-found: error
-          retention-days: 7
+            src/main.js
+          git diff --cached --check
+          git commit -m "Build Phase 4A local Knowledge Vault foundation"
+          git push origin "HEAD:${BRANCH_NAME}"
