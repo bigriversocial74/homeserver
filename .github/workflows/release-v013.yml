@@ -1,0 +1,293 @@
+name: HomeServer v0.1.3 Release
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/release-v013.yml'
+      - 'crates/homeserver-service/src/bin/sign-update-manifest.rs'
+      - 'scripts/validate-release-contract.py'
+      - 'docs/releases/v0.1.3.md'
+      - 'docs/release-v0.1.3.md'
+      - 'README.md'
+      - 'docs/quality-audit-full-production.md'
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing version tag to build and verify
+        required: true
+        default: v0.1.3
+        type: string
+      publish:
+        description: Publish the verified files to GitHub Releases
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: homeserver-release-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  MG_HOMESERVER_RELEASE_KEY_ID: homeserver-release-2026-01
+  AUTHENTICODE_TIMESTAMP_URL: http://timestamp.digicert.com
+
+jobs:
+  contract:
+    name: Validate release contract
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+      - name: Validate release files
+        run: python scripts/validate-release-contract.py
+      - name: Compile manifest signer
+        run: cargo check --locked --package microgifter-homeserver-service --bin sign-update-manifest
+
+  release:
+    name: Build, sign, verify, and publish
+    if: github.event_name != 'pull_request'
+    needs: contract
+    runs-on: windows-latest
+    timeout-minutes: 100
+    environment: production-release
+    env:
+      WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+      WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+      WINDOWS_CODESIGN_EXPECTED_THUMBPRINT: ${{ secrets.WINDOWS_CODESIGN_EXPECTED_THUMBPRINT }}
+      MG_HOMESERVER_RELEASE_PRIVATE_KEY_BASE64: ${{ secrets.HOMESERVER_UPDATE_PRIVATE_KEY_BASE64 }}
+      MG_HOMESERVER_RELEASE_PUBLIC_KEY_BASE64: ${{ secrets.HOMESERVER_UPDATE_PUBLIC_KEY_BASE64 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Resolve and verify release tag
+        id: release
+        shell: pwsh
+        run: |
+          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.release_tag }}' } else { '${{ github.ref_name }}' }
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+)$') { throw "Release tag must use vMAJOR.MINOR.PATCH" }
+          $version = $Matches[1]
+          git fetch --tags --force
+          $tagCommit = (git rev-list -n 1 $tag).Trim()
+          if (-not $tagCommit) { throw "Release tag $tag does not exist" }
+          $headCommit = (git rev-parse HEAD).Trim()
+          if ($tagCommit -ne $headCommit) { throw "Checked-out commit does not match release tag $tag" }
+          $cargo = Get-Content Cargo.toml -Raw
+          $cargoMatch = [regex]::Match($cargo, '(?ms)\[workspace\.package\].*?^version\s*=\s*"([^"]+)"')
+          if (-not $cargoMatch.Success -or $cargoMatch.Groups[1].Value -ne $version) { throw "Cargo version does not match $tag" }
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $tauri = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          if ($package.version -ne $version -or $tauri.version -ne $version) { throw "npm or Tauri version does not match $tag" }
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "commit=$headCommit" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Require production signing credentials
+        shell: pwsh
+        run: |
+          $required = @(
+            'WINDOWS_CODESIGN_PFX_BASE64',
+            'WINDOWS_CODESIGN_PFX_PASSWORD',
+            'WINDOWS_CODESIGN_EXPECTED_THUMBPRINT',
+            'MG_HOMESERVER_RELEASE_PRIVATE_KEY_BASE64',
+            'MG_HOMESERVER_RELEASE_PUBLIC_KEY_BASE64'
+          )
+          foreach ($name in $required) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Production release secret $name is missing"
+            }
+          }
+
+      - name: Import production Authenticode certificate
+        id: certificate
+        shell: pwsh
+        run: |
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'homeserver-release-signing.pfx'
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CODESIGN_PFX_BASE64))
+          $password = ConvertTo-SecureString $env:WINDOWS_CODESIGN_PFX_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation 'Cert:\CurrentUser\My' -Password $password -Exportable
+          if (-not $certificate) { throw 'Unable to import the production Authenticode certificate' }
+          $actual = $certificate.Thumbprint.Replace(' ', '').ToUpperInvariant()
+          $expected = $env:WINDOWS_CODESIGN_EXPECTED_THUMBPRINT.Replace(' ', '').ToUpperInvariant()
+          if ($actual -ne $expected) { throw "Authenticode certificate thumbprint mismatch: $actual" }
+          if ($certificate.NotAfter -le (Get-Date).AddDays(14)) { throw 'Authenticode certificate expires within 14 days' }
+          "thumbprint=$actual" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "pfx_path=$pfxPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Verify dependencies and source quality
+        shell: pwsh
+        run: |
+          npm ci
+          npm run check:frontend
+          npm audit --audit-level=high
+          if (-not (Get-Command cargo-audit -ErrorAction SilentlyContinue)) {
+            cargo install cargo-audit --version 0.22.2 --locked
+          }
+          cargo audit
+          cargo fmt --all --check
+          cargo test --workspace --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          python scripts/validate-security-boundaries.py
+          python scripts/validate-release-contract.py
+
+      - name: Build and sign native service resources
+        shell: pwsh
+        run: |
+          cargo clean --package microgifter-homeserver-service --package microgifter-homeserver-updater
+          npm run prepare:icons
+          cargo build --release --locked --package microgifter-homeserver-service --bin microgifter-homeserver-service
+          cargo build --release --locked --package microgifter-homeserver-updater
+          $certificate = Get-Item "Cert:\CurrentUser\My\${{ steps.certificate.outputs.thumbprint }}"
+          $nativeFiles = @(
+            'target/release/microgifter-homeserver-service.exe',
+            'target/release/microgifter-homeserver-updater.exe'
+          )
+          foreach ($file in $nativeFiles) {
+            $result = Set-AuthenticodeSignature -LiteralPath $file -Certificate $certificate -HashAlgorithm SHA256 -TimestampServer $env:AUTHENTICODE_TIMESTAMP_URL
+            if ($result.Status -ne 'Valid') { throw "Unable to sign $file: $($result.StatusMessage)" }
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne '${{ steps.certificate.outputs.thumbprint }}') {
+              throw "Production signature verification failed for $file"
+            }
+          }
+          Copy-Item $nativeFiles[0] src-tauri/resources/microgifter-homeserver-service.exe -Force
+          Copy-Item $nativeFiles[1] src-tauri/resources/microgifter-homeserver-updater.exe -Force
+
+      - name: Configure Tauri production signing
+        shell: pwsh
+        run: |
+          $path = 'src-tauri/tauri.conf.json'
+          $config = Get-Content $path -Raw | ConvertFrom-Json
+          $config.bundle.windows | Add-Member -NotePropertyName certificateThumbprint -NotePropertyValue '${{ steps.certificate.outputs.thumbprint }}' -Force
+          $config.bundle.windows | Add-Member -NotePropertyName timestampUrl -NotePropertyValue $env:AUTHENTICODE_TIMESTAMP_URL -Force
+          $config | ConvertTo-Json -Depth 32 | Set-Content $path -Encoding utf8
+
+      - name: Build and production-sign installer
+        shell: pwsh
+        run: |
+          npm run tauri:build *> tauri-release-build.log
+          if ($LASTEXITCODE -ne 0) { Get-Content tauri-release-build.log -Tail 300; exit $LASTEXITCODE }
+          $bundle = 'target/release/bundle/nsis'
+          $source = Get-ChildItem $bundle -Filter '*-setup.exe' | Select-Object -First 1
+          if (-not $source) { throw 'NSIS installer was not produced' }
+          New-Item -ItemType Directory -Force release | Out-Null
+          $versioned = "release/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe"
+          Copy-Item $source.FullName $versioned -Force
+          $certificate = Get-Item "Cert:\CurrentUser\My\${{ steps.certificate.outputs.thumbprint }}"
+          $result = Set-AuthenticodeSignature -LiteralPath $versioned -Certificate $certificate -HashAlgorithm SHA256 -TimestampServer $env:AUTHENTICODE_TIMESTAMP_URL
+          if ($result.Status -ne 'Valid') { throw "Unable to sign release installer: $($result.StatusMessage)" }
+          $signature = Get-AuthenticodeSignature -LiteralPath $versioned
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne '${{ steps.certificate.outputs.thumbprint }}') {
+            throw 'Release installer Authenticode verification failed'
+          }
+          Copy-Item $versioned 'release/Microgifter-HomeServer-Setup.exe' -Force
+
+      - name: Verify installed production release
+        shell: pwsh
+        run: |
+          ./scripts/smoke-test-installer.ps1 -InstallerPath "release/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe"
+          ./scripts/verify-installer-release.ps1 `
+            -InstallerPath "release/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe" `
+            -ExpectedVersion '${{ steps.release.outputs.version }}'
+
+      - name: Verify production-signed update and rollback
+        shell: pwsh
+        run: |
+          ./scripts/smoke-test-updater.ps1 `
+            -InstallerPath "release/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe" `
+            -UpdateInstallerPath 'release/Microgifter-HomeServer-Setup.exe' `
+            -SignerThumbprint '${{ steps.certificate.outputs.thumbprint }}' `
+            -ExpectedVersion '${{ steps.release.outputs.version }}' *> release-updater-smoke.log
+          $log = Get-Content release-updater-smoke.log -Raw
+          Get-Content release-updater-smoke.log -Tail 300
+          $marker = 'HomeServer signed update, Authenticode verification, health confirmation, automatic rollback, installer preservation, and cleanup smoke tests passed.'
+          if ($log -match 'HomeServer updater smoke failure:' -or -not $log.Contains($marker)) { throw 'Production signed-update verification failed' }
+
+      - name: Create signed stable update manifest
+        shell: pwsh
+        run: |
+          Copy-Item 'docs/releases/v0.1.3.md' 'release/release-notes.md' -Force
+          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/${{ steps.release.outputs.tag }}/Microgifter-HomeServer-Setup.exe"
+          cargo run --release --locked --package microgifter-homeserver-service --bin sign-update-manifest -- `
+            --version '${{ steps.release.outputs.version }}' `
+            --minimum-version '0.1.2' `
+            --installer 'release/Microgifter-HomeServer-Setup.exe' `
+            --installer-url $installerUrl `
+            --authenticode-thumbprint '${{ steps.certificate.outputs.thumbprint }}' `
+            --release-notes 'release/release-notes.md' `
+            --output 'release/homeserver-stable.json'
+
+      - name: Generate release checksums
+        shell: pwsh
+        run: |
+          $files = @(
+            'Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe',
+            'Microgifter-HomeServer-Setup.exe',
+            'homeserver-stable.json',
+            'release-notes.md'
+          )
+          $lines = foreach ($file in $files) {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path 'release' $file)).Hash.ToLowerInvariant()
+            "$hash  $file"
+          }
+          $lines | Set-Content 'release/SHA256SUMS.txt' -Encoding ascii
+          Get-Content 'release/SHA256SUMS.txt'
+
+      - name: Upload verified release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Microgifter-HomeServer-${{ steps.release.outputs.tag }}-Production-Release
+          path: |
+            release/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe
+            release/Microgifter-HomeServer-Setup.exe
+            release/homeserver-stable.json
+            release/release-notes.md
+            release/SHA256SUMS.txt
+            tauri-release-build.log
+            release-updater-smoke.log
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: github.event_name == 'push' || inputs.publish == true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create '${{ steps.release.outputs.tag }}' `
+            'release/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe' `
+            'release/Microgifter-HomeServer-Setup.exe' `
+            'release/homeserver-stable.json' `
+            'release/SHA256SUMS.txt' `
+            --verify-tag `
+            --title 'Microgifter HomeServer v${{ steps.release.outputs.version }}' `
+            --notes-file 'release/release-notes.md'
+
+      - name: Remove production signing material
+        if: always()
+        shell: pwsh
+        run: |
+          if ('${{ steps.certificate.outputs.thumbprint }}') {
+            Remove-Item "Cert:\CurrentUser\My\${{ steps.certificate.outputs.thumbprint }}" -Force -ErrorAction SilentlyContinue
+          }
+          Remove-Item '${{ steps.certificate.outputs.pfx_path }}' -Force -ErrorAction SilentlyContinue
