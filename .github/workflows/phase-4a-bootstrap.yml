@@ -50,7 +50,24 @@ jobs:
         run: cargo fmt --all
 
       - name: Check service and shared contracts
-        run: cargo check --locked -p microgifter-homeserver-core -p microgifter-homeserver-service
+        id: rust_check
+        continue-on-error: true
+        run: cargo check --locked -p microgifter-homeserver-core -p microgifter-homeserver-service > phase4a-check.log 2>&1
+
+      - name: Upload compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase-4a-compiler-diagnostics
+          path: phase4a-check.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Enforce service contract check
+        if: steps.rust_check.outcome != 'success'
+        run: |
+          tail -n 160 phase4a-check.log
+          exit 1
 
       - name: Test service and shared contracts
         run: cargo test --locked -p microgifter-homeserver-core -p microgifter-homeserver-service
