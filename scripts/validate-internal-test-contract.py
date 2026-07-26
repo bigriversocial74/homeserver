@@ -35,9 +35,11 @@ def main() -> int:
         "homeserver-internal-test.json",
         "INTERNAL-TEST-WARNING.txt",
         "SHA256SUMS.txt",
-        "smoke-test-installer.ps1",
         "verify-installer-release.ps1",
         "smoke-test-updater.ps1",
+        "internal-installer-verification.log",
+        "internal-test-updater-smoke.log",
+        "if: always()",
         "actions/upload-artifact@",
         "permissions:\n  contents: read",
     )
