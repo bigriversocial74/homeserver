@@ -41,10 +41,9 @@ jobs:
           python scripts/phase4a_bootstrap.py
           python scripts/phase4a_fixups.py
 
-      - name: Install Rust 1.80
+      - name: Install production Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.80.0
           components: rustfmt, clippy
 
       - name: Format Rust source
