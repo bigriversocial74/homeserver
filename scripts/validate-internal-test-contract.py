@@ -37,7 +37,6 @@ def main() -> int:
         "SHA256SUMS.txt",
         "verify-installer-release.ps1",
         "smoke-test-updater.ps1",
-        "internal-installer-verification.log",
         "internal-test-updater-smoke.log",
         "if: always()",
         "actions/upload-artifact@",
