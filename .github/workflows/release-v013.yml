@@ -27,7 +27,7 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: homeserver-release-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
@@ -58,6 +58,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 100
     environment: production-release
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
