@@ -8,6 +8,15 @@ on:
       - scripts/phase4a_bootstrap.py
       - scripts/phase4a_fixups.py
       - .github/workflows/phase-4a-bootstrap.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - scripts/phase4a_bootstrap.py
+      - scripts/phase4a_fixups.py
+      - .github/workflows/phase-4a-bootstrap.yml
+      - docs/phase-4a-bootstrap-status.md
+      - docs/phase-4a-pr-scope.md
 
 permissions:
   contents: read
