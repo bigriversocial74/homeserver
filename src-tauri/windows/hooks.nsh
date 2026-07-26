@@ -31,11 +31,9 @@
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
-  DetailPrint "Registering Microgifter HomeServer service"
+  DetailPrint "Stopping Microgifter HomeServer service for installation"
 
   nsExec::ExecToLog '"$SYSDIR\sc.exe" stop "${MG_SERVICE_NAME}"'
-  Pop $0
-  nsExec::ExecToLog '"$SYSDIR\sc.exe" delete "${MG_SERVICE_NAME}"'
   Pop $0
   Sleep 1500
 
@@ -68,8 +66,18 @@
   nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\Microgifter\HomeServer" /setowner "*S-1-5-18" /T /C'
   !insertmacro MG_REQUIRE_SUCCESS "Unable to set retained HomeServer data ownership"
 
-  nsExec::ExecToLog '"$SYSDIR\sc.exe" create "${MG_SERVICE_NAME}" binPath= "\"$INSTDIR\resources\microgifter-homeserver-service.exe\" service" start= auto DisplayName= "${MG_SERVICE_DISPLAY}"'
-  !insertmacro MG_REQUIRE_SUCCESS "Unable to register the Microgifter HomeServer service"
+  ; Keep the existing service registration during upgrades. Deleting and
+  ; recreating it can leave the Service Control Manager in a pending-deletion
+  ; state while an automatic rollback is trying to restore the prior release.
+  nsExec::ExecToLog '"$SYSDIR\sc.exe" query "${MG_SERVICE_NAME}"'
+  Pop $0
+  ${If} $0 == 0
+    nsExec::ExecToLog '"$SYSDIR\sc.exe" config "${MG_SERVICE_NAME}" binPath= "\"$INSTDIR\resources\microgifter-homeserver-service.exe\" service" start= auto DisplayName= "${MG_SERVICE_DISPLAY}"'
+    !insertmacro MG_REQUIRE_SUCCESS "Unable to update the Microgifter HomeServer service registration"
+  ${Else}
+    nsExec::ExecToLog '"$SYSDIR\sc.exe" create "${MG_SERVICE_NAME}" binPath= "\"$INSTDIR\resources\microgifter-homeserver-service.exe\" service" start= auto DisplayName= "${MG_SERVICE_DISPLAY}"'
+    !insertmacro MG_REQUIRE_SUCCESS "Unable to register the Microgifter HomeServer service"
+  ${EndIf}
 
   nsExec::ExecToLog '"$SYSDIR\sc.exe" config "${MG_SERVICE_NAME}" start= delayed-auto'
   !insertmacro MG_REQUIRE_SUCCESS "Unable to configure delayed automatic startup"
