@@ -176,18 +176,26 @@ jobs:
           }
           Copy-Item $versioned 'release/Microgifter-HomeServer-Setup.exe' -Force
 
-      - name: Verify installed internal-test release
+      - name: Verify installed self-signed internal-test release
         shell: pwsh
         run: |
-          ./scripts/smoke-test-installer.ps1 `
-            -InstallerPath "release/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Internal-Test-Setup.exe"
-          ./scripts/verify-installer-release.ps1 `
+          & pwsh -NoLogo -NoProfile -NonInteractive `
+            -File ./scripts/verify-installer-release.ps1 `
             -InstallerPath "release/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Internal-Test-Setup.exe" `
-            -ExpectedVersion '${{ steps.release.outputs.version }}'
+            -ExpectedVersion '${{ steps.release.outputs.version }}' *> internal-installer-verification.log
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content internal-installer-verification.log -Tail 300
+            exit $LASTEXITCODE
+          }
 
       - name: Verify internal signed update and rollback
         shell: pwsh
         run: |
+          Import-Module Microsoft.PowerShell.Security -Force
+          $env:PSModulePath = @(
+            (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules')
+            (Join-Path $env:ProgramFiles 'WindowsPowerShell\Modules')
+          ) -join [System.IO.Path]::PathSeparator
           ./scripts/smoke-test-updater.ps1 `
             -InstallerPath "release/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Internal-Test-Setup.exe" `
             -UpdateInstallerPath 'release/Microgifter-HomeServer-Setup.exe' `
@@ -251,9 +259,23 @@ jobs:
             release/INTERNAL-TEST-WARNING.txt
             release/SHA256SUMS.txt
             tauri-internal-test-build.log
+            internal-installer-verification.log
             internal-test-updater-smoke.log
           if-no-files-found: error
           retention-days: 30
+
+      - name: Upload internal verification diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Microgifter-HomeServer-${{ steps.release.outputs.label }}-Internal-Diagnostics
+          path: |
+            tauri-internal-test-build.log
+            internal-installer-verification.log
+            internal-test-updater-smoke.log
+            installer-verification.log
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Remove temporary internal-test signing material
         if: always()
