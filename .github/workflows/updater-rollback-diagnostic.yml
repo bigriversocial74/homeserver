@@ -1,6 +1,9 @@
 name: HomeServer Updater Rollback Diagnostic
 
 on:
+  push:
+    branches:
+      - audit/full-production-hardening-20260725
   pull_request:
     branches:
       - main
@@ -20,7 +23,7 @@ concurrency:
 
 jobs:
   diagnose:
-    if: github.head_ref == 'audit/full-production-hardening-20260725'
+    if: github.ref_name == 'audit/full-production-hardening-20260725' || github.head_ref == 'audit/full-production-hardening-20260725'
     runs-on: windows-latest
     timeout-minutes: 60
 
