@@ -1,13 +1,6 @@
 name: Phase 4A Knowledge Vault Bootstrap
 
 on:
-  push:
-    branches:
-      - feature/phase-4a-knowledge-vault-20260726
-    paths:
-      - scripts/phase4a_bootstrap.py
-      - scripts/phase4a_fixups.py
-      - .github/workflows/phase-4a-bootstrap.yml
   pull_request:
     branches:
       - main
