@@ -1,0 +1,91 @@
+name: Repair Phase 5B compile errors
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phase5b-compile-fix
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.head_ref == 'feature/phase-5b-multi-connection-supervised-agents-20260727'
+    runs-on: windows-2025
+    steps:
+      - name: Check out Phase 5B branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-5b-multi-connection-supervised-agents-20260727
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Repair connection references and query lifetime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $pairingPath = 'crates/homeserver-service/src/cloud_pairing_v2.rs'
+          $pairing = Get-Content $pairingPath -Raw
+          $pairing = $pairing.Replace('&state.connection()?', '&*state.connection()?')
+          Set-Content $pairingPath $pairing -NoNewline
+
+          $registryPath = 'crates/homeserver-service/src/cloud_registry.rs'
+          $registry = Get-Content $registryPath -Raw
+          $registry = $registry.Replace('&self.connection()?', '&*self.connection()?')
+          $old = @'
+fn active_connection_ids(connection: &Connection) -> Result<Vec<String>> {
+    let mut statement = connection.prepare(
+        "SELECT connection_id FROM cloud_connections WHERE state IN ('pairing','connected','degraded') ORDER BY is_default DESC,connection_id",
+    )?;
+    Ok(statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+'@
+          $new = @'
+fn active_connection_ids(connection: &Connection) -> Result<Vec<String>> {
+    let mut statement = connection.prepare(
+        "SELECT connection_id FROM cloud_connections WHERE state IN ('pairing','connected','degraded') ORDER BY is_default DESC,connection_id",
+    )?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let connection_ids = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(connection_ids)
+}
+'@
+          if (-not $registry.Contains($old)) {
+            throw 'Expected active_connection_ids implementation was not found.'
+          }
+          $registry = $registry.Replace($old, $new)
+          Set-Content $registryPath $registry -NoNewline
+
+          cargo fmt --all
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo check --package microgifter-homeserver-service --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $allowed = @($pairingPath, $registryPath)
+          $changed = @(git diff --name-only)
+          $unexpected = @($changed | Where-Object { $_ -notin $allowed })
+          if ($unexpected.Count -gt 0) {
+            throw "Compile repair changed unexpected files: $($unexpected -join ', ')"
+          }
+          if ($changed.Count -eq 0) {
+            Write-Host 'Compile repair is already applied.'
+            exit 0
+          }
+          git add -- $allowed
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Repair Phase 5B database references'
+          git push origin HEAD:feature/phase-5b-multi-connection-supervised-agents-20260727
