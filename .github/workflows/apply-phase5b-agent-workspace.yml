@@ -26,11 +26,6 @@ jobs:
           fetch-depth: 0
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@4cda84d5c5e5dd43e44045a
-        continue-on-error: true
-
-      - name: Install pinned Rust toolchain
-        if: steps.rust-toolchain.outcome == 'failure'
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           components: rustfmt, clippy
