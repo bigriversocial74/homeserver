@@ -32,6 +32,8 @@ winget install --id tesseract-ocr.tesseract --exact --scope machine
 winget install --id oschwartz10612.Poppler --exact --scope machine
 ```
 
+Machine scope is required because the background HomeServer service runs as LocalSystem and cannot depend on a signed-in user's private package path.
+
 HomeServer does not execute Winget automatically, elevate itself, download OCR binaries, or accept a caller-provided command or executable path.
 
 ## Processing lifecycle
