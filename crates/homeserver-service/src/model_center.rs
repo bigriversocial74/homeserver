@@ -556,7 +556,7 @@ async fn update_settings(
         .map_err(|error| internal_error("model_settings_failed", error))
 }
 
-async fn snapshot(state: Arc<AppState>) -> Result<ModelCenterSnapshot> {
+pub(crate) async fn snapshot(state: Arc<AppState>) -> Result<ModelCenterSnapshot> {
     let state_for_local = state.clone();
     let local = tokio::task::spawn_blocking(move || local_snapshot(&state_for_local))
         .await

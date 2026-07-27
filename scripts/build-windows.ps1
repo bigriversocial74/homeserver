@@ -6,6 +6,8 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $ServiceTarget = Join-Path $Root "target\release\microgifter-homeserver-service.exe"
 $ResourceTarget = Join-Path $Root "src-tauri\resources\microgifter-homeserver-service.exe"
+$McpTarget = Join-Path $Root "target\release\microgifter-homeserver-mcp.exe"
+$McpResourceTarget = Join-Path $Root "src-tauri\resources\microgifter-homeserver-mcp.exe"
 
 Push-Location $Root
 try {
@@ -23,9 +25,11 @@ try {
     cargo test --workspace --locked
     cargo clippy --workspace --all-targets --locked -- -D warnings
     cargo build --release --package microgifter-homeserver-service --locked
-    & (Join-Path $PSScriptRoot "smoke-test-service.ps1") -ServiceBinary $ServiceTarget
+    cargo build --release --package microgifter-homeserver-mcp --locked
+    & (Join-Path $PSScriptRoot "smoke-test-service.ps1") -ServiceBinary $ServiceTarget -McpBinary $McpTarget
 
     Copy-Item $ServiceTarget $ResourceTarget -Force
+    Copy-Item $McpTarget $McpResourceTarget -Force
     npm run tauri:build
 
     $BundleDirectory = Join-Path $Root "target\release\bundle\nsis"

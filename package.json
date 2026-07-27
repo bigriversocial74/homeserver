@@ -11,7 +11,7 @@
     "tauri": "tauri",
     "tauri:dev": "npm run prepare:icons && tauri dev",
     "tauri:build": "npm run prepare:icons && tauri build",
-    "check:frontend": "node --check src/main.js && node --check src/ollama-install-assistant.js && node --check src/landing.js && node --check src/icons.js && node --check vite.config.js && node --check scripts/prepare-icons.mjs && python scripts/validate-ollama-install-assistant.py && python scripts/validate-document-extraction.py"
+    "check:frontend": "node --check src/main.js && node --check src/ollama-install-assistant.js && node --check src/landing.js && node --check src/icons.js && node --check vite.config.js && node --check scripts/prepare-icons.mjs && python scripts/validate-ollama-install-assistant.py && python scripts/validate-document-extraction.py && python scripts/validate-mcp-runtime.py"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0"

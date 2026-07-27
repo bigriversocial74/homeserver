@@ -14,6 +14,7 @@ $controlHeaders = @{ "X-MG-Local-Client" = "microgifter-control-center-v1" }
 $installer = (Resolve-Path $InstallerPath).Path
 $installDirectory = Join-Path $env:ProgramFiles "Microgifter HomeServer"
 $serviceBinary = Join-Path $installDirectory "resources\microgifter-homeserver-service.exe"
+$mcpBinary = Join-Path $installDirectory "resources\microgifter-homeserver-mcp.exe"
 $dataDirectory = Join-Path $env:ProgramData "Microgifter\HomeServer"
 $uninstallerPath = Join-Path $installDirectory "uninstall.exe"
 $tempInstallerLog = Join-Path $env:TEMP "Microgifter-HomeServer-install.log"
@@ -176,11 +177,19 @@ try {
     if (-not (Test-Path $serviceBinary)) {
         throw "Installed HomeServer service binary was not found at '$serviceBinary'"
     }
+    if (-not (Test-Path $mcpBinary)) {
+        throw "Installed HomeServer MCP bridge was not found at '$mcpBinary'"
+    }
 
     $binaryVersion = (& $serviceBinary --version | Out-String).Trim()
     $expectedBinaryVersion = "MicrogifterHomeServer $ExpectedVersion"
     if ($binaryVersion -ne $expectedBinaryVersion) {
         throw "Installed service version mismatch. Expected '$expectedBinaryVersion' but received '$binaryVersion'."
+    }
+    $mcpVersion = (& $mcpBinary --version | Out-String).Trim()
+    $expectedMcpVersion = "MicrogifterHomeServerMCP $ExpectedVersion"
+    if ($mcpVersion -ne $expectedMcpVersion) {
+        throw "Installed MCP bridge version mismatch. Expected '$expectedMcpVersion' but received '$mcpVersion'."
     }
 
     $status = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/status" -TimeoutSec 5
@@ -199,7 +208,7 @@ try {
         throw "Installer registry version mismatch. Expected '$ExpectedVersion' but received '$($registryEntry.DisplayVersion)'."
     }
 
-    Write-Host "Verified installer, embedded service binary, local API, and Windows registration all report HomeServer $ExpectedVersion."
+    Write-Host "Verified installer, embedded service and MCP binaries, local API, and Windows registration all report HomeServer $ExpectedVersion."
 }
 finally {
     $resolvedUninstaller = $null

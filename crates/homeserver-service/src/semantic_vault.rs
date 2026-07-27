@@ -539,7 +539,7 @@ async fn index_document(
     Ok(chunk_count)
 }
 
-async fn semantic_search(
+pub(crate) async fn semantic_search(
     state: Arc<AppState>,
     request: SemanticSearchRequest,
 ) -> Result<SemanticSearchResult> {

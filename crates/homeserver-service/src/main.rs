@@ -6,6 +6,7 @@ mod database;
 mod document_extraction;
 mod http;
 mod knowledge_vault;
+mod mcp_runtime;
 mod model_center;
 mod recovery_transfer;
 mod semantic_vault;
@@ -108,6 +109,16 @@ impl AppState {
                 "document_extraction_integrity_check_failed",
             );
         }
+        if let Err(error) = mcp_runtime::health_check(&connection) {
+            error!(
+                ?error,
+                "HomeServer MCP runtime database health check failed"
+            );
+            return HealthSnapshot::needs_attention(
+                &self.config.server_name,
+                "mcp_runtime_integrity_check_failed",
+            );
+        }
 
         let mut snapshot = HealthSnapshot::running(&self.config.server_name, "ready");
         snapshot.pending_sync = match database::pending_sync_count(&connection) {
@@ -203,6 +214,7 @@ impl AppState {
             database::maintain_history(&connection)?;
             update_store::maintain_history(&connection)?;
             model_center::maintain_history(&connection)?;
+            mcp_runtime::maintain_history(&connection)?;
             backup::enforce_pre_update_retention(&connection)?;
         }
         prune_artifact_generations(&self.config.update_rollback_dir, 3, true)?;

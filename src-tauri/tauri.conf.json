@@ -31,7 +31,8 @@
     "targets": ["nsis"],
     "resources": [
       "resources/microgifter-homeserver-service.exe",
-      "resources/microgifter-homeserver-updater.exe"
+      "resources/microgifter-homeserver-updater.exe",
+      "resources/microgifter-homeserver-mcp.exe"
     ],
     "shortDescription": "Private local Microgifter edge platform",
     "longDescription": "Microgifter HomeServer provides local services, private data, AI, MCP access, synchronization, backup, recovery, signed updates, rollback, and diagnostics.",

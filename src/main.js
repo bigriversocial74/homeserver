@@ -12,6 +12,9 @@ let semanticSnapshot = null;
 let vaultSearchResult = null;
 let modelSnapshot = null;
 let modelTestResult = null;
+let mcpSnapshot = null;
+let mcpCredential = null;
+let mcpBridgePath = null;
 let notice = null;
 let busy = false;
 let activePage = window.location.hash.replace("#", "") || "dashboard";
@@ -357,7 +360,24 @@ function renderIntegrations() {
         ${integrationRow("Local Storage", "Protected device data", "storage", true, "Connected", "Local", "backups")}
       </div></article>
     </section>
-    ${renderCloudConnectionDetail()}`;
+    ${renderCloudConnectionDetail()}
+    ${renderMcpRuntime()}`;
+}
+
+function renderMcpRuntime() {
+  const clients = Array.isArray(mcpSnapshot?.clients) ? mcpSnapshot.clients : [];
+  const active = clients.filter((client) => client.state === "active").length;
+  const scopes = Array.isArray(mcpSnapshot?.scopes) ? mcpSnapshot.scopes : [];
+  const token = mcpCredential?.token || "";
+  const httpConfig = token ? JSON.stringify({ mcpServers: { homeserver: { url: mcpCredential.endpoint, headers: { Authorization: `Bearer ${token}` } } } }, null, 2) : "Create a client to generate a one-time token.";
+  const stdioConfig = token && mcpBridgePath ? JSON.stringify({ mcpServers: { homeserver: { command: mcpBridgePath, env: { MG_HOMESERVER_MCP_TOKEN: token } } } }, null, 2) : "Create a client and install the packaged bridge to generate this configuration.";
+  return `<section class="panel mcp-runtime-panel" id="mcp-runtime"><div class="panel-title"><div><h2>Local MCP Runtime</h2><p>Client-scoped, read-only access to local health, sync status, model inventory, and cited Knowledge Vault retrieval.</p></div>${badge(mcpSnapshot?.state === "ready" ? "Ready" : "Waiting for client", mcpSnapshot?.state === "ready" ? "healthy" : "planned")}</div>
+    <div class="mcp-summary-grid"><div><span>Endpoint</span><strong class="mono">${escapeHtml(mcpSnapshot?.endpoint || "http://127.0.0.1:47831/mcp")}</strong></div><div><span>Active clients</span><strong>${active}</strong></div><div><span>Transport</span><strong>HTTP + stdio</strong></div><div><span>Limit</span><strong>${Number(mcpSnapshot?.requests_per_minute || 120)}/min</strong></div></div>
+    <div class="privacy-banner success">${icon("shield", 20)}<div><strong>Read-only local boundary</strong><span>No write tools, cloud actions, commerce actions, arbitrary endpoints, LAN listener, or public listener are exposed.</span></div></div>
+    <div class="mcp-workspace"><form id="mcp-client-form" class="panel inset-panel stack-form"><div><h3>Create MCP Client</h3><p>The token is shown once. HomeServer stores only its SHA-256 hash.</p></div><label><span>Client name</span><input id="mcp-client-name" maxlength="80" minlength="3" placeholder="Claude Desktop on this PC" required></label><label><span>Expires</span><select id="mcp-client-expiry"><option value="30">30 days</option><option value="90" selected>90 days</option><option value="180">180 days</option><option value="365">365 days</option></select></label><fieldset class="mcp-scopes"><legend>Read-only scopes</legend>${scopes.map((scope) => `<label><input type="checkbox" name="mcp-scope" value="${escapeHtml(scope)}" checked><span>${escapeHtml(scope)}</span></label>`).join("")}</fieldset><button class="button primary" type="submit" ${busy || !statusSnapshot?.api_available ? "disabled" : ""}>Create Client</button></form>
+      <article class="panel inset-panel"><div><h3>Authorized Clients</h3><p>Revoke any client immediately without changing other credentials.</p></div><div class="mcp-client-list">${clients.length ? clients.map((client) => `<div class="mcp-client-row"><div><strong>${escapeHtml(client.display_name)}</strong><small class="mono">${escapeHtml(client.token_hint)}</small><small>${escapeHtml(client.scopes.join(", "))}</small></div><div>${badge(humanize(client.state), client.state === "active" ? "healthy" : "planned")}<small>${escapeHtml(formatDate(client.expires_at_utc))}</small></div>${client.state === "active" ? `<button class="button danger compact" data-mcp-revoke="${escapeHtml(client.client_id)}" type="button" ${busy ? "disabled" : ""}>Revoke</button>` : ""}</div>`).join("") : `<div class="empty-state">${icon("network", 28)}<strong>No MCP clients</strong><p>Create a scoped client before connecting a local agent harness.</p></div>`}</div></article></div>
+    ${mcpCredential ? `<article class="mcp-credential-card"><div class="panel-title"><div><h3>Copy this credential now</h3><p>It cannot be recovered after this screen is refreshed.</p></div>${badge("One-time secret", "warning")}</div><label><span>Token</span><div class="copy-field"><code>${escapeHtml(token)}</code><button class="button secondary compact" data-copy-value="${escapeHtml(token)}" type="button">Copy</button></div></label><div class="mcp-config-grid"><label><span>Streamable HTTP configuration</span><pre>${escapeHtml(httpConfig)}</pre><button class="button secondary compact" data-copy-value="${escapeHtml(httpConfig)}" type="button">Copy HTTP config</button></label><label><span>Packaged stdio configuration</span><pre>${escapeHtml(stdioConfig)}</pre><button class="button secondary compact" data-copy-value="${escapeHtml(stdioConfig)}" type="button" ${mcpBridgePath ? "" : "disabled"}>Copy stdio config</button></label></div></article>` : ""}
+  </section>`;
 }
 
 function agentRow(name, description, iconName, connected, lastSeen) {
@@ -644,6 +664,9 @@ function bindEvents() {
   document.querySelectorAll("[data-model-test-select]").forEach((button) => button.addEventListener("click", selectModelForTest));
   document.querySelector("#model-test-form")?.addEventListener("submit", testModel);
   document.querySelector("#model-settings-form")?.addEventListener("submit", saveModelSettings);
+  document.querySelector("#mcp-client-form")?.addEventListener("submit", createMcpClient);
+  document.querySelectorAll("[data-mcp-revoke]").forEach((button) => button.addEventListener("click", revokeMcpClient));
+  document.querySelectorAll("[data-copy-value]").forEach((button) => button.addEventListener("click", copyMcpValue));
 }
 
 function navigate(page) {
@@ -972,9 +995,41 @@ async function saveModelSettings(event) {
   });
 }
 
+async function createMcpClient(event) {
+  event.preventDefault();
+  const displayName = document.querySelector("#mcp-client-name")?.value?.trim() || "";
+  const expiresDays = Number(document.querySelector("#mcp-client-expiry")?.value || 90);
+  const scopes = [...document.querySelectorAll('input[name="mcp-scope"]:checked')].map((input) => input.value);
+  await withBusy(async () => {
+    mcpCredential = await invoke("homeserver_create_mcp_client", { displayName, scopes, expiresDays });
+    return { kind: "success", message: "MCP client created. Copy the one-time token before leaving this page." };
+  });
+}
+
+async function revokeMcpClient(event) {
+  const clientId = event.currentTarget.dataset.mcpRevoke;
+  if (!window.confirm("Revoke this MCP client immediately?")) return;
+  await withBusy(async () => {
+    await invoke("homeserver_revoke_mcp_client", { clientId, confirmation: "REVOKE" });
+    if (mcpCredential?.client?.client_id === clientId) mcpCredential = null;
+    return { kind: "success", message: "MCP client revoked." };
+  });
+}
+
+async function copyMcpValue(event) {
+  const value = event.currentTarget.dataset.copyValue || "";
+  try {
+    await navigator.clipboard.writeText(value);
+    notice = { kind: "success", message: "MCP configuration copied." };
+  } catch (error) {
+    notice = { kind: "warning", message: `Unable to copy MCP configuration: ${String(error)}` };
+  }
+  render();
+}
+
 async function loadAll(clearNotice = true) {
   if (clearNotice) notice = null;
-  const results = await Promise.allSettled([invoke("homeserver_status"), invoke("homeserver_cloud_status"), invoke("homeserver_backups"), invoke("homeserver_updates"), invoke("homeserver_vault"), invoke("homeserver_semantic_vault"), invoke("homeserver_models")]);
+  const results = await Promise.allSettled([invoke("homeserver_status"), invoke("homeserver_cloud_status"), invoke("homeserver_backups"), invoke("homeserver_updates"), invoke("homeserver_vault"), invoke("homeserver_semantic_vault"), invoke("homeserver_models"), invoke("homeserver_mcp"), invoke("homeserver_mcp_bridge_path")]);
   if (results[0].status === "rejected") {
     statusSnapshot = null;
     cloudSnapshot = null;
@@ -983,6 +1038,8 @@ async function loadAll(clearNotice = true) {
     vaultSnapshot = null;
     semanticSnapshot = null;
     modelSnapshot = null;
+    mcpSnapshot = null;
+    mcpBridgePath = null;
     notice = { kind: "warning", message: `HomeServer service unavailable: ${String(results[0].reason)}` };
     render();
     return;
@@ -994,9 +1051,12 @@ async function loadAll(clearNotice = true) {
   vaultSnapshot = results[4].status === "fulfilled" ? results[4].value : null;
   semanticSnapshot = results[5].status === "fulfilled" ? results[5].value : null;
   modelSnapshot = results[6].status === "fulfilled" ? results[6].value : null;
+  mcpSnapshot = results[7].status === "fulfilled" ? results[7].value : null;
+  mcpBridgePath = results[8].status === "fulfilled" ? results[8].value : null;
   if (!notice && results[1].status === "rejected") notice = { kind: "warning", message: `Cloud connector unavailable: ${String(results[1].reason)}` };
   if (!notice && results[5].status === "rejected") notice = { kind: "warning", message: `Semantic Knowledge Vault unavailable: ${String(results[5].reason)}` };
   if (!notice && results[6].status === "rejected") notice = { kind: "warning", message: `Model Center unavailable: ${String(results[6].reason)}` };
+  if (!notice && results[7].status === "rejected") notice = { kind: "warning", message: `Local MCP runtime unavailable: ${String(results[7].reason)}` };
   render();
 }
 
