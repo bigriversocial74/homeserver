@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 use uuid::Uuid;
 
 const OPERATIONAL_MIGRATION: &str =
@@ -212,7 +212,6 @@ pub struct OperationalQueryRequest {
 #[derive(Debug, Clone)]
 struct ConnectionIdentity {
     provider_key: String,
-    display_name: String,
     tenant_id: Option<String>,
     site_id: Option<String>,
     state: String,
@@ -232,7 +231,10 @@ pub fn initialize(connection: &Connection) -> Result<()> {
         params![OPERATIONAL_MIGRATION_KEY],
         |row| row.get(0),
     )?;
-    ensure!(migration_count == 1, "operational data migration is not registered exactly once");
+    ensure!(
+        migration_count == 1,
+        "operational data migration is not registered exactly once"
+    );
     seed_builtin_manifests(connection)?;
     maintain_history(connection)?;
     health_check(connection)
@@ -340,31 +342,81 @@ pub(crate) fn query_for_agent(
     connection_ids: &[String],
     dataset_keys: &[String],
 ) -> Result<OperationalQueryResult> {
-    let selection = parse_agent_dataset_selection(connection_ids, dataset_keys)?;
+    let selections = agent_dataset_selections(dataset_keys)?;
     let connection = state.connection()?;
-    query_from_connection(
-        &connection,
-        selection.0.as_deref(),
-        selection.1.as_deref(),
-        None,
-        50,
-    )
-}
+    if selections.is_empty() {
+        return query_from_connection(
+            &connection,
+            connection_ids.first().map(String::as_str),
+            None,
+            None,
+            25,
+        );
+    }
 
-fn parse_agent_dataset_selection(
-    connection_ids: &[String],
-    dataset_keys: &[String],
-) -> Result<(Option<String>, Option<String>)> {
-    for key in dataset_keys {
-        if let Some(rest) = key.strip_prefix("dataset:") {
-            let mut parts = rest.splitn(2, ':');
-            let connection_id = parts.next().context("dataset connection id is missing")?;
-            let dataset_key = parts.next().context("dataset key is missing")?;
-            validate_uuid(connection_id, "dataset connection id")?;
-            return Ok((Some(connection_id.to_owned()), Some(normalize_dataset_key(dataset_key)?)));
+    let mut records = Vec::new();
+    let mut available_records = 0_u64;
+    for (connection_id, dataset_key) in &selections {
+        let grant = enabled_grant(&connection, connection_id, dataset_key)?;
+        ensure!(
+            grant.permitted_agent_uses.iter().any(|use_name| {
+                ["read", "analyze", "goal_match", "report"].contains(&use_name.as_str())
+            }),
+            "dataset grant does not permit Agent Workspace use"
+        );
+        let result = query_from_connection(
+            &connection,
+            Some(connection_id),
+            Some(dataset_key),
+            None,
+            12,
+        )?;
+        available_records = available_records.saturating_add(result.available_records);
+        for record in result.records {
+            if records.len() >= 25 {
+                break;
+            }
+            records.push(record);
         }
     }
-    Ok((connection_ids.first().cloned(), None))
+    Ok(OperationalQueryResult {
+        records,
+        available_records,
+        selected_connection_id: if selections.len() == 1 {
+            Some(selections[0].0.clone())
+        } else {
+            None
+        },
+        selected_dataset_key: if selections.len() == 1 {
+            Some(selections[0].1.clone())
+        } else {
+            None
+        },
+        generated_at_utc: now_string(),
+        provider_authoritative: true,
+        imported_data_is_untrusted_evidence: true,
+    })
+}
+
+fn agent_dataset_selections(dataset_keys: &[String]) -> Result<Vec<(String, String)>> {
+    let mut selections = Vec::new();
+    for key in dataset_keys {
+        let Some(rest) = key.strip_prefix("dataset:") else {
+            continue;
+        };
+        let mut parts = rest.splitn(2, ':');
+        let connection_id = parts.next().context("dataset connection id is missing")?;
+        let dataset_key = parts.next().context("dataset key is missing")?;
+        validate_uuid(connection_id, "dataset connection id")?;
+        let selection = (
+            connection_id.to_owned(),
+            normalize_dataset_key(dataset_key)?,
+        );
+        if !selections.contains(&selection) {
+            selections.push(selection);
+        }
+    }
+    Ok(selections)
 }
 
 fn seed_builtin_manifests(connection: &Connection) -> Result<()> {
@@ -408,7 +460,10 @@ fn update_dataset_grant(state: &AppState, request: UpdateDatasetGrantRequest) ->
     let dataset_key = normalize_dataset_key(&request.dataset_key)?;
     let connection = state.connection()?;
     let identity = connection_identity(&connection, &request.connection_id)?;
-    ensure!(identity.state != "revoked" && identity.state != "disconnected", "cloud connection is inactive");
+    ensure!(
+        identity.state != "revoked" && identity.state != "disconnected",
+        "cloud connection is inactive"
+    );
     let (catalog_sensitivity, default_retention): (String, i64) = connection
         .query_row(
             "SELECT sensitivity,default_retention_days FROM operational_dataset_catalog WHERE provider_key=?1 AND dataset_key=?2 AND enabled=1",
@@ -422,8 +477,14 @@ fn update_dataset_grant(state: &AppState, request: UpdateDatasetGrantRequest) ->
         .map(normalize_classification)
         .transpose()?
         .unwrap_or_else(|| catalog_sensitivity.clone());
-    ensure!(classification_rank(&classification) >= classification_rank(&catalog_sensitivity), "grant classification cannot be lower than the provider dataset sensitivity");
-    let retention_days = request.retention_days.unwrap_or(default_retention).clamp(1, 3650);
+    ensure!(
+        classification_rank(&classification) >= classification_rank(&catalog_sensitivity),
+        "grant classification cannot be lower than the provider dataset sensitivity"
+    );
+    let retention_days = request
+        .retention_days
+        .unwrap_or(default_retention)
+        .clamp(1, 3650);
     let uses = normalize_agent_uses(&request.permitted_agent_uses)?;
     let now = now_string();
     if request.enabled {
@@ -453,21 +514,49 @@ fn import_operational_batch(
     request.provider_key = normalize_provider_key(&request.provider_key)?;
     request.dataset_key = normalize_dataset_key(&request.dataset_key)?;
     request.import_mode = request.import_mode.trim().to_ascii_lowercase();
-    ensure!(["snapshot", "incremental", "event"].contains(&request.import_mode.as_str()), "import mode is invalid");
-    ensure!(request.records.len() <= MAX_RECORDS_PER_IMPORT, "operational import contains too many records");
-    ensure!(request.events.len() <= MAX_EVENTS_PER_IMPORT, "operational import contains too many events");
-    ensure!(!request.records.is_empty() || !request.events.is_empty(), "operational import is empty");
+    ensure!(
+        ["snapshot", "incremental", "event"].contains(&request.import_mode.as_str()),
+        "import mode is invalid"
+    );
+    ensure!(
+        request.records.len() <= MAX_RECORDS_PER_IMPORT,
+        "operational import contains too many records"
+    );
+    ensure!(
+        request.events.len() <= MAX_EVENTS_PER_IMPORT,
+        "operational import contains too many events"
+    );
+    ensure!(
+        !request.records.is_empty() || !request.events.is_empty(),
+        "operational import is empty"
+    );
     request.tenant_id = sanitize_optional_text(request.tenant_id.as_deref(), 160, "tenant id")?;
     request.site_id = sanitize_optional_text(request.site_id.as_deref(), 160, "site id")?;
-    request.cursor_after = sanitize_optional_text(request.cursor_after.as_deref(), 500, "import cursor")?;
-    request.source_revision = sanitize_optional_text(request.source_revision.as_deref(), 300, "source revision")?;
+    request.cursor_after =
+        sanitize_optional_text(request.cursor_after.as_deref(), 500, "import cursor")?;
+    request.source_revision =
+        sanitize_optional_text(request.source_revision.as_deref(), 300, "source revision")?;
 
     let mut connection = state.connection()?;
     let identity = connection_identity(&connection, &request.connection_id)?;
-    ensure!(identity.provider_key == request.provider_key, "provider key does not match the paired connection");
-    ensure!(identity.state != "revoked" && identity.state != "disconnected", "cloud connection is inactive");
-    ensure_scope_matches(identity.tenant_id.as_deref(), request.tenant_id.as_deref(), "tenant")?;
-    ensure_scope_matches(identity.site_id.as_deref(), request.site_id.as_deref(), "site")?;
+    ensure!(
+        identity.provider_key == request.provider_key,
+        "provider key does not match the paired connection"
+    );
+    ensure!(
+        identity.state != "revoked" && identity.state != "disconnected",
+        "cloud connection is inactive"
+    );
+    ensure_scope_matches(
+        identity.tenant_id.as_deref(),
+        request.tenant_id.as_deref(),
+        "tenant",
+    )?;
+    ensure_scope_matches(
+        identity.site_id.as_deref(),
+        request.site_id.as_deref(),
+        "site",
+    )?;
     let grant = enabled_grant(&connection, &request.connection_id, &request.dataset_key)?;
     let supported_modes: String = connection.query_row(
         "SELECT sync_modes_json FROM operational_dataset_catalog WHERE provider_key=?1 AND dataset_key=?2 AND enabled=1",
@@ -475,7 +564,10 @@ fn import_operational_batch(
         |row| row.get(0),
     )?;
     let supported_modes: Vec<String> = serde_json::from_str(&supported_modes)?;
-    ensure!(supported_modes.contains(&request.import_mode), "provider manifest does not allow this import mode");
+    ensure!(
+        supported_modes.contains(&request.import_mode),
+        "provider manifest does not allow this import mode"
+    );
 
     let cursor_before = connection
         .query_row(
@@ -506,7 +598,11 @@ fn import_operational_batch(
             record,
             &retention_until,
         ) {
-            Ok(was_imported) => imported += u64::from(was_imported),
+            Ok(was_imported) => {
+                if was_imported {
+                    imported += 1;
+                }
+            }
             Err(error) => {
                 rejected += 1;
                 record_import_error(&transaction, &import_run_id, index, record, &error)?;
@@ -530,7 +626,11 @@ fn import_operational_batch(
         }
     }
     let completed_at = now_string();
-    let state_value = if rejected == 0 { "completed" } else { "completed_with_errors" };
+    let state_value = if rejected == 0 {
+        "completed"
+    } else {
+        "completed_with_errors"
+    };
     transaction.execute(
         "UPDATE operational_import_runs SET state=?2,records_imported=?3,records_rejected=?4,completed_at_utc=?5 WHERE import_run_id=?1",
         params![import_run_id, state_value, imported, rejected, completed_at],
@@ -563,7 +663,11 @@ fn import_record(
     let object_type = normalize_object_key(&input.source_object_type, "source object type")?;
     let object_id = sanitize_required_text(&input.source_object_id, 300, "source object id")?;
     let revision = sanitize_required_text(&input.source_revision, 300, "source revision")?;
-    let source_updated = sanitize_optional_text(input.source_updated_at_utc.as_deref(), 80, "source update time")?;
+    let source_updated = sanitize_optional_text(
+        input.source_updated_at_utc.as_deref(),
+        80,
+        "source update time",
+    )?;
     ensure_json_object(&input.payload, MAX_RECORD_BYTES, "operational record")?;
     let payload_json = canonical_json(&input.payload)?;
     let payload_hash = sha256_hex(payload_json.as_bytes());
@@ -576,7 +680,13 @@ fn import_record(
     if inserted == 0 {
         return Ok(false);
     }
-    let entity_id = sha256_hex(format!("{}|{}|{}|{}", request.connection_id, request.dataset_key, object_type, object_id).as_bytes());
+    let entity_id = sha256_hex(
+        format!(
+            "{}|{}|{}|{}",
+            request.connection_id, request.dataset_key, object_type, object_id
+        )
+        .as_bytes(),
+    );
     transaction.execute(
         "INSERT INTO operational_entities (entity_id,connection_id,provider_key,tenant_id,site_id,dataset_key,source_object_type,source_object_id,current_source_revision,current_payload_hash,current_payload_json,classification,source_updated_at_utc,received_at_utc,retention_until_utc,state,created_at_utc,updated_at_utc) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,'active',?14,?14) ON CONFLICT(connection_id,dataset_key,source_object_type,source_object_id) DO UPDATE SET current_source_revision=excluded.current_source_revision,current_payload_hash=excluded.current_payload_hash,current_payload_json=excluded.current_payload_json,classification=excluded.classification,source_updated_at_utc=excluded.source_updated_at_utc,received_at_utc=excluded.received_at_utc,retention_until_utc=excluded.retention_until_utc,state='active',updated_at_utc=excluded.updated_at_utc",
         params![entity_id, request.connection_id, request.provider_key, request.tenant_id, request.site_id, request.dataset_key, object_type, object_id, revision, payload_hash, payload_json, grant.classification, source_updated, received_at, retention_until],
@@ -636,7 +746,10 @@ fn record_import_error(
     Ok(())
 }
 
-fn query_operational_records(state: &AppState, request: OperationalQueryRequest) -> Result<OperationalQueryResult> {
+fn query_operational_records(
+    state: &AppState,
+    request: OperationalQueryRequest,
+) -> Result<OperationalQueryResult> {
     let connection_id = request
         .connection_id
         .as_deref()
@@ -645,8 +758,16 @@ fn query_operational_records(state: &AppState, request: OperationalQueryRequest)
             Ok::<String, anyhow::Error>(value.to_owned())
         })
         .transpose()?;
-    let dataset_key = request.dataset_key.as_deref().map(normalize_dataset_key).transpose()?;
-    let object_type = request.source_object_type.as_deref().map(|value| normalize_object_key(value, "source object type")).transpose()?;
+    let dataset_key = request
+        .dataset_key
+        .as_deref()
+        .map(normalize_dataset_key)
+        .transpose()?;
+    let object_type = request
+        .source_object_type
+        .as_deref()
+        .map(|value| normalize_object_key(value, "source object type"))
+        .transpose()?;
     let connection = state.connection()?;
     query_from_connection(
         &connection,
@@ -678,7 +799,10 @@ fn query_from_connection(
     let mut statement = connection.prepare(
         "SELECT e.entity_id,e.connection_id,e.provider_key,e.tenant_id,e.site_id,e.dataset_key,e.source_object_type,e.source_object_id,e.current_source_revision,e.source_updated_at_utc,e.received_at_utc,e.current_payload_hash,e.current_payload_json FROM operational_entities e JOIN operational_dataset_grants g ON g.connection_id=e.connection_id AND g.dataset_key=e.dataset_key AND g.state='enabled' WHERE e.state='active' AND (?1 IS NULL OR e.connection_id=?1) AND (?2 IS NULL OR e.dataset_key=?2) AND (?3 IS NULL OR e.source_object_type=?3) ORDER BY COALESCE(e.source_updated_at_utc,e.received_at_utc) DESC,e.entity_id DESC LIMIT ?4",
     )?;
-    let rows = statement.query_map(params![connection_id, dataset_key, object_type, i64::from(limit)], map_evidence_record)?;
+    let rows = statement.query_map(
+        params![connection_id, dataset_key, object_type, i64::from(limit)],
+        map_evidence_record,
+    )?;
     let records = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(OperationalQueryResult {
         records,
@@ -704,11 +828,21 @@ fn snapshot_from_connection(connection: &Connection) -> Result<OperationalDataSn
     let recent_runs = run_statement
         .query_map([], map_import_run)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let provider_manifests = scalar_count(connection, "SELECT COUNT(*) FROM operational_provider_manifests WHERE state='active'")?;
-    let enabled_grants = scalar_count(connection, "SELECT COUNT(*) FROM operational_dataset_grants WHERE state='enabled'")?;
-    let imported_records = scalar_count(connection, "SELECT COUNT(*) FROM operational_entities WHERE state='active'")?;
+    let provider_manifests = scalar_count(
+        connection,
+        "SELECT COUNT(*) FROM operational_provider_manifests WHERE state='active'",
+    )?;
+    let enabled_grants = scalar_count(
+        connection,
+        "SELECT COUNT(*) FROM operational_dataset_grants WHERE state='enabled'",
+    )?;
+    let imported_records = scalar_count(
+        connection,
+        "SELECT COUNT(*) FROM operational_entities WHERE state='active'",
+    )?;
     let imported_events = scalar_count(connection, "SELECT COUNT(*) FROM operational_events")?;
-    let quarantined_errors = scalar_count(connection, "SELECT COUNT(*) FROM operational_import_errors")?;
+    let quarantined_errors =
+        scalar_count(connection, "SELECT COUNT(*) FROM operational_import_errors")?;
     Ok(OperationalDataSnapshot {
         datasets,
         recent_runs,
@@ -791,8 +925,11 @@ fn map_evidence_record(row: &Row<'_>) -> rusqlite::Result<OperationalEvidenceRec
         source_updated_at_utc: row.get(9)?,
         received_at_utc: row.get(10)?,
         payload_hash: row.get(11)?,
-        payload: serde_json::from_str(&payload_json).unwrap_or_else(|_| json!({ "invalid_payload": true })),
-        citation: format!("{provider_key}:{connection_id}/{dataset_key}/{object_type}/{object_id}@{revision}"),
+        payload: serde_json::from_str(&payload_json)
+            .unwrap_or_else(|_| json!({ "invalid_payload": true })),
+        citation: format!(
+            "{provider_key}:{connection_id}/{dataset_key}/{object_type}/{object_id}@{revision}"
+        ),
     })
 }
 
@@ -804,7 +941,6 @@ fn connection_identity(connection: &Connection, connection_id: &str) -> Result<C
             |row| {
                 Ok(ConnectionIdentity {
                     provider_key: row.get(0)?,
-                    display_name: row.get(1)?,
                     tenant_id: row.get(2)?,
                     site_id: row.get(3)?,
                     state: row.get(4)?,
@@ -814,7 +950,11 @@ fn connection_identity(connection: &Connection, connection_id: &str) -> Result<C
         .context("cloud connection was not found")
 }
 
-fn enabled_grant(connection: &Connection, connection_id: &str, dataset_key: &str) -> Result<GrantIdentity> {
+fn enabled_grant(
+    connection: &Connection,
+    connection_id: &str,
+    dataset_key: &str,
+) -> Result<GrantIdentity> {
     connection
         .query_row(
             "SELECT classification,retention_days,permitted_agent_uses_json FROM operational_dataset_grants WHERE connection_id=?1 AND dataset_key=?2 AND state='enabled'",
@@ -832,7 +972,10 @@ fn enabled_grant(connection: &Connection, connection_id: &str, dataset_key: &str
 
 fn ensure_scope_matches(expected: Option<&str>, received: Option<&str>, label: &str) -> Result<()> {
     match (expected, received) {
-        (Some(expected), Some(received)) => ensure!(expected == received, "{label} scope does not match the paired connection"),
+        (Some(expected), Some(received)) => ensure!(
+            expected == received,
+            "{label} scope does not match the paired connection"
+        ),
         (Some(_), None) => bail!("{label} scope is required for this paired connection"),
         (None, Some(_)) => bail!("{label} scope cannot be added by an import payload"),
         (None, None) => {}
@@ -842,20 +985,32 @@ fn ensure_scope_matches(expected: Option<&str>, received: Option<&str>, label: &
 
 fn normalize_agent_uses(values: &[String]) -> Result<Vec<String>> {
     let source = if values.is_empty() {
-        PERMITTED_AGENT_USES.iter().map(|value| (*value).to_owned()).collect::<Vec<_>>()
+        PERMITTED_AGENT_USES
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>()
     } else {
         values.to_vec()
     };
-    ensure!(source.len() <= PERMITTED_AGENT_USES.len(), "too many agent uses were supplied");
+    ensure!(
+        source.len() <= PERMITTED_AGENT_USES.len(),
+        "too many agent uses were supplied"
+    );
     let mut normalized = Vec::new();
     for value in source {
         let value = value.trim().to_ascii_lowercase();
-        ensure!(PERMITTED_AGENT_USES.contains(&value.as_str()), "agent use is not permitted for imported data");
+        ensure!(
+            PERMITTED_AGENT_USES.contains(&value.as_str()),
+            "agent use is not permitted for imported data"
+        );
         if !normalized.contains(&value) {
             normalized.push(value);
         }
     }
-    ensure!(!normalized.is_empty(), "at least one permitted agent use is required");
+    ensure!(
+        !normalized.is_empty(),
+        "at least one permitted agent use is required"
+    );
     Ok(normalized)
 }
 
@@ -871,14 +1026,26 @@ fn normalize_dataset_key(value: &str) -> Result<String> {
 
 fn normalize_object_key(value: &str, label: &str) -> Result<String> {
     let value = value.trim().to_ascii_lowercase();
-    ensure!((2..=160).contains(&value.len()), "{label} length is invalid");
-    ensure!(value.chars().all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')), "{label} contains unsupported characters");
+    ensure!(
+        (2..=160).contains(&value.len()),
+        "{label} length is invalid"
+    );
+    ensure!(
+        value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric()
+                || matches!(character, '.' | '_' | '-')),
+        "{label} contains unsupported characters"
+    );
     Ok(value)
 }
 
 fn normalize_classification(value: &str) -> Result<String> {
     let value = value.trim().to_ascii_lowercase();
-    ensure!(["public", "business", "restricted", "sensitive"].contains(&value.as_str()), "classification is invalid");
+    ensure!(
+        ["public", "business", "restricted", "sensitive"].contains(&value.as_str()),
+        "classification is invalid"
+    );
     Ok(value)
 }
 
@@ -896,19 +1063,34 @@ fn sanitize_required_text(value: &str, maximum: usize, label: &str) -> Result<St
     sanitize_optional_text(Some(value), maximum, label)?.context(format!("{label} is required"))
 }
 
-fn sanitize_optional_text(value: Option<&str>, maximum: usize, label: &str) -> Result<Option<String>> {
+fn sanitize_optional_text(
+    value: Option<&str>,
+    maximum: usize,
+    label: &str,
+) -> Result<Option<String>> {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
-    ensure!(value.chars().count() <= maximum, "{label} exceeds the size limit");
-    ensure!(!value.chars().any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t')), "{label} contains unsupported control characters");
+    ensure!(
+        value.chars().count() <= maximum,
+        "{label} exceeds the size limit"
+    );
+    ensure!(
+        !value
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t')),
+        "{label} contains unsupported control characters"
+    );
     Ok(Some(value.to_owned()))
 }
 
 fn ensure_json_object(value: &Value, maximum_bytes: usize, label: &str) -> Result<()> {
     ensure!(value.is_object(), "{label} must be one JSON object");
     let encoded = serde_json::to_vec(value)?;
-    ensure!(encoded.len() <= maximum_bytes, "{label} exceeds the size limit");
+    ensure!(
+        encoded.len() <= maximum_bytes,
+        "{label} exceeds the size limit"
+    );
     Ok(())
 }
 
@@ -994,6 +1176,55 @@ fn action_error(code: &'static str, error: anyhow::Error) -> (StatusCode, Json<A
 mod tests {
     use super::*;
 
+    fn test_config() -> crate::config::AppConfig {
+        let root = std::env::temp_dir().join(format!(
+            "microgifter-homeserver-operational-test-{}",
+            Uuid::new_v4().simple()
+        ));
+        let logs_dir = root.join("logs");
+        let backups_dir = root.join("backups");
+        let recovery_dir = root.join("recovery-packages");
+        let restore_dir = root.join("restore");
+        let staging_dir = root.join("staging");
+        let imports_dir = staging_dir.join("recovery-imports");
+        let updates_dir = root.join("updates");
+        let update_staging_dir = updates_dir.join("staging");
+        let update_rollback_dir = updates_dir.join("rollback");
+        let update_installed_dir = updates_dir.join("installed");
+        for directory in [
+            &root,
+            &logs_dir,
+            &backups_dir,
+            &recovery_dir,
+            &restore_dir,
+            &staging_dir,
+            &imports_dir,
+            &updates_dir,
+            &update_staging_dir,
+            &update_rollback_dir,
+            &update_installed_dir,
+        ] {
+            std::fs::create_dir_all(directory).expect("create test directory");
+        }
+        crate::config::AppConfig {
+            database_path: root.join("homeserver.sqlite3"),
+            data_dir: root,
+            logs_dir,
+            backups_dir,
+            recovery_dir,
+            restore_dir,
+            staging_dir,
+            imports_dir,
+            updates_dir,
+            update_staging_dir,
+            update_rollback_dir,
+            update_installed_dir,
+            update_manifest_url: "https://updates.microgifter.com/homeserver/stable/manifest.json"
+                .to_owned(),
+            server_name: "Operational Data Test".to_owned(),
+        }
+    }
+
     fn fixture() -> Connection {
         let connection = Connection::open_in_memory().expect("open database");
         connection.execute_batch(
@@ -1011,14 +1242,30 @@ mod tests {
     }
 
     fn connection_id(connection: &Connection) -> String {
-        connection.query_row("SELECT connection_id FROM cloud_connections", [], |row| row.get(0)).expect("connection id")
+        connection
+            .query_row("SELECT connection_id FROM cloud_connections", [], |row| {
+                row.get(0)
+            })
+            .expect("connection id")
     }
 
     #[test]
     fn builtin_manifest_is_seeded() {
         let connection = fixture();
-        let manifest_count: i64 = connection.query_row("SELECT COUNT(*) FROM operational_provider_manifests", [], |row| row.get(0)).unwrap();
-        let dataset_count: i64 = connection.query_row("SELECT COUNT(*) FROM operational_dataset_catalog", [], |row| row.get(0)).unwrap();
+        let manifest_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM operational_provider_manifests",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let dataset_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM operational_dataset_catalog",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(manifest_count, 1);
         assert_eq!(dataset_count, MICROGIFTER_DATASETS.len() as i64);
     }
@@ -1028,42 +1275,54 @@ mod tests {
         let connection = fixture();
         let id = connection_id(&connection);
         let state = AppState {
-            config: crate::config::AppConfig::for_test(std::env::temp_dir()),
+            config: test_config(),
             connection: std::sync::Mutex::new(connection),
         };
-        update_dataset_grant(&state, UpdateDatasetGrantRequest {
-            connection_id: id.clone(),
-            dataset_key: "merchant.products".to_owned(),
-            enabled: true,
-            retention_days: Some(30),
-            classification: None,
-            permitted_agent_uses: vec![],
-        }).expect("grant dataset");
-        let result = import_operational_batch(&state, ImportOperationalBatchRequest {
-            connection_id: id.clone(),
-            provider_key: "microgifter".to_owned(),
-            tenant_id: Some("tenant-1".to_owned()),
-            site_id: Some("site-1".to_owned()),
-            dataset_key: "merchant.products".to_owned(),
-            import_mode: "snapshot".to_owned(),
-            cursor_after: Some("cursor-1".to_owned()),
-            source_revision: Some("catalog-1".to_owned()),
-            records: vec![ProviderRecordInput {
-                source_object_type: "product".to_owned(),
-                source_object_id: "product-42".to_owned(),
-                source_revision: "rev-1".to_owned(),
-                source_updated_at_utc: Some("2026-07-27T20:00:00Z".to_owned()),
-                payload: json!({"name":"Lunch Special","price":25}),
-            }],
-            events: vec![],
-        }).expect("import data");
+        update_dataset_grant(
+            &state,
+            UpdateDatasetGrantRequest {
+                connection_id: id.clone(),
+                dataset_key: "merchant.products".to_owned(),
+                enabled: true,
+                retention_days: Some(30),
+                classification: None,
+                permitted_agent_uses: vec![],
+            },
+        )
+        .expect("grant dataset");
+        let result = import_operational_batch(
+            &state,
+            ImportOperationalBatchRequest {
+                connection_id: id.clone(),
+                provider_key: "microgifter".to_owned(),
+                tenant_id: Some("tenant-1".to_owned()),
+                site_id: Some("site-1".to_owned()),
+                dataset_key: "merchant.products".to_owned(),
+                import_mode: "snapshot".to_owned(),
+                cursor_after: Some("cursor-1".to_owned()),
+                source_revision: Some("catalog-1".to_owned()),
+                records: vec![ProviderRecordInput {
+                    source_object_type: "product".to_owned(),
+                    source_object_id: "product-42".to_owned(),
+                    source_revision: "rev-1".to_owned(),
+                    source_updated_at_utc: Some("2026-07-27T20:00:00Z".to_owned()),
+                    payload: json!({"name":"Lunch Special","price":25}),
+                }],
+                events: vec![],
+            },
+        )
+        .expect("import data");
         assert_eq!(result.records_imported, 1);
-        let query = query_operational_records(&state, OperationalQueryRequest {
-            connection_id: Some(id),
-            dataset_key: Some("merchant.products".to_owned()),
-            source_object_type: Some("product".to_owned()),
-            limit: Some(10),
-        }).expect("query data");
+        let query = query_operational_records(
+            &state,
+            OperationalQueryRequest {
+                connection_id: Some(id),
+                dataset_key: Some("merchant.products".to_owned()),
+                source_object_type: Some("product".to_owned()),
+                limit: Some(10),
+            },
+        )
+        .expect("query data");
         assert_eq!(query.records.len(), 1);
         assert_eq!(query.records[0].payload["name"], "Lunch Special");
         assert!(query.records[0].citation.contains("product-42@rev-1"));
@@ -1075,7 +1334,7 @@ mod tests {
         let connection = fixture();
         let id = connection_id(&connection);
         let state = AppState {
-            config: crate::config::AppConfig::for_test(std::env::temp_dir()),
+            config: test_config(),
             connection: std::sync::Mutex::new(connection),
         };
         let request = ImportOperationalBatchRequest {
@@ -1104,19 +1363,50 @@ mod tests {
         let connection = fixture();
         let id = connection_id(&connection);
         let state = AppState {
-            config: crate::config::AppConfig::for_test(std::env::temp_dir()),
+            config: test_config(),
             connection: std::sync::Mutex::new(connection),
         };
-        update_dataset_grant(&state, UpdateDatasetGrantRequest {
-            connection_id: id.clone(), dataset_key: "merchant.profile".to_owned(), enabled: true,
-            retention_days: None, classification: None, permitted_agent_uses: vec![],
-        }).unwrap();
+        update_dataset_grant(
+            &state,
+            UpdateDatasetGrantRequest {
+                connection_id: id.clone(),
+                dataset_key: "merchant.profile".to_owned(),
+                enabled: true,
+                retention_days: None,
+                classification: None,
+                permitted_agent_uses: vec![],
+            },
+        )
+        .unwrap();
         let make_request = || ImportOperationalBatchRequest {
-            connection_id: id.clone(), provider_key: "microgifter".to_owned(), tenant_id: Some("tenant-1".to_owned()), site_id: Some("site-1".to_owned()),
-            dataset_key: "merchant.profile".to_owned(), import_mode: "incremental".to_owned(), cursor_after: Some("2".to_owned()), source_revision: Some("2".to_owned()),
-            records: vec![ProviderRecordInput { source_object_type: "merchant".to_owned(), source_object_id: "merchant-1".to_owned(), source_revision: "rev-1".to_owned(), source_updated_at_utc: None, payload: json!({"name":"Test"}) }], events: vec![],
+            connection_id: id.clone(),
+            provider_key: "microgifter".to_owned(),
+            tenant_id: Some("tenant-1".to_owned()),
+            site_id: Some("site-1".to_owned()),
+            dataset_key: "merchant.profile".to_owned(),
+            import_mode: "incremental".to_owned(),
+            cursor_after: Some("2".to_owned()),
+            source_revision: Some("2".to_owned()),
+            records: vec![ProviderRecordInput {
+                source_object_type: "merchant".to_owned(),
+                source_object_id: "merchant-1".to_owned(),
+                source_revision: "rev-1".to_owned(),
+                source_updated_at_utc: None,
+                payload: json!({"name":"Test"}),
+            }],
+            events: vec![],
         };
-        assert_eq!(import_operational_batch(&state, make_request()).unwrap().records_imported, 1);
-        assert_eq!(import_operational_batch(&state, make_request()).unwrap().records_imported, 0);
+        assert_eq!(
+            import_operational_batch(&state, make_request())
+                .unwrap()
+                .records_imported,
+            1
+        );
+        assert_eq!(
+            import_operational_batch(&state, make_request())
+                .unwrap()
+                .records_imported,
+            0
+        );
     }
 }

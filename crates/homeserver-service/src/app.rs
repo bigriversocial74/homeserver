@@ -9,7 +9,7 @@ mod cloud_connector;
 
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
-    mcp_runtime, model_center, semantic_vault, update, update_store, AppState,
+    mcp_runtime, model_center, operational_data, semantic_vault, update, update_store, AppState,
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -37,6 +37,7 @@ pub async fn run(
     update_store::initialize(&connection)?;
     cloud_connector::initialize(&connection)?;
     cloud_registry::initialize(&connection)?;
+    operational_data::initialize(&connection)?;
     knowledge_vault::initialize(&connection, &config)?;
     document_extraction::initialize(&connection)?;
     model_center::initialize(&connection)?;
@@ -113,6 +114,7 @@ pub async fn run(
             .merge(knowledge_vault::router(state.clone()))
             .merge(model_center::router(state.clone()))
             .merge(semantic_vault::router(state.clone()))
+            .merge(operational_data::router(state.clone()))
             .merge(agent_runtime::router(state.clone()))
             .merge(mcp_runtime::router(state)),
     );

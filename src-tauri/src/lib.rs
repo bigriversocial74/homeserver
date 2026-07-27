@@ -3,6 +3,7 @@ mod cloud;
 mod mcp;
 mod model;
 mod ollama_install;
+mod operational;
 mod vault;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -306,6 +307,10 @@ pub fn run() {
             agent::homeserver_execute_agent_plan,
             agent::homeserver_create_world_mission,
             agent::homeserver_cancel_world_mission,
+            operational::homeserver_operational_data,
+            operational::homeserver_update_operational_dataset_grant,
+            operational::homeserver_import_operational_data,
+            operational::homeserver_query_operational_data,
             cloud::homeserver_cloud_status,
             cloud::homeserver_pair_cloud,
             cloud::homeserver_disconnect_cloud,

@@ -9,6 +9,7 @@ mod http;
 mod knowledge_vault;
 mod mcp_runtime;
 mod model_center;
+mod operational_data;
 mod recovery_transfer;
 mod semantic_vault;
 mod update;
@@ -120,6 +121,16 @@ impl AppState {
                 "mcp_runtime_integrity_check_failed",
             );
         }
+        if let Err(error) = operational_data::health_check(&connection) {
+            error!(
+                ?error,
+                "HomeServer operational data database health check failed"
+            );
+            return HealthSnapshot::needs_attention(
+                &self.config.server_name,
+                "operational_data_integrity_check_failed",
+            );
+        }
         if let Err(error) = agent_runtime::health_check(&connection) {
             error!(
                 ?error,
@@ -225,6 +236,7 @@ impl AppState {
             database::maintain_history(&connection)?;
             update_store::maintain_history(&connection)?;
             model_center::maintain_history(&connection)?;
+            operational_data::maintain_history(&connection)?;
             agent_runtime::maintain_history(&connection)?;
             mcp_runtime::maintain_history(&connection)?;
             backup::enforce_pre_update_retention(&connection)?;
