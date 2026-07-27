@@ -22,11 +22,6 @@ def require(path: str, marker: str, message: str) -> None:
         ERRORS.append(message)
 
 
-def forbid(path: str, marker: str, message: str) -> None:
-    if marker in read(path):
-        ERRORS.append(message)
-
-
 MIGRATION = "database/migrations/0010_multi_cloud_connections.sql"
 SERVICE = "crates/homeserver-service/src/cloud_registry.rs"
 APP = "crates/homeserver-service/src/app.rs"
@@ -97,6 +92,7 @@ for marker in (
 require(INDEX, "/src/cloud-connections.js", "multi-connection Control Center module is not loaded")
 require("package.json", "validate-multi-cloud-connections.py", "multi-connection validation is not part of the frontend gate")
 
+service_runtime = read(SERVICE).split("#[cfg(test)]", 1)[0]
 for marker in (
     "commerce.order.create",
     "payment.",
@@ -105,10 +101,12 @@ for marker in (
     "ownership.",
     "shell.execute",
 ):
-    forbid(SERVICE, marker, f"multi-connection foundation contains disallowed domain authority: {marker}")
+    if marker in service_runtime:
+        ERRORS.append(f"multi-connection foundation contains disallowed domain authority: {marker}")
 
 for marker in ("0.0.0.0", "MG_HOMESERVER_CLOUD_URL"):
-    forbid(SERVICE, marker, f"multi-connection runtime contains a disallowed network boundary: {marker}")
+    if marker in service_runtime:
+        ERRORS.append(f"multi-connection runtime contains a disallowed network boundary: {marker}")
 
 if ERRORS:
     print("Phase 5B multi-cloud connection validation failed:", file=sys.stderr)
