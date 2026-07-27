@@ -24,6 +24,7 @@ def require(path: str, marker: str, message: str) -> None:
 
 MIGRATION = "database/migrations/0010_multi_cloud_connections.sql"
 SERVICE = "crates/homeserver-service/src/cloud_registry.rs"
+PAIRING = "crates/homeserver-service/src/cloud_pairing_v2.rs"
 APP = "crates/homeserver-service/src/app.rs"
 TAURI = "src-tauri/src/cloud.rs"
 TAURI_LIB = "src-tauri/src/lib.rs"
@@ -43,7 +44,6 @@ for marker in (
 for marker in (
     'const ALLOWED_PROVIDERS: &[&str] = &["microgifter"]',
     "cloud_connections_snapshot",
-    "pair_cloud_connection",
     "disconnect_cloud_connection",
     "enqueue_connection_sync",
     "sync_cloud_connection",
@@ -63,9 +63,22 @@ for marker in (
     require(SERVICE, marker, f"multi-connection service boundary is missing: {marker}")
 
 for marker in (
+    'installation_id: connection_id',
+    'const LEGACY_PAIR_PATH: &str = "/v1/cloud/connections/pair"',
+    '"/v1/cloud/connections/pair-v2"',
+    "reject_legacy_pairing",
+    "credential_key",
+    "cloud_installation_id",
+    "MicrogifterPairingClient",
+):
+    require(PAIRING, marker, f"connection-scoped pairing boundary is missing: {marker}")
+
+for marker in (
     "cloud_registry::initialize(&connection)",
     "cloud_registry::run(state.clone(), shutdown.clone())",
-    ".merge(cloud_registry::router(state.clone()))",
+    "let registry_router = cloud_registry::router(state.clone()).layer(",
+    "cloud_pairing_v2::reject_legacy_pairing",
+    ".merge(cloud_pairing_v2::router(state.clone()))",
 ):
     require(APP, marker, f"multi-connection app integration is missing: {marker}")
 
@@ -78,6 +91,8 @@ for marker in (
 ):
     require(TAURI, marker, f"multi-connection Tauri command is missing: {marker}")
     require(TAURI_LIB, f"cloud::{marker}", f"multi-connection command is not registered: {marker}")
+
+require(TAURI, "/v1/cloud/connections/pair-v2", "Tauri does not use connection-scoped pairing v2")
 
 for marker in (
     "Cloud Connection Registry",
@@ -92,7 +107,7 @@ for marker in (
 require(INDEX, "/src/cloud-connections.js", "multi-connection Control Center module is not loaded")
 require("package.json", "validate-multi-cloud-connections.py", "multi-connection validation is not part of the frontend gate")
 
-service_runtime = read(SERVICE).split("#[cfg(test)]", 1)[0]
+service_runtime = read(SERVICE).split("#[cfg(test)]", 1)[0] + read(PAIRING).split("#[cfg(test)]", 1)[0]
 for marker in (
     "commerce.order.create",
     "payment.",
