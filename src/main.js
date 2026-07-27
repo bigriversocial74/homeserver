@@ -8,6 +8,7 @@ let cloudSnapshot = null;
 let backupCatalog = null;
 let updateStatus = null;
 let vaultSnapshot = null;
+let semanticSnapshot = null;
 let vaultSearchResult = null;
 let modelSnapshot = null;
 let modelTestResult = null;
@@ -379,32 +380,42 @@ function renderKnowledge() {
   const indexed = Number(vaultSnapshot?.indexed_count || 0);
   const attention = Number(vaultSnapshot?.changed_count || 0) + Number(vaultSnapshot?.missing_count || 0) + Number(vaultSnapshot?.failed_count || 0);
   const lastIndexed = vaultSnapshot?.last_indexed_at_utc;
-  return `${pageHeader("Knowledge Vault", "Your private, searchable knowledge workspace. Imported content stays on this HomeServer.", `<button id="vault-reindex" class="button secondary" type="button" ${busy || !statusSnapshot?.api_available ? "disabled" : ""}>${icon("refresh", 16)}Reindex</button><button id="vault-import" class="button primary" type="button" ${busy || !statusSnapshot?.api_available ? "disabled" : ""}>${icon("upload", 16)}Import Document</button>`)}
-    <form id="vault-search-form" class="toolbar-row"><label class="filter-search wide">${icon("search", 17)}<input id="vault-search-query" type="search" maxlength="200" placeholder="Search your knowledge vault..." value="${escapeHtml(vaultSearchResult?.query || "")}" required></label><button class="button secondary" type="submit" ${busy || !indexed ? "disabled" : ""}>Search</button><span class="planned-label">Local only · TXT MD CSV JSON LOG</span></form>
+  const semanticReady = Number(semanticSnapshot?.ready_documents || 0);
+  const semanticChunks = Number(semanticSnapshot?.chunk_count || 0);
+  const semanticAttention = Number(semanticSnapshot?.stale_documents || 0) + Number(semanticSnapshot?.failed_documents || 0);
+  const semanticModel = semanticSnapshot?.default_embedding_model;
+  const semanticState = semanticSnapshot?.state || "not_configured";
+  const semanticOperation = semanticSnapshot?.latest_operation;
+  const semanticRunning = ["pending", "running"].includes(semanticOperation?.state);
+  const searchMode = vaultSearchResult?.mode || "hybrid";
+  const operationProgress = semanticOperation?.total_documents ? Math.round(Number(semanticOperation.processed_documents || 0) / Number(semanticOperation.total_documents) * 100) : 0;
+  return `${pageHeader("Knowledge Vault", "Private keyword and semantic search powered by your local Ollama embedding model.", `<button id="vault-reindex" class="button secondary" type="button" ${busy || !statusSnapshot?.api_available ? "disabled" : ""}>${icon("refresh", 16)}Check Files</button><button id="vault-semantic-rebuild" class="button purple" type="button" ${busy || semanticRunning || !indexed || !semanticModel ? "disabled" : ""}>${icon("model", 16)}${semanticRunning ? "Indexing…" : "Build Semantic Index"}</button><button id="vault-import" class="button primary" type="button" ${busy || !statusSnapshot?.api_available ? "disabled" : ""}>${icon("upload", 16)}Import Document</button>`)}
+    ${!semanticModel ? `<div class="notice warning"><strong>Semantic search needs an embedding model.</strong> Install and assign an embedding model in Model Center, then return here to build the local semantic index. <button class="text-button" data-page="models">Open Model Center ${icon("arrow", 13)}</button></div>` : ""}
+    <form id="vault-search-form" class="toolbar-row semantic-search-toolbar"><label class="filter-search wide">${icon("search", 17)}<input id="vault-search-query" type="search" maxlength="200" placeholder="Ask about policies, procedures, menus, training, or business knowledge..." value="${escapeHtml(vaultSearchResult?.query || "")}" required></label><label class="search-mode-select"><span>Search mode</span><select id="vault-search-mode"><option value="hybrid" ${searchMode === "hybrid" ? "selected" : ""}>Hybrid</option><option value="semantic" ${searchMode === "semantic" ? "selected" : ""}>Semantic</option><option value="keyword" ${searchMode === "keyword" ? "selected" : ""}>Keyword</option></select></label><button class="button secondary" type="submit" ${busy || !indexed ? "disabled" : ""}>Search</button><span class="planned-label">Local only · cited results</span></form>
     <section class="metrics six-up">
-      ${metricCard("vault", "Indexed Items", String(indexed), attention ? `${attention} need attention` : "Managed local documents", attention ? "amber" : "blue")}
-      ${metricCard("file", "Managed Documents", String(documents.length), "Copied into protected storage", "purple")}
-      ${metricCard("storage", "Storage Used", formatBytes(vaultSnapshot?.total_size_bytes || 0), "Vault document copies", "blue")}
-      ${metricCard("activity", "Search Index", indexed ? "Ready" : "Empty", "Bounded local text index", indexed ? "green" : "gray")}
-      ${metricCard("backup", "Last Indexing", lastIndexed ? relativeDate(lastIndexed) : "Not yet", lastIndexed ? formatDate(lastIndexed) : "Import a supported document", "gray")}
-      ${metricCard("shield", "Privacy", vaultSnapshot?.local_only === false ? "Review" : "Local", "No cloud content sync", "green")}
+      ${metricCard("vault", "Indexed Documents", String(indexed), attention ? `${attention} need attention` : "Managed local documents", attention ? "amber" : "blue")}
+      ${metricCard("model", "Semantic Documents", String(semanticReady), semanticAttention ? `${semanticAttention} need rebuilding` : humanize(semanticState), semanticAttention ? "amber" : semanticReady ? "green" : "gray")}
+      ${metricCard("activity", "Semantic Chunks", String(semanticChunks), semanticReady ? `${semanticSnapshot?.embedding_dimensions || 0} dimensions` : "Build the local vector index", semanticReady ? "purple" : "gray")}
+      ${metricCard("storage", "Storage Used", formatBytes(vaultSnapshot?.total_size_bytes || 0), "Managed source documents", "blue")}
+      ${metricCard("model", "Embedding Model", semanticModel || "Not assigned", semanticModel ? "Fixed local Ollama runtime" : "Configure in Model Center", semanticModel ? "teal" : "amber")}
+      ${metricCard("shield", "Privacy", semanticSnapshot?.local_only === false ? "Review" : "Local", "No document or vector cloud sync", "green")}
     </section>
     <section class="knowledge-grid">
-      <article class="panel vault-summary"><div class="panel-title"><div><h2>Vault Summary</h2></div></div><div class="storage-layout">${donut(documents.length ? Math.min(100, indexed / documents.length * 100) : 0, `${indexed}/${documents.length}`, "indexed", attention ? "amber" : "blue")}<ul class="legend"><li><i class="blue"></i><span>Indexed</span><strong>${indexed}</strong></li><li><i class="amber"></i><span>Changed</span><strong>${Number(vaultSnapshot?.changed_count || 0)}</strong></li><li><i class="red"></i><span>Missing / failed</span><strong>${Number(vaultSnapshot?.missing_count || 0) + Number(vaultSnapshot?.failed_count || 0)}</strong></li><li><i class="purple"></i><span>Supported types</span><strong>${vaultSnapshot?.supported_extensions?.length || 5}</strong></li></ul></div><button id="vault-reindex" class="text-button" type="button" ${busy || !documents.length ? "disabled" : ""}>Check managed files ${icon("arrow", 13)}</button></article>
-      <article class="panel indexed-content"><div class="panel-title"><div><h2>Indexed Content</h2></div></div><div class="content-type-list">${contentType("file", "Text & logs", String(documents.filter((document) => ["text/plain", "text/markdown"].includes(document.content_type)).length), "blue")}${contentType("file", "CSV Files", String(documents.filter((document) => document.content_type === "text/csv").length), "green")}${contentType("storage", "JSON Data", String(documents.filter((document) => document.content_type === "application/json").length), "purple")}${contentType("activity", "Needs Attention", String(attention), attention ? "amber" : "gray")}</div><span class="planned-banner">PDF, OCR, embeddings, and semantic search are deferred to later Phase 4 scopes.</span></article>
-      <article class="panel search-preview"><div class="panel-title"><div><h2>Search Results</h2></div><span>${vaultSearchResult ? `${vaultSearchResult.hits?.length || 0} matches` : "Run a local search"}</span></div>${renderVaultSearchResults()}</article>
+      <article class="panel vault-summary"><div class="panel-title"><div><h2>Vault Summary</h2></div></div><div class="storage-layout">${donut(documents.length ? Math.min(100, indexed / documents.length * 100) : 0, `${indexed}/${documents.length}`, "indexed", attention ? "amber" : "blue")}<ul class="legend"><li><i class="blue"></i><span>Keyword indexed</span><strong>${indexed}</strong></li><li><i class="purple"></i><span>Semantic ready</span><strong>${semanticReady}</strong></li><li><i class="amber"></i><span>Changed / stale</span><strong>${Number(vaultSnapshot?.changed_count || 0) + Number(semanticSnapshot?.stale_documents || 0)}</strong></li><li><i class="red"></i><span>Failed</span><strong>${Number(vaultSnapshot?.failed_count || 0) + Number(semanticSnapshot?.failed_documents || 0)}</strong></li></ul></div><button id="vault-reindex" class="text-button" type="button" ${busy || !documents.length ? "disabled" : ""}>Check managed files ${icon("arrow", 13)}</button></article>
+      <article class="panel semantic-status-card"><div class="panel-title"><div><h2>Semantic Index</h2></div>${badge(humanize(semanticState), semanticState === "ready" ? "healthy" : semanticState === "indexing" ? "warning" : "planned")}</div>${semanticOperation ? `<div class="semantic-operation"><div><strong>${escapeHtml(semanticOperation.status_message)}</strong><span>${Number(semanticOperation.processed_documents || 0)} of ${Number(semanticOperation.total_documents || 0)} documents · ${Number(semanticOperation.processed_chunks || 0)} chunks</span></div>${progress(operationProgress, semanticOperation.state === "failed" ? "amber" : "purple")}<small>${escapeHtml(humanize(semanticOperation.state))}${semanticOperation.failed_documents ? ` · ${Number(semanticOperation.failed_documents)} failed` : ""}</small></div>` : `<div class="empty-search compact">${icon("model", 30)}<strong>${semanticModel ? "Ready to build" : "Embedding model required"}</strong><p>${semanticModel ? "Create bounded local embeddings for hybrid and semantic retrieval." : "Assign an installed embedding model in Model Center."}</p></div>`}<div class="button-row"><button id="vault-semantic-rebuild" class="button purple" type="button" ${busy || semanticRunning || !indexed || !semanticModel ? "disabled" : ""}>${semanticRunning ? "Indexing…" : semanticReady ? "Refresh Semantic Index" : "Build Semantic Index"}</button>${semanticReady ? `<button id="vault-semantic-rebuild-force" class="button secondary" type="button" ${busy || semanticRunning ? "disabled" : ""}>Full Rebuild</button>` : ""}</div></article>
+      <article class="panel indexed-content"><div class="panel-title"><div><h2>Indexed Content</h2></div></div><div class="content-type-list">${contentType("file", "Text & logs", String(documents.filter((document) => ["text/plain", "text/markdown"].includes(document.content_type)).length), "blue")}${contentType("file", "CSV Files", String(documents.filter((document) => document.content_type === "text/csv").length), "green")}${contentType("storage", "JSON Data", String(documents.filter((document) => document.content_type === "application/json").length), "purple")}${contentType("model", "Semantic Chunks", String(semanticChunks), semanticReady ? "purple" : "gray")}</div><span class="planned-banner">PDF, DOCX, scanned-document extraction, and OCR are the next Phase 4C scope.</span></article>
+      <article class="panel search-preview"><div class="panel-title"><div><h2>Search Results</h2></div><span>${vaultSearchResult ? `${vaultSearchResult.hits?.length || 0} ${escapeHtml(humanize(vaultSearchResult.mode))} matches` : "Run a local search"}</span></div>${renderVaultSearchResults()}</article>
       <article class="panel recent-sources"><div class="panel-title"><div><h2>Managed Documents</h2></div><span>${documents.length} records</span></div><div class="source-list">${documents.length ? documents.slice(0, 20).map(vaultDocumentRow).join("") : `<div class="empty-search compact">${icon("vault", 30)}<strong>No documents imported</strong><p>Import an approved UTF-8 text document to create the first local index.</p></div>`}</div></article>
-      <article class="panel indexing-status"><div class="panel-title"><div><h2>Indexing Status</h2></div></div><div class="indexing-layout">${donut(documents.length ? indexed / documents.length * 100 : 0, documents.length ? `${Math.round(indexed / documents.length * 100)}%` : "0%", "indexed", attention ? "amber" : "blue")}<dl class="detail-list"><div><dt>Indexed</dt><dd>${indexed}</dd></div><div><dt>Changed</dt><dd>${Number(vaultSnapshot?.changed_count || 0)}</dd></div><div><dt>Missing</dt><dd>${Number(vaultSnapshot?.missing_count || 0)}</dd></div><div><dt>Failed</dt><dd>${Number(vaultSnapshot?.failed_count || 0)}</dd></div></dl></div></article>
-      <article class="panel processing-queue"><div class="panel-title"><div><h2>Processing Boundary</h2></div></div><div class="empty-search compact">${icon("shield", 30)}<strong>Local managed storage</strong><p>Imports are copied into HomeServer storage. Source files remain unchanged and no content is synchronized to cloud services.</p></div></article>
+      <article class="panel processing-queue"><div class="panel-title"><div><h2>Retrieval Boundary</h2></div></div><div class="empty-search compact">${icon("shield", 30)}<strong>Local embeddings and cited retrieval</strong><p>HomeServer sends bounded text chunks only to the configured Ollama model at <span class="mono">127.0.0.1:11434</span>. Vectors, queries, and source content remain local.</p></div></article>
     </section>
-    <div class="privacy-banner">${icon("shield", 20)}<div><strong>Your document content remains local</strong><span>The service accepts document bytes from the trusted Control Center, never caller-supplied source paths.</span></div><button class="text-button" data-page="system">Review security ${icon("arrow", 13)}</button></div>`;
+    <div class="privacy-banner">${icon("shield", 20)}<div><strong>Your documents, embeddings, and searches remain local</strong><span>Semantic retrieval uses the same fixed-loopback Ollama boundary as Model Center and never enables cloud content sync.</span></div><button class="text-button" data-page="system">Review security ${icon("arrow", 13)}</button></div>`;
 }
 
 function renderVaultSearchResults() {
-  if (!vaultSearchResult) return `<div class="empty-search">${icon("search", 34)}<strong>Search managed documents</strong><p>Search the bounded local text index without sending content to a cloud service.</p></div>`;
+  if (!vaultSearchResult) return `<div class="empty-search">${icon("search", 34)}<strong>Search managed knowledge</strong><p>Use hybrid search for exact keyword matches plus local semantic meaning.</p></div>`;
   const hits = vaultSearchResult.hits || [];
-  if (!hits.length) return `<div class="empty-search">${icon("search", 34)}<strong>No matching documents</strong><p>Try another phrase or reindex the managed files.</p></div>`;
-  return `<div class="source-list">${hits.map((hit) => `<div><div class="app-icon tone-blue">${icon("file", 18)}</div><span><strong>${escapeHtml(hit.document.title)}</strong><small>${escapeHtml(hit.snippet)}</small></span><em>Score ${Number(hit.score || 0)}</em>${badge(humanize(hit.document.state), hit.document.state === "indexed" ? "healthy" : "warning")}</div>`).join("")}</div>`;
+  if (!hits.length) return `<div class="empty-search">${icon("search", 34)}<strong>No matching documents</strong><p>Try another question, check the managed files, or rebuild the semantic index.</p></div>`;
+  return `<div class="source-list semantic-results">${hits.map((hit) => `<div><div class="app-icon tone-${hit.semantic_score > 0 ? "purple" : "blue"}">${icon(hit.semantic_score > 0 ? "model" : "file", 18)}</div><span><strong>${escapeHtml(hit.title)}</strong><small>${escapeHtml(hit.snippet)}</small><small class="semantic-citation">${escapeHtml(hit.citation)}</small></span><em>${Math.round(Number(hit.combined_score || 0) * 100)}% · ${escapeHtml(humanize(vaultSearchResult.mode))}</em>${badge(hit.semantic_score > 0 ? "Semantic" : "Keyword", hit.semantic_score > 0 ? "healthy" : "info")}</div>`).join("")}</div>`;
 }
 
 function vaultDocumentRow(document) {
@@ -613,6 +624,8 @@ function bindEvents() {
   document.querySelector("#vault-import")?.addEventListener("click", importVaultDocument);
   document.querySelector("#vault-search-form")?.addEventListener("submit", searchVault);
   document.querySelector("#vault-reindex")?.addEventListener("click", reindexVault);
+  document.querySelector("#vault-semantic-rebuild")?.addEventListener("click", () => rebuildSemanticVault(false));
+  document.querySelector("#vault-semantic-rebuild-force")?.addEventListener("click", () => rebuildSemanticVault(true));
   document.querySelectorAll("[data-vault-delete]").forEach((button) => button.addEventListener("click", deleteVaultDocument));
   document.querySelector("#refresh-models")?.addEventListener("click", () => loadAll());
   document.querySelectorAll("[data-model-pull]").forEach((button) => button.addEventListener("click", pullModel));
@@ -833,18 +846,30 @@ async function importVaultDocument() {
 async function searchVault(event) {
   event.preventDefault();
   const query = document.querySelector("#vault-search-query")?.value?.trim() || "";
+  const mode = document.querySelector("#vault-search-mode")?.value || "hybrid";
   if (!query) return;
   busy = true;
   notice = null;
   render();
   try {
-    vaultSearchResult = await invoke("homeserver_search_vault", { query });
+    vaultSearchResult = await invoke("homeserver_search_semantic_vault", { query, mode });
+    if (mode !== "keyword" && !vaultSearchResult.semantic_available) {
+      notice = { kind: "info", message: "The semantic index is not ready, so HomeServer returned bounded keyword results." };
+    }
   } catch (error) {
     notice = { kind: "warning", message: String(error) };
   } finally {
     busy = false;
     render();
   }
+}
+
+async function rebuildSemanticVault(force) {
+  await withBusy(async () => {
+    const result = await invoke("homeserver_rebuild_semantic_vault", { force });
+    vaultSearchResult = null;
+    return { kind: result.accepted ? "success" : "info", message: result.message };
+  });
 }
 
 async function reindexVault() {
@@ -927,13 +952,14 @@ async function saveModelSettings(event) {
 
 async function loadAll(clearNotice = true) {
   if (clearNotice) notice = null;
-  const results = await Promise.allSettled([invoke("homeserver_status"), invoke("homeserver_cloud_status"), invoke("homeserver_backups"), invoke("homeserver_updates"), invoke("homeserver_vault"), invoke("homeserver_models")]);
+  const results = await Promise.allSettled([invoke("homeserver_status"), invoke("homeserver_cloud_status"), invoke("homeserver_backups"), invoke("homeserver_updates"), invoke("homeserver_vault"), invoke("homeserver_semantic_vault"), invoke("homeserver_models")]);
   if (results[0].status === "rejected") {
     statusSnapshot = null;
     cloudSnapshot = null;
     backupCatalog = null;
     updateStatus = null;
     vaultSnapshot = null;
+    semanticSnapshot = null;
     modelSnapshot = null;
     notice = { kind: "warning", message: `HomeServer service unavailable: ${String(results[0].reason)}` };
     render();
@@ -944,9 +970,11 @@ async function loadAll(clearNotice = true) {
   backupCatalog = results[2].status === "fulfilled" ? results[2].value : null;
   updateStatus = results[3].status === "fulfilled" ? results[3].value : null;
   vaultSnapshot = results[4].status === "fulfilled" ? results[4].value : null;
-  modelSnapshot = results[5].status === "fulfilled" ? results[5].value : null;
+  semanticSnapshot = results[5].status === "fulfilled" ? results[5].value : null;
+  modelSnapshot = results[6].status === "fulfilled" ? results[6].value : null;
   if (!notice && results[1].status === "rejected") notice = { kind: "warning", message: `Cloud connector unavailable: ${String(results[1].reason)}` };
-  if (!notice && results[5].status === "rejected") notice = { kind: "warning", message: `Model Center unavailable: ${String(results[5].reason)}` };
+  if (!notice && results[5].status === "rejected") notice = { kind: "warning", message: `Semantic Knowledge Vault unavailable: ${String(results[5].reason)}` };
+  if (!notice && results[6].status === "rejected") notice = { kind: "warning", message: `Model Center unavailable: ${String(results[6].reason)}` };
   render();
 }
 

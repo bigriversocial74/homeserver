@@ -71,7 +71,8 @@ for marker in (
     "http::router(state.clone())",
     ".merge(cloud_connector::router(state.clone()))",
     ".merge(knowledge_vault::router(state.clone()))",
-    ".merge(model_center::router(state))",
+    ".merge(model_center::router(state.clone()))",
+    ".merge(semantic_vault::router(state))",
 ):
     require(
         "crates/homeserver-service/src/app.rs",
@@ -108,6 +109,44 @@ for marker in (
         marker,
         f"Model Center boundary is missing {marker}",
     )
+for marker in (
+    "MAX_EMBED_INPUTS",
+    "MAX_EMBED_TOTAL_CHARS",
+    "validate_embedding_model(&model)",
+    "configured_embedding_model_from_connection",
+    'post(format!("{OLLAMA_API_BASE}/api/embed"))',
+):
+    require(
+        "crates/homeserver-service/src/model_center.rs",
+        marker,
+        f"Model Center semantic embedding boundary is missing {marker}",
+    )
+
+for marker in (
+    "0007_semantic_vault.sql",
+    "MAX_SEMANTIC_CHARS_PER_DOCUMENT",
+    "MAX_CHUNKS_PER_DOCUMENT",
+    "MAX_SEARCH_CHUNKS",
+    "cosine_similarity",
+    "local_only: true",
+    "vault_semantic_operations",
+):
+    require(
+        "crates/homeserver-service/src/semantic_vault.rs",
+        marker,
+        f"semantic Knowledge Vault boundary is missing {marker}",
+    )
+for forbidden in (
+    "https://",
+    "0.0.0.0",
+    "cloud_connector",
+):
+    forbid(
+        "crates/homeserver-service/src/semantic_vault.rs",
+        forbidden,
+        f"semantic Knowledge Vault contains a disallowed external boundary: {forbidden}",
+    )
+
 for forbidden in (
     "https://ollama.com/api",
     "0.0.0.0:11434",

@@ -64,6 +64,5 @@ Arbitrary model identifiers are rejected by the HomeServer service. Catalog chan
 - Bundled, silent, or enterprise-managed Ollama installation and update management.
 - Automatic GPU driver/runtime management.
 - PDF/OCR extraction.
-- Semantic Knowledge Vault indexing.
 - MCP server and permission-controlled agent runtime.
 - Cloud model execution or cloud prompt fallback.

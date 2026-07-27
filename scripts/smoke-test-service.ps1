@@ -81,6 +81,23 @@ try {
         throw "Expected unapproved local model rejection, received HTTP $($unapproved.StatusCode)"
     }
 
+    $semantic = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/vault/semantic" -TimeoutSec 15
+    if (-not $semantic.local_only -or $semantic.state -ne "not_configured") {
+        throw "Semantic Knowledge Vault did not initialize in the safe unconfigured state"
+    }
+    if ([int]$semantic.chunk_count -ne 0 -or [int]$semantic.ready_documents -ne 0) {
+        throw "Fresh semantic Knowledge Vault unexpectedly contains vectors"
+    }
+    $semanticRebuild = Invoke-WebRequest -SkipHttpErrorCheck -Method Post -Headers $controlHeaders -Uri "$apiBase/v1/vault/semantic/rebuild" -ContentType "application/json" -Body '{"force":false}' -TimeoutSec 10
+    if ($semanticRebuild.StatusCode -ne 422) {
+        throw "Expected semantic rebuild to require a configured embedding model, received HTTP $($semanticRebuild.StatusCode)"
+    }
+    $keywordSearchBody = @{ query = "local policy"; mode = "keyword"; limit = 20 } | ConvertTo-Json -Compress
+    $keywordSearch = Invoke-RestMethod -Method Post -Headers $controlHeaders -Uri "$apiBase/v1/vault/semantic/search" -ContentType "application/json" -Body $keywordSearchBody -TimeoutSec 10
+    if ($keywordSearch.mode -ne "keyword" -or $keywordSearch.semantic_available -or @($keywordSearch.hits).Count -ne 0) {
+        throw "Fresh semantic Knowledge Vault keyword fallback is invalid"
+    }
+
     $manualBody = @{
         kind = "manual"
         passphrase = $null
