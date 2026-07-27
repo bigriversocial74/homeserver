@@ -21,30 +21,34 @@ jobs:
           cache: npm
       - name: Install frontend dependencies
         run: npm ci
-      - name: Capture frontend and PowerShell diagnostics
+      - name: Capture frontend diagnostics
+        shell: cmd
+        continue-on-error: true
+        run: npm run check:frontend > frontend-diagnostic.txt 2>&1
+      - name: Capture PowerShell diagnostics
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'
           $lines = [System.Collections.Generic.List[string]]::new()
-          npm run check:frontend *>&1 | ForEach-Object { $lines.Add("FRONTEND: $_") }
-          $lines.Add("FRONTEND_EXIT: $LASTEXITCODE")
           foreach ($script in Get-ChildItem scripts -Filter '*.ps1') {
             $tokens = $null
-            $errors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors) | Out-Null
-            if ($errors.Count -eq 0) {
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if (@($parseErrors).Count -eq 0) {
               $lines.Add("POWERSHELL_OK: $($script.Name)")
             } else {
-              foreach ($error in $errors) {
-                $lines.Add("POWERSHELL_ERROR: $($script.Name):$($error.Extent.StartLineNumber):$($error.Extent.StartColumnNumber): $($error.Message)")
+              foreach ($parseError in @($parseErrors)) {
+                $lines.Add("POWERSHELL_ERROR: $($script.Name):$($parseError.Extent.StartLineNumber):$($parseError.Extent.StartColumnNumber): $($parseError.Message)")
               }
             }
           }
-          $lines | Set-Content syntax-diagnostic.txt
+          $lines | Set-Content powershell-diagnostic.txt
       - name: Upload syntax diagnostic
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: phase4c-syntax-diagnostic
-          path: syntax-diagnostic.txt
-          if-no-files-found: error
+          path: |
+            frontend-diagnostic.txt
+            powershell-diagnostic.txt
+          if-no-files-found: warn
           retention-days: 1
