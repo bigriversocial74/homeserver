@@ -1,0 +1,290 @@
+.ollama-install-assistant {
+  display: grid;
+  gap: 22px;
+  margin-bottom: 22px;
+  overflow: hidden;
+}
+
+.ollama-install-assistant[data-checking="true"] {
+  opacity: 0.78;
+  pointer-events: none;
+}
+
+.ollama-assistant-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding-bottom: 18px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.09);
+}
+
+.ollama-assistant-heading h2,
+.ollama-install-card h3 {
+  margin: 2px 0 6px;
+}
+
+.ollama-assistant-heading p,
+.ollama-install-card p,
+.ollama-help-details p {
+  margin: 0;
+  color: #667085;
+  line-height: 1.55;
+}
+
+.ollama-assistant-mark {
+  display: grid;
+  width: 50px;
+  height: 50px;
+  place-items: center;
+  border-radius: 16px;
+  background: #111827;
+  color: #ffffff;
+  font-size: 24px;
+  font-weight: 800;
+  box-shadow: 0 10px 24px rgba(17, 24, 39, 0.16);
+}
+
+.ollama-eyebrow {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ollama-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 102px;
+  padding: 7px 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.ollama-state.warning {
+  background: #fff7ed;
+  color: #b45309;
+  border: 1px solid #fed7aa;
+}
+
+.ollama-state.ready {
+  background: #ecfdf3;
+  color: #067647;
+  border: 1px solid #abefc6;
+}
+
+.ollama-install-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.ollama-install-card {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid rgba(15, 23, 42, 0.09);
+  border-radius: 18px;
+  background: #ffffff;
+}
+
+.ollama-install-card.primary-path {
+  border-color: #bfdbfe;
+  background: linear-gradient(180deg, #eff6ff 0%, #ffffff 70%);
+}
+
+.ollama-step-number {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 10px;
+  background: #111827;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.ollama-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  align-items: center;
+}
+
+.ollama-action-row .button {
+  text-decoration: none;
+}
+
+.ollama-install-card small {
+  margin-top: auto;
+  color: #667085;
+  line-height: 1.4;
+}
+
+.ollama-command-block {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.ollama-command-block > span {
+  grid-column: 1 / -1;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ollama-command-block code {
+  display: block;
+  min-width: 0;
+  overflow: auto;
+  padding: 11px 12px;
+  border: 1px solid #d0d5dd;
+  border-radius: 10px;
+  background: #101828;
+  color: #f8fafc;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+.ollama-command-block .button {
+  align-self: stretch;
+}
+
+.ollama-command-block .copied {
+  border-color: #12b76a;
+  color: #067647;
+}
+
+.ollama-help-details {
+  border: 1px solid rgba(15, 23, 42, 0.09);
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.ollama-help-details summary {
+  cursor: pointer;
+  padding: 14px 16px;
+  font-weight: 800;
+}
+
+.ollama-help-details > div {
+  display: grid;
+  gap: 10px;
+  padding: 0 16px 16px;
+}
+
+.ollama-help-details a {
+  color: #175cd3;
+  font-weight: 700;
+}
+
+.ollama-inline-warning {
+  padding: 11px 13px;
+  border: 1px solid #fed7aa;
+  border-radius: 12px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 13px;
+}
+
+.ollama-ready-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ollama-ready-grid > div {
+  display: grid;
+  gap: 5px;
+  padding: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.ollama-ready-grid span {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ollama-ready-grid strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ollama-ready-grid .mono,
+.ollama-install-assistant .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.ollama-ready-grid + .ollama-action-row {
+  justify-content: flex-end;
+}
+
+.ollama-assistant-loading {
+  display: flex;
+  min-height: 92px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.ollama-assistant-loading span {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #d0d5dd;
+  border-top-color: #175cd3;
+  border-radius: 50%;
+  animation: ollama-spin 0.8s linear infinite;
+}
+
+@keyframes ollama-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 1180px) {
+  .ollama-install-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ollama-ready-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .ollama-assistant-heading {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .ollama-state {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .ollama-command-block,
+  .ollama-ready-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ollama-command-block .button {
+    justify-self: start;
+  }
+
+  .ollama-action-row > .button,
+  .ollama-action-row > a.button {
+    width: 100%;
+    justify-content: center;
+  }
+}
