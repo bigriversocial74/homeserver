@@ -1,0 +1,98 @@
+name: Phase 4B Apply Validated Payload
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - scripts/phase4b_apply_payload.py
+      - scripts/phase4b_payload/**
+      - .github/workflows/phase4b-apply.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phase4b-apply-validated-payload
+  cancel-in-progress: true
+
+jobs:
+  validate-and-commit:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact Phase 4B branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-4b-local-model-center-20260727
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Apply checksum-verified Phase 4B payload
+        run: python scripts/phase4b_apply_payload.py
+
+      - name: Format Rust
+        run: cargo fmt --all
+
+      - name: Validate script syntax
+        shell: pwsh
+        run: |
+          python -m py_compile scripts/validate-security-boundaries.py
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path scripts/smoke-test-service.ps1),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "PowerShell syntax validation failed"
+          }
+
+      - name: Validate frontend
+        run: |
+          npm ci
+          npm run check:frontend
+          npm run build
+
+      - name: Check Rust workspace
+        run: cargo check --workspace --locked
+
+      - name: Test Rust workspace
+        run: cargo test --workspace --locked
+
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Commit validated Phase 4B product files
+        shell: pwsh
+        run: |
+          git config user.name "Microgifter HomeServer Build"
+          git config user.email "actions@users.noreply.github.com"
+          git add README.md Cargo.toml `
+            crates/homeserver-service/src/main.rs `
+            crates/homeserver-service/src/app.rs `
+            crates/homeserver-service/src/model_center.rs `
+            database/migrations/0006_model_center.sql `
+            docs/phase-4b-local-model-center.md `
+            scripts/smoke-test-service.ps1 `
+            scripts/validate-security-boundaries.py `
+            src-tauri/src/lib.rs `
+            src-tauri/src/model.rs `
+            src/main.js `
+            src/styles.css
+          git diff --cached --check
+          git commit -m "Build Phase 4B local Model Center foundation"
+          git push origin "HEAD:feature/phase-4b-local-model-center-20260727"
