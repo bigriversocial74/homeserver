@@ -38,7 +38,7 @@ pub async fn homeserver_cloud_connections() -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn homeserver_pair_cloud_connection(request: Value) -> Result<Value, String> {
-    post_json("/v1/cloud/connections/pair", &request).await
+    post_json("/v1/cloud/connections/pair-v2", &request).await
 }
 
 #[tauri::command]
