@@ -1,5 +1,6 @@
 mod cloud;
 mod model;
+mod ollama_install;
 mod vault;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -318,7 +319,9 @@ pub fn run() {
             model::homeserver_delete_model,
             model::homeserver_unload_model,
             model::homeserver_test_model,
-            model::homeserver_update_model_settings
+            model::homeserver_update_model_settings,
+            ollama_install::homeserver_open_ollama_official,
+            ollama_install::homeserver_open_ollama_terminal
         ])
         .run(tauri::generate_context!())
         .expect("error while running Microgifter HomeServer Control Center");
