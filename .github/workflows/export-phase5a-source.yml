@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - feature/phase-5a-local-readonly-mcp-20260727
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -120,8 +123,5 @@ jobs:
           git add -A
           $changed = @(git diff --cached --name-only)
           if ($changed.Count -lt 20) { throw "Unexpectedly small Phase 5A change set: $($changed.Count) files." }
-          if ($changed -match '^\.phase5a-payload/' -or $changed -contains '.github/workflows/export-phase5a-source.yml') {
-            Write-Host 'Temporary scaffolding is staged for deletion as expected.'
-          }
           git commit -m 'Build Phase 5A local read-only MCP runtime'
           git push origin HEAD:feature/phase-5a-local-readonly-mcp-20260727
