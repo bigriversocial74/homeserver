@@ -103,8 +103,13 @@ jobs:
       - name: Prepare generated Windows resources
         run: npm run prepare:icons
 
-      - name: Rust formatting
-        run: cargo fmt --all --check
+      - name: Rust formatting diagnostic
+        shell: pwsh
+        run: |
+          cargo fmt --all
+          git diff -- "*.rs" | Set-Content rustfmt.patch
+          if (Test-Path rustfmt.patch) { Get-Content rustfmt.patch -Tail 400 }
+          git diff --exit-code -- "*.rs"
 
       - name: Build native service, updater, and MCP bridge from clean output
         shell: pwsh
@@ -141,6 +146,7 @@ jobs:
             service-build.log
             updater-build.log
             mcp-build.log
+            rustfmt.patch
           if-no-files-found: warn
           retention-days: 7
 
