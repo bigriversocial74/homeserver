@@ -85,7 +85,12 @@ jobs:
       - name: Check Rust workspace
         shell: pwsh
         run: |
-          cargo check --workspace --locked *> cargo-check.log
+          cargo build --package microgifter-homeserver-service --package microgifter-homeserver-updater --locked *> cargo-check.log
+          if ($LASTEXITCODE -ne 0) { Get-Content cargo-check.log -Tail 320; exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force src-tauri/resources | Out-Null
+          Copy-Item target/debug/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
+          Copy-Item target/debug/microgifter-homeserver-updater.exe src-tauri/resources/microgifter-homeserver-updater.exe -Force
+          cargo check --workspace --locked *>> cargo-check.log
           if ($LASTEXITCODE -ne 0) { Get-Content cargo-check.log -Tail 320; exit $LASTEXITCODE }
 
       - name: Upload Rust compiler log
