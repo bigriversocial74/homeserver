@@ -57,17 +57,29 @@ jobs:
               exit $LASTEXITCODE
             }
             python scripts/fix-phase5c-rust-quality.py *>> phase5c-integration.log
-            $exitCode = $LASTEXITCODE
-            Get-Content phase5c-integration.log -Tail 400
-            if ($exitCode -ne 0) { exit $exitCode }
+            if ($LASTEXITCODE -ne 0) {
+              Get-Content phase5c-integration.log -Tail 400
+              exit $LASTEXITCODE
+            }
           }
+          python scripts/apply-phase5c-smoke.py *>> phase5c-integration.log
+          $exitCode = $LASTEXITCODE
+          Get-Content phase5c-integration.log -Tail 400
+          if ($exitCode -ne 0) { exit $exitCode }
 
-      - name: Validate frontend and Phase 5C contract
+      - name: Validate frontend, PowerShell, and Phase 5C contract
         shell: pwsh
         run: |
           npm ci
           npm run check:frontend
           npm run build
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/smoke-test-service.ps1), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "Phase 5C smoke test PowerShell syntax validation failed"
+          }
 
       - name: Format and test service
         shell: pwsh
@@ -83,7 +95,7 @@ jobs:
         run: |
           git config user.name "Microgifter Build Agent"
           git config user.email "build-agent@microgifter.local"
-          git add crates/homeserver-service/src/main.rs crates/homeserver-service/src/app.rs crates/homeserver-service/src/agent_runtime.rs crates/homeserver-service/src/operational_data.rs src-tauri/src/lib.rs index.html package.json src/agent-workspace.js
+          git add crates/homeserver-service/src/main.rs crates/homeserver-service/src/app.rs crates/homeserver-service/src/agent_runtime.rs crates/homeserver-service/src/operational_data.rs src-tauri/src/lib.rs index.html package.json src/agent-workspace.js scripts/smoke-test-service.ps1
           if (git diff --cached --quiet) {
             Write-Host "No integration changes to commit."
             exit 0
