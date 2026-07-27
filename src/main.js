@@ -9,6 +9,8 @@ let backupCatalog = null;
 let updateStatus = null;
 let vaultSnapshot = null;
 let vaultSearchResult = null;
+let modelSnapshot = null;
+let modelTestResult = null;
 let notice = null;
 let busy = false;
 let activePage = window.location.hash.replace("#", "") || "dashboard";
@@ -20,6 +22,7 @@ const pages = [
   ["backups", "Backups", "backup"],
   ["integrations", "Integrations & Agents", "integrations"],
   ["knowledge", "Knowledge Vault", "vault"],
+  ["models", "Model Center", "model"],
   ["settings", "Settings", "settings"],
   ["sync", "Sync Cloud", "cloud"],
   ["system", "System", "system"],
@@ -349,7 +352,7 @@ function renderIntegrations() {
       <article class="panel integrations-panel"><div class="panel-title"><div><h2>Integrations</h2><p>External services and optional local connections.</p></div><button class="button primary" disabled>${icon("plus", 16)}Connect New</button></div><div class="integration-list">
         ${integrationRow("Microgifter Cloud", "Signed cloud service", "cloud", connected, connected ? "Connected" : "Not connected", connected ? relativeDate(cloudSnapshot?.last_success_utc) : "—", "sync")}
         ${integrationRow("Local API", "Loopback automation", "network", Boolean(statusSnapshot?.api_available), statusSnapshot?.api_available ? "Running" : "Offline", statusSnapshot?.api_available ? "Available" : "—", "system")}
-        ${integrationRow("Local Model Runtime", "Optional AI provider", "model", false, "Planned", "—", "knowledge")}
+        ${integrationRow("Local Model Runtime", "Approved loopback Ollama provider", "model", modelSnapshot?.runtime?.state === "running", modelSnapshot?.runtime?.state === "running" ? "Running" : "Not running", modelSnapshot?.runtime?.version ? `v${modelSnapshot.runtime.version}` : "Local only", "models")}
         ${integrationRow("Local Storage", "Protected device data", "storage", true, "Connected", "Local", "backups")}
       </div></article>
     </section>
@@ -414,6 +417,69 @@ function contentType(iconName, label, value, tone) {
 
 function sourceRow(iconName, label, sync, size, status, tone) {
   return `<div><div class="app-icon tone-${tone}">${icon(iconName, 18)}</div><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(sync)}</small></span><em>${escapeHtml(size)}</em>${badge(status, status === "Connected" || status === "Ready" ? "healthy" : "planned")}</div>`;
+}
+
+
+function renderModelCenter() {
+  const runtime = modelSnapshot?.runtime || { state: "unavailable", provider: "ollama", api_url: "http://127.0.0.1:11434" };
+  const hardware = modelSnapshot?.hardware || {};
+  const catalog = modelSnapshot?.catalog || [];
+  const installed = modelSnapshot?.installed_models || [];
+  const operations = modelSnapshot?.operations || [];
+  const settings = modelSnapshot?.settings || { context_size: 4096, test_timeout_seconds: 60, max_download_gb: 20 };
+  const runtimeReady = runtime.state === "running";
+  const activeOperations = operations.filter((operation) => ["pending", "running"].includes(operation.state));
+  const chatModels = catalog.filter((model) => model.installed && model.supports_chat);
+  const embeddingModels = catalog.filter((model) => model.installed && model.supports_embeddings);
+  const testModels = catalog.filter((model) => model.installed);
+  return `${pageHeader("Model Center", "Manage approved local models through Ollama's fixed loopback API. Prompts and model inventory remain on this HomeServer.", `<button id="refresh-models" class="button secondary" type="button" ${busy ? "disabled" : ""}>${icon("refresh", 16)}Refresh</button>`) }
+    ${runtimeReady ? "" : `<div class="notice warning"><strong>Ollama is not running.</strong> Install or start Ollama for Windows, then refresh. HomeServer will only connect to <span class="mono">127.0.0.1:11434</span>.</div>`}
+    <section class="metrics six-up">
+      ${metricCard("model", "Runtime", runtimeReady ? "Running" : "Not running", runtime.version ? `Ollama ${runtime.version}` : "Fixed loopback endpoint", runtimeReady ? "green" : "amber")}
+      ${metricCard("cpu", "Logical CPUs", String(hardware.logical_cpu_count || 0), "Hardware guidance only", "blue")}
+      ${metricCard("memory", "System Memory", formatBytes(hardware.total_memory_bytes || 0), `${formatBytes(hardware.available_memory_bytes || 0)} available`, "purple")}
+      ${metricCard("storage", "Free Disk", formatBytes(hardware.free_disk_bytes || 0), `${settings.max_download_gb || 20} GB model limit`, "teal")}
+      ${metricCard("model", "Installed Models", String(installed.length), `${installed.filter((model) => model.running).length} loaded`, "green")}
+      ${metricCard("activity", "Active Downloads", String(activeOperations.length), operations.length ? `${operations.length} retained operations` : "No model operations", activeOperations.length ? "amber" : "gray")}
+    </section>
+    <section class="model-center-grid">
+      <article class="panel model-catalog-panel"><div class="panel-title"><div><h2>Approved Starter Catalog</h2><p>Only these bounded model identifiers can be downloaded from HomeServer.</p></div><span>${catalog.length} approved</span></div><div class="model-card-grid">${catalog.map((model) => renderCatalogModel(model, runtimeReady, activeOperations)).join("")}</div></article>
+      <aside class="model-center-aside">
+        <article class="panel"><div class="panel-title"><div><h2>Local Test</h2><p>Runs a bounded prompt directly against the selected local model.</p></div></div><form id="model-test-form" class="stack-form"><select id="model-test-name" ${!testModels.length || busy ? "disabled" : ""}>${modelOptions(testModels, settings.default_chat_model)}</select><textarea id="model-test-prompt" maxlength="500" rows="4" placeholder="Summarize why local-first AI is useful." ${!testModels.length || busy ? "disabled" : ""} required></textarea><button class="button primary" type="submit" ${!runtimeReady || !testModels.length || busy ? "disabled" : ""}>Run Local Test</button></form>${modelTestResult ? `<div class="model-test-result"><strong>${escapeHtml(modelTestResult.model)} · ${escapeHtml(humanize(modelTestResult.kind))}</strong><p>${escapeHtml(modelTestResult.output)}</p><small>${Number(modelTestResult.duration_ms || 0)} ms</small></div>` : ""}</article>
+        <article class="panel"><div class="panel-title"><div><h2>Defaults & Limits</h2><p>Assignments are local and require installed approved models.</p></div></div><form id="model-settings-form" class="stack-form"><label><span>Default chat model</span><select id="model-default-chat"><option value="">Not assigned</option>${modelOptions(chatModels, settings.default_chat_model)}</select></label><label><span>Default embedding model</span><select id="model-default-embedding"><option value="">Not assigned</option>${modelOptions(embeddingModels, settings.default_embedding_model)}</select></label><div class="model-limit-grid"><label><span>Context</span><input id="model-context-size" type="number" min="512" max="32768" step="512" value="${Number(settings.context_size || 4096)}"></label><label><span>Test timeout</span><input id="model-test-timeout" type="number" min="10" max="120" value="${Number(settings.test_timeout_seconds || 60)}"></label><label><span>Max download GB</span><input id="model-download-limit" type="number" min="1" max="100" value="${Number(settings.max_download_gb || 20)}"></label></div><button class="button secondary" type="submit" ${!runtimeReady || busy ? "disabled" : ""}>Save Local Settings</button></form></article>
+      </aside>
+    </section>
+    <section class="two-column-grid model-bottom-grid"><article class="panel"><div class="panel-title"><div><h2>Installed Models</h2></div><span>${installed.length} local</span></div>${renderInstalledModels(installed)}</article><article class="panel"><div class="panel-title"><div><h2>Operation History</h2></div><span>${operations.length} records</span></div>${renderModelOperations(operations)}</article></section>
+    <div class="privacy-banner success">${icon("shield", 20)}<div><strong>Local model boundary enforced</strong><span>No configurable runtime URL, cloud prompt fallback, Knowledge Vault transfer, MCP tools, or autonomous agent execution is enabled in Phase 4B.</span></div><button class="text-button" data-page="knowledge">Open Knowledge Vault ${icon("arrow", 13)}</button></div>`;
+}
+
+function renderCatalogModel(model, runtimeReady, activeOperations) {
+  const active = activeOperations.find((operation) => operation.model_name === model.model);
+  const tone = model.installed ? "green" : model.recommended ? "blue" : "amber";
+  const action = model.installed
+    ? `<button class="button secondary" type="button" data-model-test-select="${escapeHtml(model.model)}" ${runtimeReady && !busy ? "" : "disabled"}>Test</button>${model.running ? `<button class="button ghost" type="button" data-model-unload="${escapeHtml(model.model)}" ${busy ? "disabled" : ""}>Unload</button>` : ""}<button class="button danger" type="button" data-model-delete="${escapeHtml(model.model)}" ${busy ? "disabled" : ""}>Delete</button>`
+    : `<button class="button primary" type="button" data-model-pull="${escapeHtml(model.model)}" ${!runtimeReady || busy || active ? "disabled" : ""}>${active ? "Downloading" : "Download"}</button>`;
+  return `<article class="model-card"><div class="model-card-heading"><div class="app-icon tone-${tone}">${icon(model.supports_embeddings ? "storage" : "model", 22)}</div><div><h3>${escapeHtml(model.display_name)}</h3><code>${escapeHtml(model.model)}</code></div>${badge(model.installed ? "Installed" : model.recommended ? "Recommended" : "Larger system", model.installed ? "healthy" : model.recommended ? "available" : "planned")}</div><p>${escapeHtml(model.purpose)}</p><dl><div><dt>Download</dt><dd>${formatBytes(model.estimated_size_bytes)}</dd></div><div><dt>Minimum memory</dt><dd>${formatBytes(model.minimum_memory_bytes)}</dd></div><div><dt>Capability</dt><dd>${model.supports_embeddings ? "Embeddings" : "Chat"}</dd></div></dl>${active ? `<div class="model-progress"><span>${escapeHtml(active.status_message)}</span>${progress(operationPercent(active), "blue")}</div>` : ""}<div class="button-row">${action}</div></article>`;
+}
+
+function modelOptions(models, selected) {
+  return models.map((model) => `<option value="${escapeHtml(model.model)}" ${model.model === selected ? "selected" : ""}>${escapeHtml(model.display_name || model.model)}</option>`).join("");
+}
+
+function operationPercent(operation) {
+  const total = Number(operation.total_bytes || 0);
+  const completed = Number(operation.completed_bytes || 0);
+  return total > 0 ? Math.min(100, Math.round(completed / total * 100)) : 0;
+}
+
+function renderInstalledModels(models) {
+  if (!models.length) return `<div class="empty-search compact">${icon("model", 30)}<strong>No approved models installed</strong><p>Start Ollama and download a recommended model from the starter catalog.</p></div>`;
+  return `<div class="model-table"><div class="table-head"><span>Model</span><span>Size</span><span>Family</span><span>Quantization</span><span>Memory</span><span>Status</span></div>${models.map((model) => `<div class="table-row"><strong class="mono">${escapeHtml(model.name)}</strong><span>${formatBytes(model.size_bytes)}</span><span>${escapeHtml(model.family || "Unknown")}</span><span>${escapeHtml(model.quantization_level || "Unknown")}</span><span>${formatBytes(model.size_vram_bytes)}</span>${badge(model.running ? "Loaded" : "Installed", model.running ? "running" : "ready")}</div>`).join("")}</div>`;
+}
+
+function renderModelOperations(operations) {
+  if (!operations.length) return `<div class="empty-search compact">${icon("activity", 30)}<strong>No model operations</strong><p>Download activity and restart-safe outcomes will appear here.</p></div>`;
+  return `<div class="model-operation-list">${operations.slice(0, 20).map((operation) => `<div><div><strong>${escapeHtml(humanize(operation.operation_type))} · ${escapeHtml(operation.model_name)}</strong><small>${escapeHtml(operation.status_message || humanize(operation.state))}</small></div><span>${operation.total_bytes ? `${operationPercent(operation)}%` : relativeDate(operation.updated_at_utc)}</span>${badge(humanize(operation.state), ["succeeded"].includes(operation.state) ? "healthy" : ["failed", "interrupted"].includes(operation.state) ? "failed" : "available")}${["pending", "running"].includes(operation.state) ? progress(operationPercent(operation), "blue") : ""}</div>`).join("")}</div>`;
 }
 
 function renderSettings() {
@@ -509,6 +575,7 @@ function renderCurrentPage() {
     case "backups": return renderBackups();
     case "integrations": return renderIntegrations();
     case "knowledge": return renderKnowledge();
+    case "models": return renderModelCenter();
     case "settings": return renderSettings();
     case "sync": return renderSync();
     case "system": return renderSystem();
@@ -547,6 +614,13 @@ function bindEvents() {
   document.querySelector("#vault-search-form")?.addEventListener("submit", searchVault);
   document.querySelector("#vault-reindex")?.addEventListener("click", reindexVault);
   document.querySelectorAll("[data-vault-delete]").forEach((button) => button.addEventListener("click", deleteVaultDocument));
+  document.querySelector("#refresh-models")?.addEventListener("click", () => loadAll());
+  document.querySelectorAll("[data-model-pull]").forEach((button) => button.addEventListener("click", pullModel));
+  document.querySelectorAll("[data-model-delete]").forEach((button) => button.addEventListener("click", deleteModel));
+  document.querySelectorAll("[data-model-unload]").forEach((button) => button.addEventListener("click", unloadModel));
+  document.querySelectorAll("[data-model-test-select]").forEach((button) => button.addEventListener("click", selectModelForTest));
+  document.querySelector("#model-test-form")?.addEventListener("submit", testModel);
+  document.querySelector("#model-settings-form")?.addEventListener("submit", saveModelSettings);
 }
 
 function navigate(page) {
@@ -792,15 +866,75 @@ async function deleteVaultDocument(event) {
   });
 }
 
+
+async function pullModel(event) {
+  const model = event.currentTarget.dataset.modelPull;
+  await withBusy(async () => {
+    const result = await invoke("homeserver_pull_model", { model });
+    return { kind: result.accepted ? "success" : "info", message: result.message };
+  });
+}
+
+async function deleteModel(event) {
+  const model = event.currentTarget.dataset.modelDelete;
+  const confirmation = window.prompt(`Type DELETE to remove ${model} from the local Ollama model store:`);
+  if (confirmation !== "DELETE") return;
+  await withBusy(async () => {
+    const result = await invoke("homeserver_delete_model", { model, confirmation });
+    if (modelTestResult?.model === model) modelTestResult = null;
+    return { kind: "success", message: result.message };
+  });
+}
+
+async function unloadModel(event) {
+  const model = event.currentTarget.dataset.modelUnload;
+  await withBusy(async () => {
+    const result = await invoke("homeserver_unload_model", { model });
+    return { kind: "success", message: result.message };
+  });
+}
+
+function selectModelForTest(event) {
+  const model = event.currentTarget.dataset.modelTestSelect;
+  const select = document.querySelector("#model-test-name");
+  if (select) select.value = model;
+  document.querySelector("#model-test-prompt")?.focus();
+}
+
+async function testModel(event) {
+  event.preventDefault();
+  const model = document.querySelector("#model-test-name")?.value || "";
+  const prompt = document.querySelector("#model-test-prompt")?.value?.trim() || "";
+  if (!model || !prompt) return;
+  await withBusy(async () => {
+    modelTestResult = await invoke("homeserver_test_model", { model, prompt });
+    return { kind: "success", message: `Local ${humanize(modelTestResult.kind)} test completed in ${Number(modelTestResult.duration_ms || 0)} ms.` };
+  });
+}
+
+async function saveModelSettings(event) {
+  event.preventDefault();
+  const defaultChatModel = document.querySelector("#model-default-chat")?.value || null;
+  const defaultEmbeddingModel = document.querySelector("#model-default-embedding")?.value || null;
+  const contextSize = Number(document.querySelector("#model-context-size")?.value || 4096);
+  const testTimeoutSeconds = Number(document.querySelector("#model-test-timeout")?.value || 60);
+  const maxDownloadGb = Number(document.querySelector("#model-download-limit")?.value || 20);
+  await withBusy(async () => {
+    await invoke("homeserver_update_model_settings", { defaultChatModel, defaultEmbeddingModel, contextSize, testTimeoutSeconds, maxDownloadGb });
+    return { kind: "success", message: "Local Model Center defaults and limits were saved." };
+  });
+}
+
 async function loadAll(clearNotice = true) {
   if (clearNotice) notice = null;
-  const results = await Promise.allSettled([invoke("homeserver_status"), invoke("homeserver_cloud_status"), invoke("homeserver_backups"), invoke("homeserver_updates"), invoke("homeserver_vault")]);
+  const results = await Promise.allSettled([invoke("homeserver_status"), invoke("homeserver_cloud_status"), invoke("homeserver_backups"), invoke("homeserver_updates"), invoke("homeserver_vault"), invoke("homeserver_models")]);
   if (results[0].status === "rejected") {
     statusSnapshot = null;
     cloudSnapshot = null;
     backupCatalog = null;
     updateStatus = null;
     vaultSnapshot = null;
+    modelSnapshot = null;
     notice = { kind: "warning", message: `HomeServer service unavailable: ${String(results[0].reason)}` };
     render();
     return;
@@ -810,7 +944,9 @@ async function loadAll(clearNotice = true) {
   backupCatalog = results[2].status === "fulfilled" ? results[2].value : null;
   updateStatus = results[3].status === "fulfilled" ? results[3].value : null;
   vaultSnapshot = results[4].status === "fulfilled" ? results[4].value : null;
+  modelSnapshot = results[5].status === "fulfilled" ? results[5].value : null;
   if (!notice && results[1].status === "rejected") notice = { kind: "warning", message: `Cloud connector unavailable: ${String(results[1].reason)}` };
+  if (!notice && results[5].status === "rejected") notice = { kind: "warning", message: `Model Center unavailable: ${String(results[5].reason)}` };
   render();
 }
 

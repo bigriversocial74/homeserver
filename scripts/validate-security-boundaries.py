@@ -70,7 +70,8 @@ for marker in (
     "let router = http::secure(",
     "http::router(state.clone())",
     ".merge(cloud_connector::router(state.clone()))",
-    ".merge(knowledge_vault::router(state))",
+    ".merge(knowledge_vault::router(state.clone()))",
+    ".merge(model_center::router(state))",
 ):
     require(
         "crates/homeserver-service/src/app.rs",
@@ -93,6 +94,30 @@ require(
     "default_headers",
     "Control Center HTTP client does not install trusted local headers",
 )
+
+# Local model management must remain on a fixed, non-redirecting loopback boundary.
+for marker in (
+    'const OLLAMA_API_BASE: &str = "http://127.0.0.1:11434"',
+    "redirect(Policy::none())",
+    "approved_model(&request.model)",
+    "MAX_PULL_STREAM_BYTES",
+    "model_operations",
+):
+    require(
+        "crates/homeserver-service/src/model_center.rs",
+        marker,
+        f"Model Center boundary is missing {marker}",
+    )
+for forbidden in (
+    "https://ollama.com/api",
+    "0.0.0.0:11434",
+    "OLLAMA_HOST",
+):
+    forbid(
+        "crates/homeserver-service/src/model_center.rs",
+        forbidden,
+        f"Model Center contains a disallowed runtime boundary: {forbidden}",
+    )
 forbid(
     "src-tauri/tauri.conf.json",
     "unsafe-inline",

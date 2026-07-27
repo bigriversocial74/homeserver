@@ -1,6 +1,6 @@
 # Microgifter HomeServer
 
-Microgifter HomeServer is the private Windows edge platform for Microgifter. It provides a native Control Center, a background Windows service, local SQLite storage, cloud pairing and synchronization, encrypted backup and recovery, diagnostics, and a signed-update/rollback foundation.
+Microgifter HomeServer is the private Windows edge platform for Microgifter. It provides a native Control Center, a background Windows service, local SQLite storage, cloud pairing and synchronization, encrypted backup and recovery, a local Knowledge Vault, bounded Ollama model management, diagnostics, and a signed-update/rollback foundation.
 
 The dedicated `bigriversocial74/homeserver` repository is the implementation authority. The approved product and technical blueprint is maintained in `docs/product-technical-blueprint.md`.
 
@@ -36,7 +36,7 @@ See `docs/release-v0.1.3.md` for both the temporary internal-test procedure and 
 
 ## Security boundaries
 
-- The service does not expose a LAN, public database, model, or MCP listener.
+- The service does not expose a LAN, public database, model, or MCP listener. The optional Ollama integration is fixed to its loopback endpoint at `127.0.0.1:11434`.
 - Browser-originated local API requests are rejected.
 - State-changing local API calls require the trusted Control Center marker.
 - Cloud requests use HTTPS, bearer credentials, Ed25519 request signatures, timestamps, and nonces.
@@ -93,5 +93,6 @@ The v0.1.3 production workflow additionally requires an exact semantic-version t
 - Phase 3A: encrypted backup, portable recovery, restore, and rollback.
 - Phase 3B foundation: signed update verification, application, health validation, and rollback.
 - Phase 4A foundation: managed local text-document import, indexing, search, change detection, and deletion.
+- Phase 4B foundation: fixed-loopback Ollama detection, approved model catalog, local inventory, bounded pull tracking, local testing, unload/delete controls, and default model assignments.
 
-PDF/OCR and semantic Knowledge Vault indexing, local model management, MCP runtime, and broader Linux/NAS deployment remain future phases and are not represented as complete.
+PDF/OCR, semantic Knowledge Vault indexing, MCP runtime, and broader Linux/NAS deployment remain future phases and are not represented as complete.
