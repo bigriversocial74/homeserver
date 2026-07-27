@@ -1,25 +1,97 @@
-name: Export Phase 4C Source
+name: Apply Phase 4C Source
 
 on:
-  pull_request:
+  push:
     branches:
-      - main
+      - feature/phase-4c-document-extraction-ocr-20260727
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  export:
-    runs-on: ubuntu-latest
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-2025
     steps:
       - name: Check out exact branch
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Create source archive
-        run: git archive --format=zip --output=homeserver-source.zip HEAD
-      - name: Upload source archive
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: phase4c-source
-          path: homeserver-source.zip
-          if-no-files-found: error
-          retention-days: 1
+          ref: feature/phase-4c-document-extraction-ocr-20260727
+          fetch-depth: 0
+
+      - name: Install Rust validation tools
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+
+      - name: Reconstruct and verify source patch
+        shell: pwsh
+        run: |
+          $parts = Get-ChildItem .phase4c-bin\part-*.bin | Sort-Object Name
+          if ($parts.Count -ne 6) {
+            throw "Expected six Phase 4C patch parts."
+          }
+          $stream = [System.IO.File]::Open("phase4c-clean.patch.xz", [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write)
+          try {
+            foreach ($part in $parts) {
+              $bytes = [System.IO.File]::ReadAllBytes($part.FullName)
+              $stream.Write($bytes, 0, $bytes.Length)
+            }
+          } finally {
+            $stream.Dispose()
+          }
+          $archiveHash = (Get-FileHash phase4c-clean.patch.xz -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($archiveHash -ne "a56b95b9964946163a8a6cc1def79d6a293162981251d6a5ca199db45af50086") {
+            throw "Phase 4C compressed patch checksum mismatch: $archiveHash"
+          }
+          python -c "import lzma,pathlib; p=pathlib.Path('phase4c-clean.patch.xz'); pathlib.Path('phase4c-clean.patch').write_bytes(lzma.decompress(p.read_bytes()))"
+          $patchHash = (Get-FileHash phase4c-clean.patch -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($patchHash -ne "e2d4fdca80b9e32c3eaf674be1b74c8cce96d976a0edbf07f04301a81d25735f") {
+            throw "Phase 4C source patch checksum mismatch: $patchHash"
+          }
+          git apply --check phase4c-clean.patch
+          git apply phase4c-clean.patch
+
+      - name: Validate source and migrations
+        shell: pwsh
+        run: |
+          cargo fmt --all
+          node --check src/main.js
+          python scripts/validate-document-extraction.py
+          python scripts/validate-security-boundaries.py
+          @'
+          import sqlite3
+          from pathlib import Path
+
+          connection = sqlite3.connect(":memory:")
+          connection.execute("PRAGMA foreign_keys=ON")
+          for migration in sorted(Path("database/migrations").glob("*.sql")):
+              connection.executescript(migration.read_text(encoding="utf-8"))
+          failures = connection.execute("PRAGMA foreign_key_check").fetchall()
+          if failures:
+              raise SystemExit(f"foreign key failures: {failures}")
+          count = connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
+          if count != 8:
+              raise SystemExit(f"expected 8 migrations, found {count}")
+          print("All eight migrations and foreign keys validated.")
+          '@ | python -
+
+      - name: Resolve and compile service dependencies
+        shell: pwsh
+        run: |
+          cargo check --package microgifter-homeserver-service
+          cargo test --package microgifter-homeserver-service
+
+      - name: Commit clean Phase 4C product files
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force .phase4c-bin -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force .phase4c-payload -ErrorAction SilentlyContinue
+          Remove-Item -Force phase4c-clean.patch,phase4c-clean.patch.xz -ErrorAction SilentlyContinue
+          Remove-Item -Force .github/workflows/export-phase4c-source.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Build Phase 4C document extraction and OCR"
+          git push origin HEAD:feature/phase-4c-document-extraction-ocr-20260727
