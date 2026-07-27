@@ -13,7 +13,10 @@ pub(crate) struct OllamaSetupLaunchResult {
 }
 
 #[cfg(windows)]
-fn launch_url(url: &'static str, target: &'static str) -> Result<OllamaSetupLaunchResult, String> {
+fn launch_url(
+    url: &'static str,
+    target: &'static str,
+) -> Result<OllamaSetupLaunchResult, String> {
     Command::new("rundll32.exe")
         .args(["url.dll,FileProtocolHandler", url])
         .spawn()
@@ -26,7 +29,10 @@ fn launch_url(url: &'static str, target: &'static str) -> Result<OllamaSetupLaun
 }
 
 #[cfg(not(windows))]
-fn launch_url(_url: &'static str, _target: &'static str) -> Result<OllamaSetupLaunchResult, String> {
+fn launch_url(
+    _url: &'static str,
+    _target: &'static str,
+) -> Result<OllamaSetupLaunchResult, String> {
     Err("The Ollama Windows setup assistant is only available on Windows.".to_owned())
 }
 
@@ -56,7 +62,9 @@ pub(crate) fn homeserver_open_ollama_terminal() -> Result<OllamaSetupLaunchResul
         Ok(OllamaSetupLaunchResult {
             launched: true,
             target: "powershell",
-            message: "Opened PowerShell. Paste the copied official Ollama install command when ready.".to_owned(),
+            message:
+                "Opened PowerShell. Paste the copied official Ollama install command when ready."
+                    .to_owned(),
         })
     }
 
@@ -72,8 +80,17 @@ mod tests {
 
     #[test]
     fn official_targets_are_fixed_https_urls() {
-        assert_eq!(OLLAMA_SETUP_URL, "https://ollama.com/download/OllamaSetup.exe");
-        assert_eq!(OLLAMA_WINDOWS_PAGE, "https://ollama.com/download/windows");
-        assert_eq!(OLLAMA_INSTALL_COMMAND, "irm https://ollama.com/install.ps1 | iex");
+        assert_eq!(
+            OLLAMA_SETUP_URL,
+            "https://ollama.com/download/OllamaSetup.exe"
+        );
+        assert_eq!(
+            OLLAMA_WINDOWS_PAGE,
+            "https://ollama.com/download/windows"
+        );
+        assert_eq!(
+            OLLAMA_INSTALL_COMMAND,
+            "irm https://ollama.com/install.ps1 | iex"
+        );
     }
 }
