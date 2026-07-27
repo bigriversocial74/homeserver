@@ -8,7 +8,8 @@ registry_path = ROOT / "crates/homeserver-service/src/cloud_registry.rs"
 
 connector = connector_path.read_text(encoding="utf-8")
 connector = connector.replace("use tokio::sync::watch;\n", "")
-connector = connector.replace("use tracing::{info, warn};", "use tracing::warn;")
+connector = connector.replace("use tracing::{info, warn};\n", "")
+connector = connector.replace("use tracing::warn;\n", "")
 connector = connector.replace("const SYNC_INTERVAL: Duration = Duration::from_secs(60);\n", "")
 start_marker = "\npub async fn run(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>) {\n"
 end_marker = "\nimpl AppState {"
