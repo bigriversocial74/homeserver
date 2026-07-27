@@ -491,3 +491,28 @@ svg { flex: none; }
     justify-self: start;
   }
 }
+
+/* Phase 5A local read-only MCP runtime */
+.mcp-runtime-panel { margin-top: 20px; }
+.mcp-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
+.mcp-summary-grid > div { display: grid; gap: 5px; padding: 14px; border: 1px solid #e1e7f0; border-radius: 12px; background: #f8fafc; }
+.mcp-summary-grid span, .mcp-client-row small, .mcp-credential-card label > span { color: var(--muted); font-size: 11px; }
+.mcp-summary-grid strong { color: #263349; font-size: 13px; overflow-wrap: anywhere; }
+.mcp-workspace { display: grid; grid-template-columns: minmax(280px, .85fr) minmax(0, 1.35fr); gap: 16px; margin-top: 16px; }
+.inset-panel { border: 1px solid #e4e9f1; box-shadow: none; background: #fbfcfe; }
+.mcp-scopes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px; border: 1px solid #dce4ef; border-radius: 12px; }
+.mcp-scopes legend { padding: 0 6px; color: #445169; font-size: 11px; font-weight: 700; }
+.mcp-scopes label { display: flex; align-items: center; gap: 7px; color: #49566d; font-size: 11px; }
+.mcp-client-list { display: grid; margin-top: 12px; }
+.mcp-client-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 13px 0; border-top: 1px solid #e5eaf1; }
+.mcp-client-row:first-child { border-top: 0; }
+.mcp-client-row > div { min-width: 0; display: grid; gap: 4px; }
+.mcp-client-row strong, .mcp-client-row small { overflow: hidden; text-overflow: ellipsis; }
+.mcp-credential-card { margin-top: 16px; padding: 18px; border: 1px solid #f0d69b; border-radius: 14px; background: #fffbf1; }
+.copy-field { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; margin-top: 7px; }
+.copy-field code, .mcp-config-grid pre { min-width: 0; padding: 11px; border: 1px solid #e1d4b6; border-radius: 10px; background: #fff; overflow: auto; color: #273349; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mcp-config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+.mcp-config-grid label { display: grid; gap: 7px; min-width: 0; }
+.button.compact { min-height: 32px; padding: 6px 10px; }
+@media (max-width: 1000px) { .mcp-summary-grid { grid-template-columns: 1fr 1fr; } .mcp-workspace, .mcp-config-grid { grid-template-columns: 1fr; } }
+@media (max-width: 620px) { .mcp-summary-grid, .mcp-scopes { grid-template-columns: 1fr; } .mcp-client-row { grid-template-columns: 1fr auto; } .mcp-client-row .button { grid-column: 1 / -1; justify-self: start; } .copy-field { grid-template-columns: 1fr; } }

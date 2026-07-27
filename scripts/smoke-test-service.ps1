@@ -1,9 +1,11 @@
 param(
-    [string]$ServiceBinary = "target/release/microgifter-homeserver-service.exe"
+    [string]$ServiceBinary = "target/release/microgifter-homeserver-service.exe",
+    [string]$McpBinary = "target/release/microgifter-homeserver-mcp.exe"
 )
 
 $ErrorActionPreference = "Stop"
 $binaryPath = (Resolve-Path $ServiceBinary).Path
+$mcpBinaryPath = (Resolve-Path $McpBinary).Path
 $primaryDataDirectory = Join-Path $env:RUNNER_TEMP ("microgifter-homeserver-primary-" + [guid]::NewGuid().ToString("N"))
 $freshDataDirectory = Join-Path $env:RUNNER_TEMP ("microgifter-homeserver-recovery-" + [guid]::NewGuid().ToString("N"))
 $exportedPackage = Join-Path $env:RUNNER_TEMP ("microgifter-homeserver-export-" + [guid]::NewGuid().ToString("N") + ".mghbackup")
@@ -116,6 +118,64 @@ try {
     if ($keywordSearch.mode -ne "keyword" -or $keywordSearch.semantic_available -or @($keywordSearch.hits).Count -ne 0) {
         throw "Fresh semantic Knowledge Vault keyword fallback is invalid"
     }
+
+    $mcp = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/mcp" -TimeoutSec 10
+    if (-not $mcp.local_only -or -not $mcp.read_only -or $mcp.endpoint -ne "$apiBase/mcp" -or $mcp.state -ne "waiting_for_client") {
+        throw "Fresh local MCP runtime did not initialize at the fixed read-only loopback boundary"
+    }
+    if (@($mcp.clients).Count -ne 0 -or @($mcp.tools).Count -ne 5) {
+        throw "Fresh local MCP runtime client or tool catalog is invalid"
+    }
+    $initializeBody = @{ jsonrpc = "2.0"; id = 1; method = "initialize"; params = @{ protocolVersion = "2025-11-25"; capabilities = @{}; clientInfo = @{ name = "HomeServer CI"; version = "1.0" } } } | ConvertTo-Json -Depth 8 -Compress
+    $unauthorized = Invoke-WebRequest -SkipHttpErrorCheck -Method Post -Uri "$apiBase/mcp" -ContentType "application/json" -Body $initializeBody -TimeoutSec 10
+    if ($unauthorized.StatusCode -ne 401) {
+        throw "Expected unauthenticated MCP rejection, received HTTP $($unauthorized.StatusCode)"
+    }
+    $clientBody = @{ display_name = "HomeServer CI MCP"; scopes = @("system.read", "cloud.read", "models.read", "knowledge.search", "knowledge.read"); expires_days = 30 } | ConvertTo-Json -Compress
+    $credential = Invoke-RestMethod -Method Post -Headers $controlHeaders -Uri "$apiBase/v1/mcp/clients" -ContentType "application/json" -Body $clientBody -TimeoutSec 10
+    if ($credential.token -notmatch '^mghs_mcp_[A-Za-z0-9_-]+$' -or $credential.client.token_hint -eq $credential.token) {
+        throw "MCP client credential was not created with a one-time bounded token"
+    }
+    $mcpHeaders = @{ Authorization = "Bearer $($credential.token)" }
+    $initialized = Invoke-RestMethod -Method Post -Headers $mcpHeaders -Uri "$apiBase/mcp" -ContentType "application/json" -Body $initializeBody -TimeoutSec 15
+    if ($initialized.result.protocolVersion -ne "2025-11-25" -or $initialized.result.serverInfo.name -ne "Microgifter HomeServer") {
+        throw "MCP initialize negotiation failed"
+    }
+    $toolsBody = @{ jsonrpc = "2.0"; id = 2; method = "tools/list"; params = @{} } | ConvertTo-Json -Depth 6 -Compress
+    $tools = Invoke-RestMethod -Method Post -Headers $mcpHeaders -Uri "$apiBase/mcp" -ContentType "application/json" -Body $toolsBody -TimeoutSec 15
+    if (@($tools.result.tools).Count -ne 5) { throw "MCP read-only tool catalog is incomplete" }
+    foreach ($tool in @($tools.result.tools)) {
+        if (-not $tool.annotations.readOnlyHint -or $tool.annotations.destructiveHint -or $tool.annotations.openWorldHint) {
+            throw "MCP tool '$($tool.name)' is missing enforced read-only annotations"
+        }
+    }
+    $statusToolBody = @{ jsonrpc = "2.0"; id = 3; method = "tools/call"; params = @{ name = "homeserver_status"; arguments = @{} } } | ConvertTo-Json -Depth 8 -Compress
+    $statusTool = Invoke-RestMethod -Method Post -Headers $mcpHeaders -Uri "$apiBase/mcp" -ContentType "application/json" -Body $statusToolBody -TimeoutSec 15
+    if ($statusTool.result.structuredContent.state -ne "running" -or $statusTool.result.isError) {
+        throw "MCP HomeServer status tool failed"
+    }
+    $browserRequest = Invoke-WebRequest -SkipHttpErrorCheck -Method Post -Headers (@{ Authorization = "Bearer $($credential.token)"; Origin = "https://example.invalid" }) -Uri "$apiBase/mcp" -ContentType "application/json" -Body $toolsBody -TimeoutSec 10
+    if ($browserRequest.StatusCode -ne 403) {
+        throw "Browser-originated MCP request was not rejected"
+    }
+    $previousMcpToken = $env:MG_HOMESERVER_MCP_TOKEN
+    try {
+        $env:MG_HOMESERVER_MCP_TOKEN = $credential.token
+        $bridgeOutput = $initializeBody | & $mcpBinaryPath
+        if ($LASTEXITCODE -ne 0) { throw "Packaged MCP stdio bridge exited with code $LASTEXITCODE" }
+        $bridgeResult = ($bridgeOutput | Out-String).Trim() | ConvertFrom-Json
+        if ($bridgeResult.result.protocolVersion -ne "2025-11-25") {
+            throw "Packaged MCP stdio bridge did not complete initialize"
+        }
+    }
+    finally {
+        $env:MG_HOMESERVER_MCP_TOKEN = $previousMcpToken
+    }
+    $revokeBody = @{ client_id = $credential.client.client_id; confirmation = "REVOKE" } | ConvertTo-Json -Compress
+    $revoked = Invoke-RestMethod -Method Post -Headers $controlHeaders -Uri "$apiBase/v1/mcp/clients/revoke" -ContentType "application/json" -Body $revokeBody -TimeoutSec 10
+    if ($revoked.client.state -ne "revoked") { throw "MCP client revocation did not persist" }
+    $revokedRequest = Invoke-WebRequest -SkipHttpErrorCheck -Method Post -Headers $mcpHeaders -Uri "$apiBase/mcp" -ContentType "application/json" -Body $toolsBody -TimeoutSec 10
+    if ($revokedRequest.StatusCode -ne 401) { throw "Revoked MCP token remained authorized" }
 
     $manualBody = @{
         kind = "manual"

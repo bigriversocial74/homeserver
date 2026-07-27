@@ -2,8 +2,8 @@
 mod cloud_connector;
 
 use crate::{
-    backup, config::AppConfig, database, document_extraction, http, knowledge_vault, model_center,
-    semantic_vault, update, update_store, AppState,
+    backup, config::AppConfig, database, document_extraction, http, knowledge_vault, mcp_runtime,
+    model_center, semantic_vault, update, update_store, AppState,
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -34,6 +34,7 @@ pub async fn run(
     document_extraction::initialize(&connection)?;
     model_center::initialize(&connection)?;
     semantic_vault::initialize(&connection)?;
+    mcp_runtime::initialize(&connection)?;
     if let Some(outcome) = restore_outcome {
         match outcome {
             backup::RestoreOutcome::Applied {
@@ -98,7 +99,8 @@ pub async fn run(
             .merge(cloud_connector::router(state.clone()))
             .merge(knowledge_vault::router(state.clone()))
             .merge(model_center::router(state.clone()))
-            .merge(semantic_vault::router(state)),
+            .merge(semantic_vault::router(state.clone()))
+            .merge(mcp_runtime::router(state)),
     );
     let result = axum::serve(listener, router)
         .with_graceful_shutdown(wait_for_shutdown(shutdown))

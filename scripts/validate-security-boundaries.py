@@ -72,7 +72,8 @@ for marker in (
     ".merge(cloud_connector::router(state.clone()))",
     ".merge(knowledge_vault::router(state.clone()))",
     ".merge(model_center::router(state.clone()))",
-    ".merge(semantic_vault::router(state))",
+    ".merge(semantic_vault::router(state.clone()))",
+    ".merge(mcp_runtime::router(state))",
 ):
     require(
         "crates/homeserver-service/src/app.rs",
@@ -161,6 +162,38 @@ forbid(
     "src-tauri/tauri.conf.json",
     "unsafe-inline",
     "Control Center CSP still permits unsafe inline content",
+)
+
+# Phase 5A MCP must remain fixed-loopback, client-scoped, read-only, and audited.
+for marker in (
+    'const MCP_ENDPOINT: &str = "http://127.0.0.1:47831/mcp"',
+    'const MAX_MCP_BODY_BYTES: usize = 128 * 1024',
+    'const MAX_MCP_REQUESTS_PER_MINUTE: i64 = 120',
+    'hash_token(&token)',
+    'readOnlyHint": true',
+    'destructiveHint": false',
+    'mcp_audit_receipts',
+):
+    require(
+        "crates/homeserver-service/src/mcp_runtime.rs",
+        marker,
+        f"local MCP boundary is missing {marker}",
+    )
+for marker in ("0.0.0.0", "https://", "MG_HOMESERVER_MCP_URL"):
+    forbid(
+        "crates/homeserver-service/src/mcp_runtime.rs",
+        marker,
+        f"local MCP runtime contains a disallowed network boundary: {marker}",
+    )
+require(
+    "crates/homeserver-mcp/src/main.rs",
+    'const MCP_ENDPOINT: &str = "http://127.0.0.1:47831/mcp"',
+    "MCP stdio bridge endpoint is not fixed to loopback",
+)
+require(
+    "src-tauri/tauri.conf.json",
+    "resources/microgifter-homeserver-mcp.exe",
+    "MCP stdio bridge is not packaged",
 )
 
 # Recovery packages and restore activation must be bounded and fail-safe.

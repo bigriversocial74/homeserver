@@ -461,7 +461,7 @@ pub async fn run(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>) {
 }
 
 impl AppState {
-    fn cloud_snapshot(&self) -> Result<CloudConnectionSnapshot> {
+    pub(crate) fn cloud_snapshot(&self) -> Result<CloudConnectionSnapshot> {
         cloud_connection(&*self.connection()?)
     }
 

@@ -1,4 +1,5 @@
 mod cloud;
+mod mcp;
 mod model;
 mod ollama_install;
 mod vault;
@@ -323,6 +324,10 @@ pub fn run() {
             model::homeserver_unload_model,
             model::homeserver_test_model,
             model::homeserver_update_model_settings,
+            mcp::homeserver_mcp,
+            mcp::homeserver_create_mcp_client,
+            mcp::homeserver_revoke_mcp_client,
+            mcp::homeserver_mcp_bridge_path,
             ollama_install::homeserver_open_ollama_official,
             ollama_install::homeserver_open_ollama_terminal,
         ])

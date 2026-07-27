@@ -1,6 +1,6 @@
 # Microgifter HomeServer
 
-Microgifter HomeServer is the private Windows edge platform for Microgifter. It provides a native Control Center, a background Windows service, local SQLite storage, cloud pairing and synchronization, encrypted backup and recovery, a local Knowledge Vault, bounded Ollama model management, diagnostics, and a signed-update/rollback foundation.
+Microgifter HomeServer is the private Windows edge platform for Microgifter. It provides a native Control Center, a background Windows service, local SQLite storage, cloud pairing and synchronization, encrypted backup and recovery, a local Knowledge Vault, bounded Ollama model management, a client-scoped read-only MCP runtime, diagnostics, and a signed-update/rollback foundation.
 
 The dedicated `bigriversocial74/homeserver` repository is the implementation authority. The approved product and technical blueprint is maintained in `docs/product-technical-blueprint.md`.
 
@@ -36,7 +36,7 @@ See `docs/release-v0.1.3.md` for both the temporary internal-test procedure and 
 
 ## Security boundaries
 
-- The service does not expose a LAN, public database, model, or MCP listener. The optional Ollama integration is fixed to its loopback endpoint at `127.0.0.1:11434`.
+- The service does not expose a LAN, public database, model, or MCP listener. Ollama is fixed to `127.0.0.1:11434`; MCP is fixed to `127.0.0.1:47831/mcp` and requires an active scoped client token.
 - Browser-originated local API requests are rejected.
 - State-changing local API calls require the trusted Control Center marker.
 - Cloud requests use HTTPS, bearer credentials, Ed25519 request signatures, timestamps, and nonces.
@@ -96,5 +96,6 @@ The v0.1.3 production workflow additionally requires an exact semantic-version t
 - Phase 4B foundation: fixed-loopback Ollama detection, approved model catalog, local inventory, bounded pull tracking, local testing, unload/delete controls, default model assignments, and a user-controlled Windows installation assistant.
 - Phase 4C foundation: local PDF and DOCX extraction, page metadata, scanned-document detection, bounded local Tesseract/Poppler OCR, retry-safe extraction state, and Control Center runtime guidance.
 - Phase 4D foundation: bounded local embeddings, restart-safe semantic indexing, stale detection, page-aware cited keyword/semantic/hybrid retrieval, and Control Center progress.
+- Phase 5A foundation: fixed-loopback Streamable HTTP and packaged stdio MCP transports, hashed client credentials, revocation, rate limits, audit receipts, and client-scoped read-only local tools/resources.
 
-MCP runtime and broader Linux/NAS deployment remain future phases and are not represented as complete.
+Supervised state-changing agents and broader Linux/NAS deployment remain future phases and are not represented as complete.
