@@ -52,6 +52,11 @@ jobs:
               exit $LASTEXITCODE
             }
             python scripts/apply-phase5c-operational-data.py *>> phase5c-integration.log
+            if ($LASTEXITCODE -ne 0) {
+              Get-Content phase5c-integration.log -Tail 400
+              exit $LASTEXITCODE
+            }
+            python scripts/fix-phase5c-rust-quality.py *>> phase5c-integration.log
             $exitCode = $LASTEXITCODE
             Get-Content phase5c-integration.log -Tail 400
             if ($exitCode -ne 0) { exit $exitCode }
