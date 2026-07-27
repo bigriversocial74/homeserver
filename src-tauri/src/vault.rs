@@ -25,9 +25,7 @@ pub(crate) async fn homeserver_semantic_vault() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub(crate) async fn homeserver_rebuild_semantic_vault(
-    force: bool,
-) -> Result<Value, String> {
+pub(crate) async fn homeserver_rebuild_semantic_vault(force: bool) -> Result<Value, String> {
     post_json("/v1/vault/semantic/rebuild", &json!({ "force": force })).await
 }
 

@@ -204,18 +204,18 @@ async fn rebuild_semantic_index(
 ) -> ApiResult<SemanticActionResult> {
     let force = request.force;
     let state_for_begin = state.clone();
-    let (operation, started) = tokio::task::spawn_blocking(move || {
-        begin_rebuild(&state_for_begin, force)
-    })
-    .await
-    .map_err(task_error)?
-    .map_err(|error| action_error("semantic_rebuild_rejected", error))?;
+    let (operation, started) =
+        tokio::task::spawn_blocking(move || begin_rebuild(&state_for_begin, force))
+            .await
+            .map_err(task_error)?
+            .map_err(|error| action_error("semantic_rebuild_rejected", error))?;
 
     if started {
         let task_state = state.clone();
         let task_operation = operation.clone();
         tokio::spawn(async move {
-            if let Err(error) = run_rebuild(task_state.clone(), task_operation.clone(), force).await {
+            if let Err(error) = run_rebuild(task_state.clone(), task_operation.clone(), force).await
+            {
                 let failure_code = public_failure_code(&error);
                 let operation_id = task_operation.operation_id.clone();
                 let state_for_finish = task_state.clone();
@@ -257,7 +257,8 @@ async fn search_semantic_index(
 
 fn snapshot(state: &AppState) -> Result<SemanticVaultSnapshot> {
     let connection = state.connection()?;
-    let default_embedding_model = model_center::configured_embedding_model_from_connection(&connection)?;
+    let default_embedding_model =
+        model_center::configured_embedding_model_from_connection(&connection)?;
     refresh_stale_states(&connection, default_embedding_model.as_deref())?;
     let counts = connection.query_row(
         "SELECT COALESCE(SUM(CASE WHEN d.state='indexed' AND s.state='ready' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN d.state='indexed' AND (s.document_id IS NULL OR s.state IN ('pending','stale')) THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN s.state='failed' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN s.state='ready' THEN s.chunk_count ELSE 0 END),0),COALESCE(MAX(CASE WHEN s.state='ready' THEN s.dimensions ELSE 0 END),0),MAX(CASE WHEN s.state='ready' THEN s.embedded_at_utc END) FROM vault_documents d LEFT JOIN vault_semantic_documents s ON s.document_id=d.document_id",
@@ -329,7 +330,10 @@ fn begin_rebuild(state: &AppState, force: bool) -> Result<(SemanticOperation, bo
         [],
         |row| row.get(0),
     )?;
-    ensure!(document_count > 0, "import and index a document before building semantic search");
+    ensure!(
+        document_count > 0,
+        "import and index a document before building semantic search"
+    );
     ensure!(
         document_count as usize <= MAX_DOCUMENTS_PER_REBUILD,
         "semantic rebuild exceeds the 200 document safety limit"
@@ -486,12 +490,8 @@ async fn index_document(
 
     let mut embeddings = Vec::with_capacity(chunks.len());
     for batch in chunks.chunks(EMBEDDING_BATCH_SIZE) {
-        let values = model_center::embed_texts(
-            state.clone(),
-            model.to_owned(),
-            batch.to_vec(),
-        )
-        .await?;
+        let values =
+            model_center::embed_texts(state.clone(), model.to_owned(), batch.to_vec()).await?;
         ensure!(
             values.len() == batch.len(),
             "embedding runtime returned an unexpected batch size"
@@ -539,7 +539,12 @@ async fn semantic_search(
         query.chars().count() <= MAX_QUERY_CHARS,
         "search query exceeds the 200 character limit"
     );
-    let mode = request.mode.as_deref().unwrap_or("hybrid").trim().to_ascii_lowercase();
+    let mode = request
+        .mode
+        .as_deref()
+        .unwrap_or("hybrid")
+        .trim()
+        .to_ascii_lowercase();
     ensure!(
         matches!(mode.as_str(), "keyword" | "semantic" | "hybrid"),
         "search mode must be keyword, semantic, or hybrid"
@@ -563,14 +568,16 @@ async fn semantic_search(
     }
 
     let query_embedding = if mode != "keyword" && semantic_available {
-        let model_name = model.clone().context("semantic embedding model is missing")?;
-        let mut result = model_center::embed_texts(
-            state.clone(),
-            model_name,
-            vec![query.clone()],
+        let model_name = model
+            .clone()
+            .context("semantic embedding model is missing")?;
+        let mut result =
+            model_center::embed_texts(state.clone(), model_name, vec![query.clone()]).await?;
+        Some(
+            result
+                .pop()
+                .context("embedding runtime returned no query vector")?,
         )
-        .await?;
-        Some(result.pop().context("embedding runtime returned no query vector")?)
     } else {
         None
     };
@@ -613,7 +620,10 @@ fn search_inventory(
         "SELECT c.document_id,d.title,d.file_name,d.content_type,c.chunk_ordinal,c.page_number,c.chunk_text,c.embedding_json,c.dimensions FROM vault_semantic_chunks c JOIN vault_semantic_documents s ON s.document_id=c.document_id JOIN vault_documents d ON d.document_id=c.document_id WHERE s.state='ready' AND s.embedding_model=?1 AND c.embedding_model=?1 AND d.state='indexed' ORDER BY c.document_id,c.chunk_ordinal LIMIT ?2",
     )?;
     let chunks = chunk_statement
-        .query_map(params![model_name, MAX_SEARCH_CHUNKS as i64], stored_chunk_from_row)?
+        .query_map(
+            params![model_name, MAX_SEARCH_CHUNKS as i64],
+            stored_chunk_from_row,
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let _ = query;
     Ok((model, keyword_documents, chunks))
@@ -662,18 +672,20 @@ fn rank_results(
                 continue;
             }
             let similarity = cosine_similarity(query_vector, &chunk.embedding);
-            let entry = ranked.entry(chunk.document_id.clone()).or_insert_with(|| RankedDocument {
-                document_id: chunk.document_id.clone(),
-                title: chunk.title.clone(),
-                file_name: chunk.file_name.clone(),
-                content_type: chunk.content_type.clone(),
-                snippet: semantic_snippet(&chunk.chunk_text),
-                citation: citation(&chunk.file_name, chunk.page_number, chunk.chunk_ordinal),
-                chunk_ordinal: Some(chunk.chunk_ordinal),
-                page_number: chunk.page_number,
-                keyword_score: 0,
-                semantic_score: similarity,
-            });
+            let entry = ranked
+                .entry(chunk.document_id.clone())
+                .or_insert_with(|| RankedDocument {
+                    document_id: chunk.document_id.clone(),
+                    title: chunk.title.clone(),
+                    file_name: chunk.file_name.clone(),
+                    content_type: chunk.content_type.clone(),
+                    snippet: semantic_snippet(&chunk.chunk_text),
+                    citation: citation(&chunk.file_name, chunk.page_number, chunk.chunk_ordinal),
+                    chunk_ordinal: Some(chunk.chunk_ordinal),
+                    page_number: chunk.page_number,
+                    keyword_score: 0,
+                    semantic_score: similarity,
+                });
             if similarity > entry.semantic_score || entry.chunk_ordinal.is_none() {
                 entry.semantic_score = similarity;
                 entry.snippet = semantic_snippet(&chunk.chunk_text);
@@ -734,7 +746,10 @@ fn source_documents(state: &AppState) -> Result<Vec<SourceDocument>> {
         "SELECT document_id,title,file_name,content_type,sha256,indexed_text FROM vault_documents WHERE state='indexed' AND length(indexed_text) > 0 ORDER BY document_id LIMIT ?1",
     )?;
     let documents = statement
-        .query_map(params![MAX_DOCUMENTS_PER_REBUILD as i64], source_document_from_row)?
+        .query_map(
+            params![MAX_DOCUMENTS_PER_REBUILD as i64],
+            source_document_from_row,
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(documents)
 }
@@ -753,11 +768,7 @@ fn source_document_from_row(row: &Row<'_>) -> rusqlite::Result<SourceDocument> {
 fn stored_chunk_from_row(row: &Row<'_>) -> rusqlite::Result<StoredChunk> {
     let embedding_json = row.get::<_, String>(7)?;
     let embedding: Vec<f32> = serde_json::from_str(&embedding_json).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(
-            7,
-            rusqlite::types::Type::Text,
-            Box::new(error),
-        )
+        rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(error))
     })?;
     let dimensions = row.get::<_, i64>(8)?.max(0) as usize;
     if embedding.len() != dimensions || embedding.len() > MAX_EMBEDDING_DIMENSIONS {
@@ -802,9 +813,7 @@ fn semantic_document_is_current(
         )
         .optional()?;
     Ok(current.is_some_and(|(status, current_model, current_sha)| {
-        status == "ready"
-            && current_model.as_deref() == Some(model)
-            && current_sha == source_sha256
+        status == "ready" && current_model.as_deref() == Some(model) && current_sha == source_sha256
     }))
 }
 
@@ -845,7 +854,10 @@ fn store_document_embeddings(
     embeddings: Vec<Vec<f32>>,
     dimensions: usize,
 ) -> Result<()> {
-    ensure!(chunks.len() == embeddings.len(), "chunk and embedding counts differ");
+    ensure!(
+        chunks.len() == embeddings.len(),
+        "chunk and embedding counts differ"
+    );
     let mut connection = state.connection()?;
     let transaction = connection.transaction()?;
     transaction.execute(
@@ -924,7 +936,9 @@ fn latest_operation(connection: &Connection) -> Result<Option<SemanticOperation>
 fn operation_by_id(connection: &Connection, operation_id: &str) -> Result<SemanticOperation> {
     connection
         .query_row(
-            &format!("SELECT {OPERATION_COLUMNS} FROM vault_semantic_operations WHERE operation_id=?1"),
+            &format!(
+                "SELECT {OPERATION_COLUMNS} FROM vault_semantic_operations WHERE operation_id=?1"
+            ),
             params![operation_id],
             operation_from_row,
         )
@@ -1205,7 +1219,9 @@ mod tests {
         let chunks = chunk_text(&text);
         assert!(!chunks.is_empty());
         assert!(chunks.len() <= MAX_CHUNKS_PER_DOCUMENT);
-        assert!(chunks.iter().all(|chunk| chunk.chars().count() <= CHUNK_TARGET_CHARS + 1));
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.chars().count() <= CHUNK_TARGET_CHARS + 1));
         assert_eq!(chunks, chunk_text(&text));
     }
 
