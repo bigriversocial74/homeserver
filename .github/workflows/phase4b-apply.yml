@@ -68,7 +68,19 @@ jobs:
           npm run build
 
       - name: Check Rust workspace
-        run: cargo check --workspace --locked
+        shell: pwsh
+        run: |
+          cargo check --workspace --locked *> cargo-check.log
+          if ($LASTEXITCODE -ne 0) { Get-Content cargo-check.log -Tail 320; exit $LASTEXITCODE }
+
+      - name: Upload Rust compiler log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase4b-cargo-check
+          path: cargo-check.log
+          if-no-files-found: warn
+          retention-days: 2
 
       - name: Test Rust workspace
         run: cargo test --workspace --locked
