@@ -108,17 +108,6 @@ jobs:
           cargo fmt --all
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Validate reconstructed workspace
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          cargo check --workspace --locked
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --workspace --locked
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo clippy --workspace --all-targets --locked -- -D warnings
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       - name: Commit materialized source
         shell: pwsh
         run: |
@@ -132,3 +121,21 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'Materialize verified Phase 5A source'
           git push origin HEAD:repair/materialize-phase-5a-source-20260727
+
+      - name: Workspace check
+        shell: pwsh
+        run: |
+          cargo check --workspace --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Workspace tests
+        shell: pwsh
+        run: |
+          cargo test --workspace --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Strict workspace Clippy
+        shell: pwsh
+        run: |
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
