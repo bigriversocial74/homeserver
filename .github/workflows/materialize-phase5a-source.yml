@@ -1,5 +1,6 @@
 name: Materialize Phase 5A source
 
+# Second commit intentionally triggers this already-present one-time workflow.
 on:
   push:
     branches:
