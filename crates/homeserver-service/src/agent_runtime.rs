@@ -827,7 +827,6 @@ async fn handle_prompt(
     };
 
     let assistant_text = generate_grounded_response(
-        state.clone(),
         &request,
         &selected_connections,
         &selected_goals,
@@ -861,7 +860,6 @@ async fn handle_prompt(
 }
 
 async fn generate_grounded_response(
-    state: Arc<AppState>,
     request: &AgentPromptRequest,
     connections: &[cloud_registry::CloudConnectionSummary],
     goals: &[AgentGoalSummary],
@@ -2574,4 +2572,114 @@ fn internal_error(code: &'static str, error: anyhow::Error) -> (StatusCode, Json
                 .to_owned(),
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database;
+    use tempfile::{tempdir, TempDir};
+
+    fn initialized_connection() -> (TempDir, Connection) {
+        let directory = tempdir().unwrap();
+        let connection =
+            database::initialize(&directory.path().join("agent-runtime.sqlite3")).unwrap();
+        cloud_registry::initialize(&connection).unwrap();
+        initialize(&connection).unwrap();
+        (directory, connection)
+    }
+
+    #[test]
+    fn supervised_agent_migration_is_self_consistent() {
+        let (_directory, connection) = initialized_connection();
+        health_check(&connection).unwrap();
+        let table_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('agent_goals','agent_plans','agent_approvals','agent_execution_receipts','world_missions','world_conversations','world_follow_ups')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_count, 7);
+    }
+
+    #[test]
+    fn bounded_action_arguments_reject_open_world_operations() {
+        assert!(validate_action_arguments("commerce.order.create", json!({})).is_err());
+        assert!(validate_action_arguments("cloud.sync_all", json!({"command":"whoami"})).is_err());
+        assert!(validate_action_arguments("backup.create", json!({"path":"C:/"})).is_err());
+        let report = validate_action_arguments(
+            "report.save",
+            json!({"title":"  Weekly operations  ","content_markdown":"  Evidence only.  "}),
+        )
+        .unwrap();
+        assert_eq!(report["title"], "Weekly operations");
+        assert_eq!(report["content_markdown"], "Evidence only.");
+    }
+
+    #[test]
+    fn world_mode_operations_are_closed_world() {
+        let defaults = normalize_world_operations(&[], false).unwrap();
+        assert_eq!(
+            defaults,
+            vec![
+                "discover".to_owned(),
+                "compare".to_owned(),
+                "prepare_recommendation".to_owned()
+            ]
+        );
+        assert!(normalize_world_operations(&["purchase".to_owned()], false).is_err());
+        assert_eq!(
+            normalize_world_operations(&["purchase".to_owned()], true).unwrap(),
+            vec!["purchase".to_owned()]
+        );
+    }
+
+    #[test]
+    fn supervised_agent_schema_enforces_one_approval_and_idempotency_record() {
+        let (_directory, connection) = initialized_connection();
+        let plan_id = Uuid::new_v4().to_string();
+        let approval_request_id = Uuid::new_v4().to_string();
+        let approval_id = Uuid::new_v4().to_string();
+        let now = now_string();
+        let expires =
+            (Utc::now() + ChronoDuration::minutes(30)).to_rfc3339_opts(SecondsFormat::Millis, true);
+        let plan_hash = "a".repeat(64);
+        connection
+            .execute(
+                "INSERT INTO agent_plans (plan_id,requested_by_type,requested_by_id,title,rationale,action_type,arguments_json,dataset_keys_json,risk_level,state,plan_hash,fresh_state_token,expires_at_utc) VALUES (?1,'local_user','test','Test backup','Schema contract','backup.create','{}','[]','low','approved',?2,'local-state',?3)",
+                params![plan_id, plan_hash, expires],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO agent_approval_requests (approval_request_id,plan_id,plan_hash,state,risk_summary,requested_at_utc,expires_at_utc) VALUES (?1,?2,?3,'approved','One bounded backup',?4,?5)",
+                params![approval_request_id, plan_id, plan_hash, now, expires],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO agent_approvals (approval_id,approval_request_id,plan_id,plan_hash,approved_by,approved_at_utc,expires_at_utc) VALUES (?1,?2,?3,?4,'local_test',?5,?6)",
+                params![approval_id, approval_request_id, plan_id, plan_hash, now, expires],
+            )
+            .unwrap();
+        assert!(connection
+            .execute(
+                "INSERT INTO agent_approvals (approval_id,approval_request_id,plan_id,plan_hash,approved_by,approved_at_utc,expires_at_utc) VALUES (?1,?2,?3,?4,'duplicate',?5,?6)",
+                params![Uuid::new_v4().to_string(), approval_request_id, plan_id, plan_hash, now, expires],
+            )
+            .is_err());
+        connection
+            .execute(
+                "INSERT INTO agent_action_idempotency (idempotency_key,plan_id,state,created_at_utc,updated_at_utc) VALUES ('agent:first',?1,'executing',?2,?2)",
+                params![plan_id, now],
+            )
+            .unwrap();
+        assert!(connection
+            .execute(
+                "INSERT INTO agent_action_idempotency (idempotency_key,plan_id,state,created_at_utc,updated_at_utc) VALUES ('agent:second',?1,'executing',?2,?2)",
+                params![plan_id, now],
+            )
+            .is_err());
+    }
 }
