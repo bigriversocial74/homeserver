@@ -147,6 +147,10 @@ jobs:
             updater-build.log
             mcp-build.log
             rustfmt.patch
+            crates/homeserver-service/src/app.rs
+            crates/homeserver-service/src/cloud_pairing_v2.rs
+            crates/homeserver-service/src/cloud_registry.rs
+            src-tauri/src/cloud.rs
           if-no-files-found: warn
           retention-days: 7
 
