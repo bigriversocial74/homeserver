@@ -26,6 +26,11 @@ jobs:
           fetch-depth: 0
 
       - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5e5dd43e44045a
+        continue-on-error: true
+
+      - name: Install pinned Rust toolchain
+        if: steps.rust-toolchain.outcome == 'failure'
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           components: rustfmt, clippy
@@ -36,6 +41,8 @@ jobs:
           python scripts/fix-phase5b-patch-anchor.py *> phase5b-integration.log
           if ($LASTEXITCODE -ne 0) { Get-Content phase5b-integration.log -Tail 200; exit $LASTEXITCODE }
           python scripts/apply-phase5b-agent-workspace.py *>> phase5b-integration.log
+          if ($LASTEXITCODE -ne 0) { Get-Content phase5b-integration.log -Tail 200; exit $LASTEXITCODE }
+          python scripts/fix-phase5b-compiler.py *>> phase5b-integration.log
           if ($LASTEXITCODE -ne 0) { Get-Content phase5b-integration.log -Tail 200; exit $LASTEXITCODE }
           cargo fmt --all *>> phase5b-integration.log
           if ($LASTEXITCODE -ne 0) { Get-Content phase5b-integration.log -Tail 200; exit $LASTEXITCODE }
