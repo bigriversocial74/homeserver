@@ -31,7 +31,9 @@ fn launch_url(_url: &'static str, _target: &'static str) -> Result<OllamaSetupLa
 }
 
 #[tauri::command]
-pub(crate) async fn homeserver_open_ollama_official(target: String) -> Result<OllamaSetupLaunchResult, String> {
+pub(crate) fn homeserver_open_ollama_official(
+    target: String,
+) -> Result<OllamaSetupLaunchResult, String> {
     match target.as_str() {
         "installer" => launch_url(OLLAMA_SETUP_URL, "installer"),
         "documentation" => launch_url(OLLAMA_WINDOWS_PAGE, "Windows documentation"),
@@ -40,7 +42,7 @@ pub(crate) async fn homeserver_open_ollama_official(target: String) -> Result<Ol
 }
 
 #[tauri::command]
-pub(crate) async fn homeserver_open_ollama_terminal() -> Result<OllamaSetupLaunchResult, String> {
+pub(crate) fn homeserver_open_ollama_terminal() -> Result<OllamaSetupLaunchResult, String> {
     #[cfg(windows)]
     {
         let message = format!(
@@ -51,11 +53,11 @@ pub(crate) async fn homeserver_open_ollama_terminal() -> Result<OllamaSetupLaunc
             .args(["-NoLogo", "-NoProfile", "-NoExit", "-Command", &message])
             .spawn()
             .map_err(|error| format!("Unable to open PowerShell: {error}"))?;
-        return Ok(OllamaSetupLaunchResult {
+        Ok(OllamaSetupLaunchResult {
             launched: true,
             target: "powershell",
             message: "Opened PowerShell. Paste the copied official Ollama install command when ready.".to_owned(),
-        });
+        })
     }
 
     #[cfg(not(windows))]
