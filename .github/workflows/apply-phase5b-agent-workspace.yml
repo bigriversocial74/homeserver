@@ -33,16 +33,16 @@ jobs:
       - name: Apply deterministic integration patch
         shell: pwsh
         run: |
-          python scripts/apply-phase5b-agent-workspace.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo fmt --all
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node --check src/agent-workspace.js
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/validate-agent-workspace.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/validate-mcp-runtime.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/apply-phase5b-agent-workspace.py *> phase5b-integration.log
+          if ($LASTEXITCODE -ne 0) { Get-Content phase5b-integration.log -Tail 200; exit $LASTEXITCODE }
+          cargo fmt --all *>> phase5b-integration.log
+          if ($LASTEXITCODE -ne 0) { Get-Content phase5b-integration.log -Tail 200; exit $LASTEXITCODE }
+          node --check src/agent-workspace.js *>> phase5b-integration.log
+          if ($LASTEXITCODE -ne 0) { Get-Content phase5b-integration.log -Tail 200; exit $LASTEXITCODE }
+          python scripts/validate-agent-workspace.py *>> phase5b-integration.log
+          if ($LASTEXITCODE -ne 0) { Get-Content phase5b-integration.log -Tail 200; exit $LASTEXITCODE }
+          python scripts/validate-mcp-runtime.py *>> phase5b-integration.log
+          if ($LASTEXITCODE -ne 0) { Get-Content phase5b-integration.log -Tail 200; exit $LASTEXITCODE }
           cargo check --package microgifter-homeserver-service --package microgifter-homeserver-control-center --locked *> phase5b-agent-check.log
           if ($LASTEXITCODE -ne 0) { Get-Content phase5b-agent-check.log -Tail 300; exit $LASTEXITCODE }
           git config user.name "github-actions[bot]"
@@ -53,11 +53,13 @@ jobs:
             git push origin HEAD:feature/phase-5b-agent-workspace-approvals-world-missions-20260727
           }
 
-      - name: Upload focused compiler log
+      - name: Upload focused integration logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: phase5b-agent-workspace-check
-          path: phase5b-agent-check.log
+          path: |
+            phase5b-integration.log
+            phase5b-agent-check.log
           if-no-files-found: warn
           retention-days: 7
