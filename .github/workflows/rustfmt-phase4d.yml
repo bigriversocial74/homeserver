@@ -1,0 +1,40 @@
+name: Phase 4D Rustfmt Diagnostic
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  rustfmt:
+    runs-on: windows-2025
+    steps:
+      - name: Check out exact branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Install Rust formatting tool
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+      - name: Apply formatter
+        shell: pwsh
+        run: |
+          cargo fmt --all
+          New-Item -ItemType Directory -Force -Path rustfmt-output/crates/homeserver-service/src | Out-Null
+          New-Item -ItemType Directory -Force -Path rustfmt-output/src-tauri/src | Out-Null
+          Copy-Item crates/homeserver-service/src/app.rs rustfmt-output/crates/homeserver-service/src/app.rs
+          Copy-Item crates/homeserver-service/src/main.rs rustfmt-output/crates/homeserver-service/src/main.rs
+          Copy-Item crates/homeserver-service/src/model_center.rs rustfmt-output/crates/homeserver-service/src/model_center.rs
+          Copy-Item crates/homeserver-service/src/semantic_vault.rs rustfmt-output/crates/homeserver-service/src/semantic_vault.rs
+          Copy-Item src-tauri/src/lib.rs rustfmt-output/src-tauri/src/lib.rs
+          Copy-Item src-tauri/src/vault.rs rustfmt-output/src-tauri/src/vault.rs
+          git diff -- crates/homeserver-service/src/app.rs crates/homeserver-service/src/main.rs crates/homeserver-service/src/model_center.rs crates/homeserver-service/src/semantic_vault.rs src-tauri/src/lib.rs src-tauri/src/vault.rs | Set-Content rustfmt-output/rustfmt.patch
+      - name: Upload exact formatted files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase4d-rustfmt-output
+          path: rustfmt-output
+          if-no-files-found: error
+          retention-days: 1
