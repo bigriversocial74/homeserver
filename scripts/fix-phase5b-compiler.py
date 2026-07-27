@@ -10,7 +10,7 @@ def patch(path: str, old: str, new: str) -> None:
     content = target.read_text(encoding="utf-8")
     count = content.count(old)
     if count != 1:
-        raise SystemExit(f"{path}: expected one compiler-repair anchor, found {count}")
+        raise SystemExit(f"{path}: expected one compiler-repair anchor, found {count}: {old[:80]!r}")
     target.write_text(content.replace(old, new, 1), encoding="utf-8", newline="\n")
 
 
@@ -45,11 +45,7 @@ patch(
             );
             object.insert(
                 "content_markdown".to_owned(),
-                Value::String(sanitize_required_text(
-                    content,
-                    MAX_REPORT_CHARS,
-                    "report content",
-                )?),
+                Value::String(sanitize_required_text(content, MAX_REPORT_CHARS, "report content")?),
             );''',
     '''            let title = sanitize_required_text(
                 object
