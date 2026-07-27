@@ -1,6 +1,13 @@
 name: Phase 4B Model Center Bootstrap
 
 on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - scripts/phase4b_bootstrap.py
+      - scripts/phase4b_parts/**
+      - .github/workflows/phase4b-bootstrap.yml
   push:
     branches:
       - feature/phase-4b-local-model-center-20260727
