@@ -127,7 +127,7 @@ for marker in (
     "cannot approve",
     "World Mission",
     "Phase 5C",
-    "connected platforms remain authoritative",
+    "Connected platforms remain authoritative",
 ):
     require(DOC, marker, f"Agent Workspace documentation is missing {marker}")
 
@@ -162,7 +162,7 @@ for forbidden in ("0.0.0.0", "localhost:", "MG_HOMESERVER_AGENT_URL"):
     forbid(SERVICE, forbidden, f"Agent runtime contains a configurable or non-fixed local boundary: {forbidden}")
 
 require("crates/homeserver-service/src/app.rs", ".merge(agent_runtime::router(state.clone()))", "Agent Workspace router is not inside the secured local API")
-require("crates/homeserver-service/src/main.rs", "agent_runtime::initialize(&connection)?", "Agent Workspace migration is not initialized")
+require("crates/homeserver-service/src/app.rs", "agent_runtime::initialize(&connection)?", "Agent Workspace migration is not initialized")
 require("src-tauri/src/lib.rs", "mod agent;", "Agent Workspace Tauri module is not registered")
 require("index.html", "/src/agent-workspace.js", "Agent Workspace frontend module is not loaded")
 require("package.json", "validate-agent-workspace.py", "Agent Workspace validator is not part of frontend validation")
