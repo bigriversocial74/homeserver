@@ -103,13 +103,8 @@ jobs:
       - name: Prepare generated Windows resources
         run: npm run prepare:icons
 
-      - name: Rust formatting diagnostic
-        shell: pwsh
-        run: |
-          cargo fmt --all
-          git diff -- "*.rs" | Set-Content rustfmt.patch
-          if (Test-Path rustfmt.patch) { Get-Content rustfmt.patch -Tail 400 }
-          git diff --exit-code -- "*.rs"
+      - name: Rust formatting
+        run: cargo fmt --all --check
 
       - name: Build native service, updater, and MCP bridge from clean output
         shell: pwsh
@@ -146,11 +141,6 @@ jobs:
             service-build.log
             updater-build.log
             mcp-build.log
-            rustfmt.patch
-            crates/homeserver-service/src/app.rs
-            crates/homeserver-service/src/cloud_pairing_v2.rs
-            crates/homeserver-service/src/cloud_registry.rs
-            src-tauri/src/cloud.rs
           if-no-files-found: warn
           retention-days: 7
 
