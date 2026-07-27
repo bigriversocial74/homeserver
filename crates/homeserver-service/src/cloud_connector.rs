@@ -18,8 +18,6 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{net::IpAddr, sync::Arc, time::Duration};
-use tokio::sync::watch;
-use tracing::{info, warn};
 use url::Url;
 use uuid::Uuid;
 use zeroize::Zeroize;
@@ -36,7 +34,6 @@ const MAX_SYNC_PAYLOAD_BYTES: usize = 48 * 1024;
 const MAX_CLOUD_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_PENDING_SYNC_OPERATIONS: u64 = 5_000;
 const MAX_SYNC_ATTEMPTS: u32 = 12;
-const SYNC_INTERVAL: Duration = Duration::from_secs(60);
 const ALLOWED_LOCAL_OPERATIONS: &[&str] = &[
     "device.heartbeat",
     "local.settings.snapshot",
@@ -424,40 +421,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/cloud/sync", post(sync_once))
         .layer(DefaultBodyLimit::max(MAX_CONTROL_BODY_BYTES))
         .with_state(state)
-}
-
-pub async fn run(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>) {
-    let mut interval = tokio::time::interval(SYNC_INTERVAL);
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-    loop {
-        tokio::select! {
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    info!("HomeServer synchronization worker stopped");
-                    return;
-                }
-            }
-            _ = interval.tick() => {
-                let connection = match state.cloud_snapshot() {
-                    Ok(snapshot) => snapshot,
-                    Err(error) => {
-                        warn!(?error, "unable to inspect HomeServer cloud state");
-                        continue;
-                    }
-                };
-                if matches!(connection.state, CloudConnectionState::NotPaired | CloudConnectionState::Revoked) {
-                    continue;
-                }
-                if let Err(error) = state.enqueue_heartbeat() {
-                    warn!(?error, "unable to queue HomeServer heartbeat");
-                }
-                if let Err(error) = state.sync_once().await {
-                    warn!(?error, "HomeServer synchronization attempt failed");
-                }
-            }
-        }
-    }
 }
 
 impl AppState {

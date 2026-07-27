@@ -1426,7 +1426,7 @@ fn validate_receipts(operations: &[QueuedOperation], receipts: &[ReceiptRecord])
             receipt
                 .reason_code
                 .as_deref()
-                .is_none_or(|value| value.len() <= 120),
+                .map_or(true, |value| value.len() <= 120),
             "cloud provider returned an oversized synchronization reason"
         );
         ensure!(
