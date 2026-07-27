@@ -1,4 +1,4 @@
-use crate::{model_center, semantic_vault, AppState};
+use crate::{agent_runtime, model_center, semantic_vault, AppState};
 use anyhow::{ensure, Context, Result};
 use axum::{
     body::{Body, Bytes},
@@ -39,6 +39,9 @@ const ALLOWED_SCOPES: &[&str] = &[
     "models.read",
     "knowledge.search",
     "knowledge.read",
+    "agents.read",
+    "agents.request",
+    "world.request",
 ];
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
@@ -78,6 +81,7 @@ pub struct McpRuntimeSnapshot {
     pub tools: Vec<String>,
     pub requests_per_minute: u64,
     pub read_only: bool,
+    pub request_only: bool,
     pub local_only: bool,
 }
 
@@ -151,10 +155,10 @@ impl RpcFailure {
     }
 
     fn internal(error: anyhow::Error, capability: &'static str) -> Self {
-        tracing::warn!(?error, capability, "read-only MCP operation failed");
+        tracing::warn!(?error, capability, "MCP operation failed");
         Self {
             code: -32603,
-            message: "HomeServer could not complete the local read-only operation.".to_owned(),
+            message: "HomeServer could not complete the local MCP operation.".to_owned(),
             capability,
             detail_code: "operation_failed",
         }
@@ -254,7 +258,7 @@ async fn mcp_get(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Resp
                 Json(json!({
                     "ok": false,
                     "error": "mcp_stream_unavailable",
-                    "message": "This read-only HomeServer MCP runtime is stateless. Use POST or the packaged stdio bridge."
+                    "message": "This supervised HomeServer MCP runtime is stateless. Use POST or the packaged stdio bridge."
                 })),
             )
                 .into_response();
@@ -535,10 +539,10 @@ fn initialize_result(params: &Value) -> Value {
         },
         "serverInfo": {
             "name": "Microgifter HomeServer",
-            "title": "Microgifter HomeServer — Read-only Local MCP",
+            "title": "Microgifter HomeServer — Supervised Local MCP",
             "version": env!("CARGO_PKG_VERSION")
         },
-        "instructions": "This server exposes only client-scoped, read-only local HomeServer status, model inventory, cloud status, and cited Knowledge Vault retrieval. It cannot modify files, models, cloud records, commerce, campaigns, rewards, claims, or settings."
+        "instructions": "This server exposes client-scoped local reads plus request-only HomeServer agent plans and World Mission drafts. MCP clients cannot approve, execute, dispatch, modify commerce, publish campaigns, issue rewards, redeem claims, run shell commands, or bypass the local Control Center."
     })
 }
 
@@ -646,10 +650,114 @@ async fn call_tool(
             .map_err(|error| RpcFailure::invalid_params(error.to_string(), "knowledge.read"))?;
             (payload, "knowledge.read")
         }
+        "homeserver_agent_workspace" => {
+            require_scope(client, "agents.read")?;
+            let snapshot = agent_runtime::workspace_snapshot(state.clone())
+                .await
+                .map_err(|error| RpcFailure::internal(error, "agents.read"))?;
+            (
+                serde_json::to_value(snapshot)
+                    .map_err(|error| RpcFailure::internal(error.into(), "agents.read"))?,
+                "agents.read",
+            )
+        }
+        "homeserver_agent_prompt" => {
+            require_scope(client, "agents.request")?;
+            let payload = agent_runtime::mcp_prompt(state.clone(), &client.client_id, arguments)
+                .await
+                .map_err(|error| RpcFailure::invalid_params(error.to_string(), "agents.request"))?;
+            (payload, "agents.request")
+        }
+        "homeserver_agent_plan_submit" => {
+            require_scope(client, "agents.request")?;
+            let state_for_plan = state.clone();
+            let client_id = client.client_id.clone();
+            let payload = tokio::task::spawn_blocking(move || {
+                agent_runtime::mcp_submit_plan(&state_for_plan, &client_id, arguments)
+            })
+            .await
+            .map_err(|error| RpcFailure::internal(error.into(), "agents.request"))?
+            .map_err(|error| RpcFailure::invalid_params(error.to_string(), "agents.request"))?;
+            (payload, "agents.request")
+        }
+        "homeserver_agent_plan_get" => {
+            require_scope(client, "agents.read")?;
+            let plan_id = required_string(&arguments, "plan_id", "agents.read")?;
+            let state_for_plan = state.clone();
+            let client_id = client.client_id.clone();
+            let payload = tokio::task::spawn_blocking(move || {
+                agent_runtime::mcp_get_plan(&state_for_plan, &plan_id, &client_id)
+            })
+            .await
+            .map_err(|error| RpcFailure::internal(error.into(), "agents.read"))?
+            .map_err(|error| RpcFailure::invalid_params(error.to_string(), "agents.read"))?;
+            (payload, "agents.read")
+        }
+        "homeserver_agent_plan_list" => {
+            require_scope(client, "agents.read")?;
+            let state_for_plan = state.clone();
+            let client_id = client.client_id.clone();
+            let payload = tokio::task::spawn_blocking(move || {
+                agent_runtime::mcp_list_plans(&state_for_plan, &client_id)
+            })
+            .await
+            .map_err(|error| RpcFailure::internal(error.into(), "agents.read"))?
+            .map_err(|error| RpcFailure::internal(error, "agents.read"))?;
+            (payload, "agents.read")
+        }
+        "homeserver_agent_plan_cancel" => {
+            require_scope(client, "agents.request")?;
+            let plan_id = required_string(&arguments, "plan_id", "agents.request")?;
+            let state_for_plan = state.clone();
+            let client_id = client.client_id.clone();
+            let payload = tokio::task::spawn_blocking(move || {
+                agent_runtime::mcp_cancel_plan(&state_for_plan, &client_id, &plan_id)
+            })
+            .await
+            .map_err(|error| RpcFailure::internal(error.into(), "agents.request"))?
+            .map_err(|error| RpcFailure::invalid_params(error.to_string(), "agents.request"))?;
+            (payload, "agents.request")
+        }
+        "homeserver_world_mission_draft" => {
+            require_scope(client, "world.request")?;
+            let state_for_mission = state.clone();
+            let client_id = client.client_id.clone();
+            let payload = tokio::task::spawn_blocking(move || {
+                agent_runtime::mcp_draft_world_mission(&state_for_mission, &client_id, arguments)
+            })
+            .await
+            .map_err(|error| RpcFailure::internal(error.into(), "world.request"))?
+            .map_err(|error| RpcFailure::invalid_params(error.to_string(), "world.request"))?;
+            (payload, "world.request")
+        }
+        "homeserver_world_mission_get" => {
+            require_scope(client, "agents.read")?;
+            let mission_id = required_string(&arguments, "mission_id", "agents.read")?;
+            let state_for_mission = state.clone();
+            let payload = tokio::task::spawn_blocking(move || {
+                agent_runtime::mcp_get_world_mission(&state_for_mission, &mission_id)
+            })
+            .await
+            .map_err(|error| RpcFailure::internal(error.into(), "agents.read"))?
+            .map_err(|error| RpcFailure::invalid_params(error.to_string(), "agents.read"))?;
+            (payload, "agents.read")
+        }
+        "homeserver_agent_receipts_list" => {
+            require_scope(client, "agents.read")?;
+            let state_for_receipts = state.clone();
+            let client_id = client.client_id.clone();
+            let payload = tokio::task::spawn_blocking(move || {
+                agent_runtime::mcp_list_receipts(&state_for_receipts, &client_id)
+            })
+            .await
+            .map_err(|error| RpcFailure::internal(error.into(), "agents.read"))?
+            .map_err(|error| RpcFailure::internal(error, "agents.read"))?;
+            (payload, "agents.read")
+        }
         _ => {
             return Err(RpcFailure {
                 code: -32602,
-                message: format!("Read-only MCP tool '{name}' is not available."),
+                message: format!("MCP tool '{name}' is not available."),
                 capability: "protocol",
                 detail_code: "tool_not_found",
             })
@@ -807,6 +915,73 @@ fn tool_definitions(scopes: &HashSet<String>) -> Vec<Value> {
             }),
         ));
     }
+    if scopes.contains("agents.read") {
+        tools.push(read_only_tool(
+            "homeserver_agent_workspace",
+            "Read the local Agent Workspace snapshot, goals, plans, approvals, World Mission drafts, and receipts.",
+            json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        ));
+        tools.push(read_only_tool(
+            "homeserver_agent_plan_get",
+            "Read one supervised plan requested by this MCP client.",
+            id_schema("plan_id"),
+        ));
+        tools.push(read_only_tool(
+            "homeserver_agent_plan_list",
+            "List supervised plans requested by this MCP client.",
+            json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        ));
+        tools.push(read_only_tool(
+            "homeserver_world_mission_get",
+            "Read one locally stored World Mission draft.",
+            id_schema("mission_id"),
+        ));
+        tools.push(read_only_tool(
+            "homeserver_agent_receipts_list",
+            "List execution receipts for this MCP client's approved plans.",
+            json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        ));
+    }
+    if scopes.contains("agents.request") {
+        tools.push(request_tool(
+            "homeserver_agent_prompt",
+            "Ask the private HomeServer agent to use selected local context. This tool cannot approve or execute actions.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "thread_id": { "type": ["string", "null"] },
+                    "mode": { "type": "string", "enum": ["ask", "analyze", "plan", "dispatch", "execute"] },
+                    "prompt": { "type": "string", "minLength": 1, "maxLength": 4000 },
+                    "connection_ids": { "type": "array", "maxItems": 20, "items": { "type": "string" } },
+                    "dataset_keys": { "type": "array", "maxItems": 20, "items": { "type": "string" } },
+                    "goal_ids": { "type": "array", "maxItems": 20, "items": { "type": "string" } },
+                    "knowledge_query": { "type": ["string", "null"], "maxLength": 200 },
+                    "model": { "type": ["string", "null"], "maxLength": 160 },
+                    "proposed_action": { "type": "null" },
+                    "world_mission": { "type": "null" }
+                },
+                "required": ["mode", "prompt"],
+                "additionalProperties": false
+            }),
+        ));
+        tools.push(request_tool(
+            "homeserver_agent_plan_submit",
+            "Submit a bounded supervised action plan for local approval. This tool cannot approve or execute it.",
+            plan_schema(),
+        ));
+        tools.push(request_tool(
+            "homeserver_agent_plan_cancel",
+            "Cancel an unexecuted plan requested by this MCP client.",
+            id_schema("plan_id"),
+        ));
+    }
+    if scopes.contains("world.request") {
+        tools.push(request_tool(
+            "homeserver_world_mission_draft",
+            "Draft a bounded World Mission locally. This tool cannot dispatch a World Agent.",
+            world_mission_schema(),
+        ));
+    }
     tools
 }
 
@@ -823,6 +998,85 @@ fn read_only_tool(name: &str, description: &str, input_schema: Value) -> Value {
             "openWorldHint": false
         }
     })
+}
+
+fn request_tool(name: &str, description: &str, input_schema: Value) -> Value {
+    json!({
+        "name": name,
+        "title": name.replace('_', " "),
+        "description": description,
+        "inputSchema": input_schema,
+        "annotations": {
+            "readOnlyHint": false,
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "requestOnly": true
+        }
+    })
+}
+
+fn id_schema(field: &str) -> Value {
+    json!({
+        "type": "object",
+        "properties": { field: { "type": "string", "minLength": 1, "maxLength": 80 } },
+        "required": [field],
+        "additionalProperties": false
+    })
+}
+
+fn plan_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "thread_id": { "type": ["string", "null"] },
+            "title": { "type": "string", "minLength": 1, "maxLength": 180 },
+            "rationale": { "type": "string", "minLength": 1, "maxLength": 4000 },
+            "action_type": { "type": "string", "enum": ["backup.create", "model.health_test", "cloud.sync_connection", "cloud.sync_all", "report.save"] },
+            "arguments": { "type": "object" },
+            "connection_id": { "type": ["string", "null"] },
+            "goal_id": { "type": ["string", "null"] },
+            "dataset_keys": { "type": "array", "maxItems": 20, "items": { "type": "string" } },
+            "expires_minutes": { "type": ["integer", "null"], "minimum": 5, "maximum": 1440 }
+        },
+        "required": ["title", "rationale", "action_type"],
+        "additionalProperties": false
+    })
+}
+
+fn world_mission_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "thread_id": { "type": ["string", "null"] },
+            "goal_id": { "type": ["string", "null"] },
+            "connection_id": { "type": ["string", "null"] },
+            "world_agent_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+            "title": { "type": "string", "minLength": 1, "maxLength": 180 },
+            "objective": { "type": "string", "minLength": 1, "maxLength": 4000 },
+            "allowed_operations": { "type": "array", "maxItems": 20, "items": { "type": "string" } },
+            "prohibited_operations": { "type": "array", "maxItems": 20, "items": { "type": "string" } },
+            "limits": { "type": "object" },
+            "disclosure_policy": { "type": "object" },
+            "expires_minutes": { "type": ["integer", "null"], "minimum": 15, "maximum": 10080 }
+        },
+        "required": ["world_agent_id", "title", "objective"],
+        "additionalProperties": false
+    })
+}
+
+fn required_string(
+    arguments: &Value,
+    field: &str,
+    capability: &'static str,
+) -> Result<String, RpcFailure> {
+    arguments
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= 80)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| RpcFailure::invalid_params(format!("{field} is required."), capability))
 }
 
 fn resource_definitions(scopes: &HashSet<String>) -> Vec<Value> {
@@ -922,9 +1176,19 @@ fn runtime_snapshot(state: &AppState) -> Result<McpRuntimeSnapshot> {
             "homeserver_model_inventory".to_owned(),
             "homeserver_knowledge_search".to_owned(),
             "homeserver_knowledge_document".to_owned(),
+            "homeserver_agent_workspace".to_owned(),
+            "homeserver_agent_prompt".to_owned(),
+            "homeserver_agent_plan_submit".to_owned(),
+            "homeserver_agent_plan_get".to_owned(),
+            "homeserver_agent_plan_list".to_owned(),
+            "homeserver_agent_plan_cancel".to_owned(),
+            "homeserver_world_mission_draft".to_owned(),
+            "homeserver_world_mission_get".to_owned(),
+            "homeserver_agent_receipts_list".to_owned(),
         ],
         requests_per_minute: MAX_MCP_REQUESTS_PER_MINUTE as u64,
-        read_only: true,
+        read_only: false,
+        request_only: true,
         local_only: true,
     })
 }
@@ -1339,15 +1603,20 @@ mod tests {
     }
 
     #[test]
-    fn scopes_are_read_only_and_deduplicated() {
+    fn scopes_are_supervised_and_deduplicated() {
         let scopes = normalize_scopes(&[
             "knowledge.read".to_owned(),
             "system.read".to_owned(),
+            "agents.request".to_owned(),
             "knowledge.read".to_owned(),
         ])
-        .expect("read-only scopes should be accepted");
-        assert_eq!(scopes, vec!["knowledge.read", "system.read"]);
+        .expect("read and request-only scopes should be accepted");
+        assert_eq!(
+            scopes,
+            vec!["agents.request", "knowledge.read", "system.read"]
+        );
         assert!(normalize_scopes(&["models.write".to_owned()]).is_err());
+        assert!(normalize_scopes(&["agents.execute".to_owned()]).is_err());
     }
 
     #[test]
@@ -1361,16 +1630,53 @@ mod tests {
     }
 
     #[test]
-    fn tools_are_marked_read_only() {
+    fn tools_are_marked_read_or_request_only() {
         let scopes = ALLOWED_SCOPES
             .iter()
             .map(|scope| (*scope).to_owned())
             .collect::<HashSet<_>>();
         let tools = tool_definitions(&scopes);
-        assert_eq!(tools.len(), 5);
-        assert!(tools.iter().all(|tool| {
-            tool.pointer("/annotations/readOnlyHint") == Some(&Value::Bool(true))
-                && tool.pointer("/annotations/destructiveHint") == Some(&Value::Bool(false))
-        }));
+        assert_eq!(tools.len(), 14);
+        let request_tools = [
+            "homeserver_agent_prompt",
+            "homeserver_agent_plan_submit",
+            "homeserver_agent_plan_cancel",
+            "homeserver_world_mission_draft",
+        ]
+        .into_iter()
+        .collect::<HashSet<_>>();
+        for tool in &tools {
+            let name = tool.get("name").and_then(Value::as_str).unwrap();
+            assert_eq!(
+                tool.pointer("/annotations/destructiveHint"),
+                Some(&Value::Bool(false))
+            );
+            assert_eq!(
+                tool.pointer("/annotations/openWorldHint"),
+                Some(&Value::Bool(false))
+            );
+            if request_tools.contains(name) {
+                assert_eq!(
+                    tool.pointer("/annotations/readOnlyHint"),
+                    Some(&Value::Bool(false))
+                );
+                assert_eq!(
+                    tool.pointer("/annotations/requestOnly"),
+                    Some(&Value::Bool(true))
+                );
+            } else {
+                assert_eq!(
+                    tool.pointer("/annotations/readOnlyHint"),
+                    Some(&Value::Bool(true))
+                );
+            }
+        }
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+            .collect::<HashSet<_>>();
+        assert!(!names.contains("homeserver_agent_plan_approve"));
+        assert!(!names.contains("homeserver_agent_plan_execute"));
+        assert!(!names.contains("homeserver_world_mission_dispatch"));
     }
 }
