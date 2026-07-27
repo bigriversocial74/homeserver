@@ -1,3 +1,6 @@
+#[path = "cloud_pairing_v2.rs"]
+mod cloud_pairing_v2;
+
 #[path = "cloud_registry.rs"]
 mod cloud_registry;
 
@@ -98,10 +101,14 @@ pub async fn run(
         let _ = ready.send(());
     }
 
+    let registry_router = cloud_registry::router(state.clone()).layer(
+        axum::middleware::from_fn(cloud_pairing_v2::reject_legacy_pairing),
+    );
     let router = http::secure(
         http::router(state.clone())
             .merge(cloud_connector::router(state.clone()))
-            .merge(cloud_registry::router(state.clone()))
+            .merge(registry_router)
+            .merge(cloud_pairing_v2::router(state.clone()))
             .merge(knowledge_vault::router(state.clone()))
             .merge(model_center::router(state.clone()))
             .merge(semantic_vault::router(state.clone()))
