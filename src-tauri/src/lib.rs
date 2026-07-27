@@ -1,4 +1,5 @@
 mod cloud;
+mod vault;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use futures_util::StreamExt;
@@ -305,7 +306,12 @@ pub fn run() {
             homeserver_download_update,
             homeserver_apply_update,
             homeserver_import_recovery_package,
-            homeserver_export_recovery_package
+            homeserver_export_recovery_package,
+            vault::homeserver_vault,
+            vault::homeserver_import_vault_document,
+            vault::homeserver_search_vault,
+            vault::homeserver_reindex_vault,
+            vault::homeserver_delete_vault_document
         ])
         .run(tauri::generate_context!())
         .expect("error while running Microgifter HomeServer Control Center");

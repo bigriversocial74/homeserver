@@ -66,11 +66,17 @@ forbid(
 )
 
 # Every merged loopback route must be wrapped by the same anti-browser boundary.
-require(
-    "crates/homeserver-service/src/app.rs",
-    "http::secure(http::router(state.clone()).merge(cloud_connector::router(state)))",
-    "the fully merged local API router is not wrapped by the security layer",
-)
+for marker in (
+    "let router = http::secure(",
+    "http::router(state.clone())",
+    ".merge(cloud_connector::router(state.clone()))",
+    ".merge(knowledge_vault::router(state))",
+):
+    require(
+        "crates/homeserver-service/src/app.rs",
+        marker,
+        f"the fully merged local API router is missing secured component: {marker}",
+    )
 for marker in (
     "LOCAL_CLIENT_HEADER",
     "LOCAL_CLIENT_VALUE",

@@ -4,6 +4,7 @@ mod backup_key;
 mod config;
 mod database;
 mod http;
+mod knowledge_vault;
 mod recovery_transfer;
 mod update;
 mod update_apply;

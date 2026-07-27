@@ -85,20 +85,49 @@ function Wait-ForInstallationBoundary {
 }
 
 function Wait-ForHomeServer {
-    for ($attempt = 0; $attempt -lt 60; $attempt++) {
+    $lastServiceStatus = "missing"
+    $lastHealthStatus = $null
+    $lastStatus = $null
+    $lastError = $null
+
+    for ($attempt = 0; $attempt -lt 120; $attempt++) {
         try {
             $service = Get-Service -Name $serviceName -ErrorAction Stop
+            $lastServiceStatus = [string]$service.Status
             if ($service.Status -eq "Running") {
-                $health = Invoke-WebRequest -UseBasicParsing -Uri "$apiBase/healthz" -TimeoutSec 2
+                $health = Invoke-WebRequest -UseBasicParsing -SkipHttpErrorCheck -Uri "$apiBase/healthz" -TimeoutSec 2
+                $lastHealthStatus = [int]$health.StatusCode
+                try {
+                    $lastStatus = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/status" -TimeoutSec 3
+                }
+                catch {
+                    $lastError = $_.Exception.Message
+                }
                 if ($health.StatusCode -eq 204) {
                     return
                 }
             }
         }
         catch {
-            Start-Sleep -Milliseconds 500
+            $lastError = $_.Exception.Message
         }
+        Start-Sleep -Milliseconds 500
     }
+
+    Write-Host "Installed HomeServer health diagnostics: service=$lastServiceStatus health=$lastHealthStatus error=$lastError"
+    if ($lastStatus) {
+        Write-Host "Installed HomeServer status snapshot: $($lastStatus | ConvertTo-Json -Depth 8 -Compress)"
+    }
+    $serviceLogs = Get-ChildItem (Join-Path $dataDirectory "logs") -Filter "microgifter-homeserver-service.log*" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTimeUtc -Descending
+    foreach ($serviceLog in $serviceLogs) {
+        Write-Host "Installed HomeServer service log $($serviceLog.FullName):"
+        Get-Content -LiteralPath $serviceLog.FullName -Tail 200 -ErrorAction SilentlyContinue
+    }
+    & "$env:SystemRoot\System32\sc.exe" queryex $serviceName 2>$null
+    Get-NetTCPConnection -LocalPort 47831 -ErrorAction SilentlyContinue |
+        Select-Object LocalAddress, LocalPort, State, OwningProcess |
+        Format-Table -AutoSize
     throw "Installed HomeServer service did not become healthy"
 }
 
