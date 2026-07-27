@@ -35,6 +35,8 @@ jobs:
         run: |
           python scripts/apply-phase5b-agent-tests.py *> phase5b-agent-tests.log
           if ($LASTEXITCODE -ne 0) { Get-Content phase5b-agent-tests.log -Tail 240; exit $LASTEXITCODE }
+          python scripts/fix-phase5b-agent-tests.py *>> phase5b-agent-tests.log
+          if ($LASTEXITCODE -ne 0) { Get-Content phase5b-agent-tests.log -Tail 240; exit $LASTEXITCODE }
           cargo fmt --all *>> phase5b-agent-tests.log
           if ($LASTEXITCODE -ne 0) { Get-Content phase5b-agent-tests.log -Tail 240; exit $LASTEXITCODE }
           $tokens = $null
