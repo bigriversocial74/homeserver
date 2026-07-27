@@ -45,7 +45,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Get-Content phase5b-integration.log -Tail 200; exit $LASTEXITCODE }
           python scripts/validate-mcp-runtime.py *>> phase5b-integration.log
           if ($LASTEXITCODE -ne 0) { Get-Content phase5b-integration.log -Tail 200; exit $LASTEXITCODE }
-          cargo check --package microgifter-homeserver-service --package microgifter-homeserver-control-center --locked *> phase5b-agent-check.log
+          cargo check --package microgifter-homeserver-service --locked *> phase5b-agent-check.log
+          if ($LASTEXITCODE -ne 0) { Get-Content phase5b-agent-check.log -Tail 300; exit $LASTEXITCODE }
+          cargo build --package microgifter-homeserver-service --package microgifter-homeserver-updater --package microgifter-homeserver-mcp --locked *>> phase5b-agent-check.log
+          if ($LASTEXITCODE -ne 0) { Get-Content phase5b-agent-check.log -Tail 300; exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force -Path src-tauri/resources | Out-Null
+          Copy-Item target/debug/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
+          Copy-Item target/debug/microgifter-homeserver-updater.exe src-tauri/resources/microgifter-homeserver-updater.exe -Force
+          Copy-Item target/debug/microgifter-homeserver-mcp.exe src-tauri/resources/microgifter-homeserver-mcp.exe -Force
+          cargo check --package microgifter-homeserver-control-center --locked *>> phase5b-agent-check.log
           if ($LASTEXITCODE -ne 0) { Get-Content phase5b-agent-check.log -Tail 300; exit $LASTEXITCODE }
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
