@@ -1,0 +1,26 @@
+name: Export Phase 4D Source
+
+on:
+  push:
+    branches:
+      - feature/phase-4d-semantic-vault-search-20260726
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Create source archive
+        run: |
+          git archive --format=zip --output=homeserver-source.zip HEAD
+      - name: Upload source archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase4d-source
+          path: homeserver-source.zip
+          if-no-files-found: error
+          retention-days: 1
