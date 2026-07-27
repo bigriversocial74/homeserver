@@ -1,22 +1,24 @@
-name: Diagnose Phase 5A MCP Runtime
+name: Apply Phase 5A MCP Runtime
 
 on:
-  pull_request:
+  push:
     branches:
-      - main
+      - feature/phase-5a-local-readonly-mcp-20260727
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  diagnose:
+  apply:
     runs-on: windows-2025
+    timeout-minutes: 90
     steps:
       - name: Check out exact branch
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: feature/phase-5a-local-readonly-mcp-20260727
           fetch-depth: 0
+          persist-credentials: true
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
@@ -34,7 +36,14 @@ jobs:
           key: windows-cargo-${{ hashFiles('Cargo.toml', '**/Cargo.toml', 'Cargo.lock') }}
           restore-keys: windows-cargo-
 
-      - name: Reconstruct and verify source patch
+      - name: Install Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Reconstruct verified Phase 5A source
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -47,45 +56,98 @@ jobs:
               $output.Write($bytes, 0, $bytes.Length)
             }
           } finally { $output.Dispose() }
-          if ((Get-FileHash 'phase5a.patch.gz' -Algorithm SHA256).Hash.ToLowerInvariant() -ne '8a1ae56abe4d387403654b60a107b0b5da39c67281f55fb8c3531b7dbdf9f185') { throw 'Compressed checksum mismatch.' }
+          $compressedHash = (Get-FileHash 'phase5a.patch.gz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($compressedHash -ne '8a1ae56abe4d387403654b60a107b0b5da39c67281f55fb8c3531b7dbdf9f185') { throw "Compressed checksum mismatch: $compressedHash" }
           $input = [System.IO.File]::OpenRead('phase5a.patch.gz')
           $gzip = [System.IO.Compression.GZipStream]::new($input, [System.IO.Compression.CompressionMode]::Decompress)
           $patch = [System.IO.File]::Create('phase5a.patch')
           try { $gzip.CopyTo($patch) } finally { $patch.Dispose(); $gzip.Dispose(); $input.Dispose() }
-          if ((Get-FileHash 'phase5a.patch' -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'b3278f336f259b8494d96892a02baac1bacc4f66679a78ac912d15f49f8eebb8') { throw 'Source checksum mismatch.' }
+          $patchHash = (Get-FileHash 'phase5a.patch' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($patchHash -ne 'b3278f336f259b8494d96892a02baac1bacc4f66679a78ac912d15f49f8eebb8') { throw "Source checksum mismatch: $patchHash" }
           git apply --check phase5a.patch
           git apply phase5a.patch
+
           $cargo = Get-Content 'Cargo.toml' -Raw
           $before = 'features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"]'
           $after = 'features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"]'
           if (-not $cargo.Contains($before)) { throw 'Expected Tokio feature declaration was not found.' }
           Set-Content 'Cargo.toml' ($cargo.Replace($before, $after)) -NoNewline
+
+          $runtimePath = 'crates/homeserver-service/src/mcp_runtime.rs'
+          $runtime = Get-Content $runtimePath -Raw
+          $unused = 'use anyhow::{anyhow, ensure, Context, Result};'
+          $used = 'use anyhow::{ensure, Context, Result};'
+          if (-not $runtime.Contains($unused)) { throw 'Expected anyhow import was not found.' }
+          Set-Content $runtimePath ($runtime.Replace($unused, $used)) -NoNewline
+
           Remove-Item '.phase5a-payload' -Recurse -Force
           Remove-Item '.github/workflows/export-phase5a-source.yml' -Force
           Remove-Item 'phase5a.patch.gz', 'phase5a.patch' -Force
-          cargo fmt --all
-          cargo generate-lockfile
 
-      - name: Capture complete Rust diagnostics
+      - name: Stabilize dependency locks and formatting
         shell: pwsh
-        continue-on-error: true
         run: |
-          $PSNativeCommandUseErrorActionPreference = $false
-          cargo check --package microgifter-homeserver-service --package microgifter-homeserver-mcp --package microgifter-homeserver-updater --locked *>&1 | Tee-Object phase5a-compiler.txt
-          "EXIT_CODE=$LASTEXITCODE" | Out-File phase5a-compiler.txt -Append
+          npm install --package-lock-only --ignore-scripts
+          cargo generate-lockfile
+          cargo fmt --all
 
-      - name: Upload compiler diagnostics and formatted source
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: phase5a-compiler-diagnostic
-          path: |
-            phase5a-compiler.txt
-            Cargo.toml
-            Cargo.lock
-            crates/homeserver-service/src/mcp_runtime.rs
-            crates/homeserver-mcp/src/main.rs
-            src-tauri/src/mcp.rs
-            src-tauri/src/lib.rs
-          if-no-files-found: error
-          retention-days: 1
+      - name: Validate source and security boundaries
+        shell: pwsh
+        run: |
+          npm ci
+          npm run check:frontend
+          npm run build
+          python scripts/validate-mcp-runtime.py
+          python scripts/validate-security-boundaries.py
+          python scripts/validate-document-extraction.py
+          python scripts/validate-ollama-install-assistant.py
+          @'
+          import sqlite3
+          from pathlib import Path
+          db = sqlite3.connect(':memory:')
+          db.execute('PRAGMA foreign_keys = ON')
+          for migration in sorted(Path('database/migrations').glob('*.sql')):
+              db.executescript(migration.read_text(encoding='utf-8'))
+          problems = db.execute('PRAGMA foreign_key_check').fetchall()
+          if problems:
+              raise SystemExit(f'foreign-key violations: {problems}')
+          print('All migrations and foreign keys validated.')
+          '@ | python -
+
+      - name: Build native resources
+        shell: pwsh
+        run: |
+          cargo build --release --package microgifter-homeserver-service --locked
+          cargo build --release --package microgifter-homeserver-updater --locked
+          cargo build --release --package microgifter-homeserver-mcp --locked
+          New-Item -ItemType Directory -Force 'src-tauri/resources' | Out-Null
+          Copy-Item 'target/release/microgifter-homeserver-service.exe' 'src-tauri/resources/microgifter-homeserver-service.exe' -Force
+          Copy-Item 'target/release/microgifter-homeserver-updater.exe' 'src-tauri/resources/microgifter-homeserver-updater.exe' -Force
+          Copy-Item 'target/release/microgifter-homeserver-mcp.exe' 'src-tauri/resources/microgifter-homeserver-mcp.exe' -Force
+
+      - name: Validate complete Rust workspace
+        shell: pwsh
+        run: |
+          cargo check --workspace --locked
+          cargo test --workspace --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Commit clean Phase 5A product source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item 'src-tauri/resources/microgifter-homeserver-service.exe' -Force -ErrorAction SilentlyContinue
+          Remove-Item 'src-tauri/resources/microgifter-homeserver-updater.exe' -Force -ErrorAction SilentlyContinue
+          Remove-Item 'src-tauri/resources/microgifter-homeserver-mcp.exe' -Force -ErrorAction SilentlyContinue
+          git config user.name 'bigriversocial74'
+          git config user.email '293940031+bigriversocial74@users.noreply.github.com'
+          git add -A
+          $changed = @(git diff --cached --name-only)
+          if ($changed.Count -lt 25) { throw "Unexpectedly small Phase 5A change set: $($changed.Count) files." }
+          if ($changed -match '^\.phase5a-payload/' -or $changed -contains '.github/workflows/export-phase5a-source.yml') {
+            Write-Host 'Temporary files are staged only for deletion.'
+          }
+          $unexpected = $changed | Where-Object { $_ -match '\.exe$' -or $_ -match '^target/' }
+          if ($unexpected) { throw "Generated binary staged unexpectedly: $($unexpected -join ', ')" }
+          git commit -m 'Build Phase 5A local read-only MCP runtime'
+          git push origin HEAD:feature/phase-5a-local-readonly-mcp-20260727
