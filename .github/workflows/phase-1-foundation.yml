@@ -134,7 +134,7 @@ jobs:
 
       - name: Upload native compiler logs
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: native-build-logs
           path: |
@@ -158,7 +158,7 @@ jobs:
 
       - name: Upload workspace logs
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: workspace-quality-logs
           path: |
@@ -179,7 +179,7 @@ jobs:
 
       - name: Upload service smoke logs
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: service-smoke-logs
           path: |
@@ -260,7 +260,7 @@ jobs:
 
       - name: Upload release verification artifacts
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: release-verification-logs
           path: |
@@ -271,7 +271,7 @@ jobs:
           retention-days: 7
 
       - name: Upload verified versioned installer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Verified
           path: target/release/bundle/nsis/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe
