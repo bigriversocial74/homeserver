@@ -116,11 +116,14 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           git add -A
+          git reset -- .github/workflows
           $staged = git diff --cached --name-only
           if (-not $staged) {
-            Write-Host 'No product source changes remain to commit.'
+            Write-Host 'No non-workflow product source changes remain to commit.'
             exit 0
           }
+          Write-Host 'Committing non-workflow files:'
+          $staged | ForEach-Object { Write-Host " - $_" }
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'Materialize verified Phase 5A source'
