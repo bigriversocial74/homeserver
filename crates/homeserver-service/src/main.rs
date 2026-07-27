@@ -7,6 +7,7 @@ mod http;
 mod knowledge_vault;
 mod model_center;
 mod recovery_transfer;
+mod semantic_vault;
 mod update;
 mod update_apply;
 mod update_store;
@@ -82,6 +83,17 @@ impl AppState {
             return HealthSnapshot::needs_attention(
                 &self.config.server_name,
                 "model_center_integrity_check_failed",
+            );
+        }
+
+        if let Err(error) = semantic_vault::health_check(&connection) {
+            error!(
+                ?error,
+                "HomeServer semantic Knowledge Vault database health check failed"
+            );
+            return HealthSnapshot::needs_attention(
+                &self.config.server_name,
+                "semantic_vault_integrity_check_failed",
             );
         }
 

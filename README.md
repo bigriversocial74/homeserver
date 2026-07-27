@@ -93,6 +93,7 @@ The v0.1.3 production workflow additionally requires an exact semantic-version t
 - Phase 3A: encrypted backup, portable recovery, restore, and rollback.
 - Phase 3B foundation: signed update verification, application, health validation, and rollback.
 - Phase 4A foundation: managed local text-document import, indexing, search, change detection, and deletion.
-- Phase 4B foundation: fixed-loopback Ollama detection, approved model catalog, local inventory, bounded pull tracking, local testing, unload/delete controls, and default model assignments.
+- Phase 4B foundation: fixed-loopback Ollama detection, approved model catalog, local inventory, bounded pull tracking, local testing, unload/delete controls, default model assignments, and a user-controlled Windows installation assistant.
+- Phase 4D foundation: bounded local embeddings, restart-safe semantic indexing, stale detection, cited keyword/semantic/hybrid retrieval, and Control Center progress.
 
-PDF/OCR, semantic Knowledge Vault indexing, MCP runtime, and broader Linux/NAS deployment remain future phases and are not represented as complete.
+PDF/OCR and DOCX extraction, MCP runtime, and broader Linux/NAS deployment remain future phases and are not represented as complete.

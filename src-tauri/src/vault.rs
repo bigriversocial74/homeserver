@@ -20,6 +20,28 @@ pub(crate) async fn homeserver_search_vault(query: String) -> Result<Value, Stri
 }
 
 #[tauri::command]
+pub(crate) async fn homeserver_semantic_vault() -> Result<Value, String> {
+    get_json("/v1/vault/semantic").await
+}
+
+#[tauri::command]
+pub(crate) async fn homeserver_rebuild_semantic_vault(force: bool) -> Result<Value, String> {
+    post_json("/v1/vault/semantic/rebuild", &json!({ "force": force })).await
+}
+
+#[tauri::command]
+pub(crate) async fn homeserver_search_semantic_vault(
+    query: String,
+    mode: String,
+) -> Result<Value, String> {
+    post_json(
+        "/v1/vault/semantic/search",
+        &json!({ "query": query, "mode": mode, "limit": 20 }),
+    )
+    .await
+}
+
+#[tauri::command]
 pub(crate) async fn homeserver_reindex_vault() -> Result<Value, String> {
     post_json("/v1/vault/reindex", &json!({})).await
 }

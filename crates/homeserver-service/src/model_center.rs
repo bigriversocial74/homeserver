@@ -28,6 +28,10 @@ const MAX_PULL_STREAM_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PULL_LINE_BYTES: usize = 128 * 1024;
 const MAX_TEST_PROMPT_CHARS: usize = 500;
 const MAX_TEST_RESPONSE_CHARS: usize = 4_000;
+const MAX_EMBED_INPUTS: usize = 8;
+const MAX_EMBED_INPUT_CHARS: usize = 2_000;
+const MAX_EMBED_TOTAL_CHARS: usize = 12_000;
+const MAX_EMBEDDING_DIMENSIONS: usize = 4_096;
 const MAX_OPERATION_HISTORY: i64 = 200;
 const OPERATION_COLUMNS: &str = "operation_id,model_name,operation_type,state,status_message,completed_bytes,total_bytes,failure_code,created_at_utc,updated_at_utc,completed_at_utc";
 
@@ -658,6 +662,82 @@ fn read_settings(state: &AppState) -> Result<ModelSettings> {
     read_settings_from_connection(&connection)
 }
 
+pub(crate) fn configured_embedding_model_from_connection(
+    connection: &Connection,
+) -> Result<Option<String>> {
+    Ok(read_settings_from_connection(connection)?.default_embedding_model)
+}
+
+pub(crate) fn validate_embedding_model(model: &str) -> Result<()> {
+    let definition = approved_model(model)?;
+    ensure!(
+        definition.supports_embeddings,
+        "configured model does not support embeddings"
+    );
+    Ok(())
+}
+
+pub(crate) async fn embed_texts(
+    state: Arc<AppState>,
+    model: String,
+    inputs: Vec<String>,
+) -> Result<Vec<Vec<f32>>> {
+    validate_embedding_model(&model)?;
+    ensure!(!inputs.is_empty(), "embedding input is required");
+    ensure!(
+        inputs.len() <= MAX_EMBED_INPUTS,
+        "embedding batch exceeds the 8 input limit"
+    );
+    let mut total_chars = 0_usize;
+    for input in &inputs {
+        let count = input.chars().count();
+        ensure!(count > 0, "embedding input is empty");
+        ensure!(
+            count <= MAX_EMBED_INPUT_CHARS,
+            "embedding input exceeds the 2000 character limit"
+        );
+        total_chars = total_chars.saturating_add(count);
+    }
+    ensure!(
+        total_chars <= MAX_EMBED_TOTAL_CHARS,
+        "embedding batch exceeds the total character limit"
+    );
+
+    let state_for_settings = state.clone();
+    let settings = tokio::task::spawn_blocking(move || read_settings(&state_for_settings))
+        .await
+        .context("embedding settings task failed")??;
+    ensure!(
+        settings.default_embedding_model.as_deref() == Some(model.as_str()),
+        "embedding model no longer matches the configured default"
+    );
+    let client = ollama_client(settings.test_timeout_seconds)?;
+    let response = client
+        .post(format!("{OLLAMA_API_BASE}/api/embed"))
+        .json(&serde_json::json!({
+            "model": model,
+            "input": inputs,
+            "truncate": true
+        }))
+        .send()
+        .await
+        .context("unable to reach the local Ollama embedding runtime")?;
+    let payload: OllamaEmbedResponse = decode_json(response, MAX_OLLAMA_JSON_BYTES).await?;
+    ensure!(
+        payload.embeddings.len() <= MAX_EMBED_INPUTS,
+        "embedding runtime returned too many vectors"
+    );
+    ensure!(
+        payload.embeddings.iter().all(|vector| {
+            !vector.is_empty()
+                && vector.len() <= MAX_EMBEDDING_DIMENSIONS
+                && vector.iter().all(|value| value.is_finite())
+        }),
+        "embedding runtime returned an invalid vector"
+    );
+    Ok(payload.embeddings)
+}
+
 fn write_settings(state: &AppState, request: UpdateModelSettingsRequest) -> Result<ModelSettings> {
     let connection = state.connection()?;
     let transaction = connection.unchecked_transaction()?;
@@ -1031,7 +1111,7 @@ fn catalog_definitions() -> &'static [CatalogDefinition] {
         CatalogDefinition {
             model: "nomic-embed-text:latest",
             display_name: "Nomic Embed Text",
-            purpose: "Future semantic Knowledge Vault indexing",
+            purpose: "Semantic Knowledge Vault indexing and retrieval",
             estimated_size_bytes: 274 * MIB,
             minimum_memory_bytes: 4 * GIB,
             supports_chat: false,

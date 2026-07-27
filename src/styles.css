@@ -365,3 +365,85 @@ svg { flex: none; }
   .model-center-grid { grid-template-columns: 1fr; }
   .model-center-aside { grid-template-columns: 1fr 1fr; }
 }
+
+/* Phase 4D semantic Knowledge Vault */
+.semantic-search-toolbar {
+  align-items: end;
+  gap: 12px;
+}
+
+.search-mode-select {
+  display: grid;
+  gap: 6px;
+  min-width: 150px;
+  color: var(--muted-text, #64748b);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.search-mode-select select {
+  min-height: 42px;
+  border: 1px solid var(--border, #dbe3ef);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text, #172033);
+  padding: 0 34px 0 12px;
+  font: inherit;
+}
+
+.semantic-status-card .button-row {
+  margin-top: 18px;
+}
+
+.semantic-operation {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid #e3ddfb;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #fbfaff, #f7f5ff);
+}
+
+.semantic-operation > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.semantic-operation strong {
+  color: #27213f;
+}
+
+.semantic-operation span,
+.semantic-operation small {
+  color: #6d648c;
+  font-size: 12px;
+}
+
+.semantic-results > div {
+  align-items: start;
+}
+
+.semantic-results span {
+  min-width: 0;
+}
+
+.semantic-results small {
+  display: block;
+  line-height: 1.45;
+}
+
+.semantic-citation {
+  margin-top: 7px;
+  color: #6753b5 !important;
+  font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .semantic-search-toolbar {
+    align-items: stretch;
+  }
+
+  .search-mode-select {
+    width: 100%;
+  }
+}
