@@ -55,6 +55,11 @@ jobs:
           if ((Get-FileHash 'phase5a.patch' -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'b3278f336f259b8494d96892a02baac1bacc4f66679a78ac912d15f49f8eebb8') { throw 'Source checksum mismatch.' }
           git apply --check phase5a.patch
           git apply phase5a.patch
+          $cargo = Get-Content 'Cargo.toml' -Raw
+          $before = 'features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"]'
+          $after = 'features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"]'
+          if (-not $cargo.Contains($before)) { throw 'Expected Tokio feature declaration was not found.' }
+          Set-Content 'Cargo.toml' ($cargo.Replace($before, $after)) -NoNewline
           Remove-Item '.phase5a-payload' -Recurse -Force
           Remove-Item '.github/workflows/export-phase5a-source.yml' -Force
           Remove-Item 'phase5a.patch.gz', 'phase5a.patch' -Force
@@ -76,6 +81,7 @@ jobs:
           name: phase5a-compiler-diagnostic
           path: |
             phase5a-compiler.txt
+            Cargo.toml
             Cargo.lock
             crates/homeserver-service/src/mcp_runtime.rs
             crates/homeserver-mcp/src/main.rs
