@@ -26,6 +26,19 @@ Phase 4B adds the first production-bounded local model-management layer to Micro
 - Context, test-timeout, and maximum-download limits.
 - Control Center runtime, inventory, catalog, operation, test, and settings views.
 
+## Ollama installation assistant
+
+When Ollama is unavailable, Model Center now presents a Windows setup assistant that:
+
+- Opens only the fixed official Ollama installer and documentation URLs through the Windows default browser.
+- Displays and copies Ollama's official PowerShell installation command.
+- Opens a normal PowerShell window with instructions, but never executes the remote installation script automatically.
+- Provides CLI and loopback API verification commands.
+- Rechecks the existing HomeServer runtime endpoint after installation.
+- Shows repair, update, uninstall, and model-storage guidance.
+
+The setup assistant does not bundle, silently install, elevate, update, or uninstall Ollama. The user remains in control of the official Ollama installer.
+
 ## Approved starter catalog
 
 - `gemma3:1b`
@@ -44,10 +57,11 @@ Arbitrary model identifiers are rejected by the HomeServer service. Catalog chan
 - Ollama can resume interrupted layer downloads when the approved pull is started again.
 - Pull progress responses and local API responses have explicit size limits.
 - Model deletion requires the literal confirmation `DELETE`.
+- If the default browser or PowerShell cannot be opened, the setup assistant preserves copyable official URLs and commands.
 
 ## Deferred work
 
-- Ollama installation and update management.
+- Bundled, silent, or enterprise-managed Ollama installation and update management.
 - Automatic GPU driver/runtime management.
 - PDF/OCR extraction.
 - Semantic Knowledge Vault indexing.
