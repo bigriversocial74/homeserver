@@ -20,6 +20,7 @@ def replace_once(old: str, new: str, label: str) -> None:
 
 replace_once(
     '''    $workspace = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/agent/workspace" -TimeoutSec 15
+    if (-not $workspace.local_only -or @($workspace.goals).Count -ne 0 -or @($workspace.plans).Count -ne 0 -or @($workspace.approvals).Count -ne 0 -or @($workspace.missions).Count -ne 0) {
 ''',
     '''    $operational = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/operational-data" -TimeoutSec 15
     if (-not $operational.local_only -or -not $operational.provider_authoritative -or -not $operational.imported_data_is_untrusted_evidence) {
@@ -54,6 +55,7 @@ replace_once(
     }
 
     $workspace = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/agent/workspace" -TimeoutSec 15
+    if (-not $workspace.local_only -or @($workspace.goals).Count -ne 0 -or @($workspace.plans).Count -ne 0 -or @($workspace.approvals).Count -ne 0 -or @($workspace.missions).Count -ne 0) {
 ''',
     "operational smoke block",
 )
