@@ -136,11 +136,24 @@ function renderAssistant(snapshot = lastSnapshot, errorMessage = "") {
     before.parentElement?.insertBefore(container, before);
   }
 
-  container.dataset.runtimeState = runtimeReady(snapshot) ? "ready" : "missing";
-  container.dataset.checking = requestInFlight ? "true" : "false";
-  container.innerHTML = requestInFlight && !snapshot
+  const ready = runtimeReady(snapshot);
+  const loading = requestInFlight && !snapshot;
+  const markup = loading
     ? `<div class="ollama-assistant-loading"><span></span><strong>Checking for Ollama…</strong></div>`
-    : runtimeReady(snapshot) ? readyMarkup(snapshot) : unavailableMarkup(errorMessage);
+    : ready ? readyMarkup(snapshot) : unavailableMarkup(errorMessage);
+  const signature = JSON.stringify([
+    ready,
+    requestInFlight,
+    snapshot?.runtime?.version || "",
+    snapshot?.installed_models?.length || 0,
+    errorMessage,
+  ]);
+
+  container.dataset.runtimeState = ready ? "ready" : "missing";
+  container.dataset.checking = requestInFlight ? "true" : "false";
+  if (container.dataset.signature === signature) return;
+  container.dataset.signature = signature;
+  container.innerHTML = markup;
   bindAssistantEvents(container);
 }
 
