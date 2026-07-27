@@ -55,6 +55,8 @@ jobs:
           Copy-Item target/debug/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
           Copy-Item target/debug/microgifter-homeserver-updater.exe src-tauri/resources/microgifter-homeserver-updater.exe -Force
           Copy-Item target/debug/microgifter-homeserver-mcp.exe src-tauri/resources/microgifter-homeserver-mcp.exe -Force
+          node scripts/prepare-icons.mjs *>> phase5b-agent-check.log
+          if ($LASTEXITCODE -ne 0) { Get-Content phase5b-agent-check.log -Tail 300; exit $LASTEXITCODE }
           cargo check --package microgifter-homeserver-control-center --locked *>> phase5b-agent-check.log
           if ($LASTEXITCODE -ne 0) { Get-Content phase5b-agent-check.log -Tail 300; exit $LASTEXITCODE }
           git config user.name "github-actions[bot]"
