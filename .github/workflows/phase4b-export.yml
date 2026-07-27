@@ -1,0 +1,41 @@
+name: Phase 4B Workspace Export
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/phase4b-export.yml
+  push:
+    branches:
+      - feature/phase-4b-local-model-center-20260727
+    paths:
+      - .github/workflows/phase4b-export.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-4b-local-model-center-20260727
+          fetch-depth: 0
+
+      - name: Create workspace archive
+        shell: pwsh
+        run: |
+          $items = Get-ChildItem -Force | Where-Object { $_.Name -ne '.git' }
+          Compress-Archive -Path $items.FullName -DestinationPath "$env:RUNNER_TEMP/phase4b-workspace.zip" -CompressionLevel Optimal
+
+      - name: Upload workspace archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase4b-workspace
+          path: ${{ runner.temp }}/phase4b-workspace.zip
+          if-no-files-found: error
+          retention-days: 1
