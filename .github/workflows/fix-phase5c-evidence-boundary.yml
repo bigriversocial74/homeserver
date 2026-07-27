@@ -1,0 +1,122 @@
+name: Fix Phase 5C evidence boundary
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.head_ref == 'feature/phase-5c-operational-data-import-20260727'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out Phase 5C branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-5c-operational-data-import-20260727
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Enforce operational evidence trust state
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          path = Path("crates/homeserver-service/src/operational_data.rs")
+          value = path.read_text(encoding="utf-8")
+
+          def replace_once(old: str, new: str, label: str) -> None:
+              global value
+              count = value.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one anchor, found {count}")
+              value = value.replace(old, new, 1)
+
+          replace_once(
+              'const PERMITTED_AGENT_USES: &[&str] = &["read", "analyze", "goal_match", "report"];\n',
+              'const PERMITTED_AGENT_USES: &[&str] = &["read", "analyze", "goal_match", "report"];\nconst UNTRUSTED_PROVIDER_EVIDENCE: &str = "untrusted_provider_evidence";\n',
+              "trust-state constant",
+          )
+          replace_once(
+              '''    for table in [
+                  "operational_provider_manifests",
+                  "operational_dataset_catalog",
+                  "operational_dataset_grants",
+                  "operational_import_runs",
+                  "operational_import_cursors",
+                  "operational_raw_records",
+                  "operational_entities",
+                  "operational_entity_versions",
+                  "operational_events",
+                  "operational_provenance",
+                  "operational_retention_policies",
+                  "operational_import_errors",
+              ] {
+                  let sql = format!("SELECT COUNT(*) FROM {table}");
+                  let _: i64 = connection.query_row(&sql, [], |row| row.get(0))?;
+              }
+              Ok(())
+          }
+          ''',
+              '''    for table in [
+                  "operational_provider_manifests",
+                  "operational_dataset_catalog",
+                  "operational_dataset_grants",
+                  "operational_import_runs",
+                  "operational_import_cursors",
+                  "operational_raw_records",
+                  "operational_entities",
+                  "operational_entity_versions",
+                  "operational_events",
+                  "operational_provenance",
+                  "operational_retention_policies",
+                  "operational_import_errors",
+              ] {
+                  let sql = format!("SELECT COUNT(*) FROM {table}");
+                  let _: i64 = connection.query_row(&sql, [], |row| row.get(0))?;
+              }
+              for table in ["operational_raw_records", "operational_events"] {
+                  let sql = format!("SELECT COUNT(*) FROM {table} WHERE trust_state<>?1");
+                  let invalid: i64 = connection.query_row(
+                      &sql,
+                      params![UNTRUSTED_PROVIDER_EVIDENCE],
+                      |row| row.get(0),
+                  )?;
+                  ensure!(
+                      invalid == 0,
+                      "operational provider evidence contains an invalid trust state"
+                  );
+              }
+              Ok(())
+          }
+          ''',
+              "operational health check",
+          )
+          path.write_text(value, encoding="utf-8", newline="\n")
+          '@ | Set-Content phase5c-evidence-fix.py -Encoding utf8
+          python phase5c-evidence-fix.py
+          cargo fmt --all
+          python scripts/validate-agent-workspace.py
+          python scripts/validate-operational-data.py
+          cargo test --package microgifter-homeserver-service --locked
+          cargo clippy --package microgifter-homeserver-service --all-targets --locked -- -D warnings
+
+      - name: Commit evidence-boundary repair
+        shell: pwsh
+        run: |
+          git config user.name "Microgifter Build Agent"
+          git config user.email "build-agent@microgifter.local"
+          git add crates/homeserver-service/src/operational_data.rs
+          git commit -m "Enforce untrusted operational evidence boundary"
+          git push origin HEAD:feature/phase-5c-operational-data-import-20260727
