@@ -2,8 +2,8 @@
 mod cloud_connector;
 
 use crate::{
-    backup, config::AppConfig, database, http, knowledge_vault, model_center, semantic_vault,
-    update, update_store, AppState,
+    backup, config::AppConfig, database, document_extraction, http, knowledge_vault, model_center,
+    semantic_vault, update, update_store, AppState,
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -31,6 +31,7 @@ pub async fn run(
     update_store::initialize(&connection)?;
     cloud_connector::initialize(&connection)?;
     knowledge_vault::initialize(&connection, &config)?;
+    document_extraction::initialize(&connection)?;
     model_center::initialize(&connection)?;
     semantic_vault::initialize(&connection)?;
     if let Some(outcome) = restore_outcome {

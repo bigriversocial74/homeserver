@@ -28,6 +28,8 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 flate2 = "1"
 futures-util = "0.3"
 hex = "0.4"
+lopdf = { version = "=0.42.0", default-features = false }
+quick-xml = "=0.41.0"
 keyring = { path = "crates/machine-keyring" }
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
@@ -48,3 +50,4 @@ url = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 zeroize = "1"
+zip = { version = "=2.4.2", default-features = false, features = ["deflate"] }

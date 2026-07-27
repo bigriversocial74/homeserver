@@ -1,4 +1,4 @@
-use crate::{config::AppConfig, AppState};
+use crate::{config::AppConfig, document_extraction, AppState};
 use anyhow::{ensure, Context, Result};
 use axum::{
     body::Bytes,
@@ -22,8 +22,7 @@ use uuid::Uuid;
 
 const VAULT_MIGRATION: &str = include_str!("../../../database/migrations/0005_knowledge_vault.sql");
 const VAULT_MIGRATION_KEY: &str = "0005_knowledge_vault";
-const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
-const MAX_INDEXED_CHARS: usize = 2_000_000;
+const MAX_DOCUMENT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_FILE_NAME_CHARS: usize = 180;
 const MAX_TAGS: usize = 20;
 const MAX_TAG_CHARS: usize = 64;
@@ -31,7 +30,6 @@ const MAX_SEARCH_QUERY_CHARS: usize = 200;
 const MAX_SEARCH_RESULTS: u32 = 50;
 const FILE_NAME_HEADER: &str = "x-mg-vault-file-name";
 const TAGS_HEADER: &str = "x-mg-vault-tags";
-const SUPPORTED_EXTENSIONS: [&str; 5] = ["txt", "md", "csv", "json", "log"];
 const DOCUMENT_COLUMNS: &str = "document_id,file_name,title,content_type,size_bytes,sha256,state,tags_json,created_at_utc,updated_at_utc,indexed_at_utc,failure_code";
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
@@ -69,6 +67,7 @@ pub struct VaultSnapshot {
     pub total_size_bytes: u64,
     pub last_indexed_at_utc: Option<DateTime<Utc>>,
     pub supported_extensions: Vec<String>,
+    pub extraction: document_extraction::ExtractionSnapshot,
     pub local_only: bool,
 }
 
@@ -191,7 +190,7 @@ async fn import_document(
     if bytes.len() > MAX_DOCUMENT_BYTES {
         return Err(action_error(
             "vault_import_too_large",
-            anyhow::anyhow!("document exceeds the 16 MB import limit"),
+            anyhow::anyhow!("document exceeds the 32 MB import limit"),
         ));
     }
     if bytes.is_empty() {
@@ -248,12 +247,11 @@ fn import(
     ensure!(!bytes.is_empty(), "document is empty");
     ensure!(
         bytes.len() <= MAX_DOCUMENT_BYTES,
-        "document exceeds the 16 MB import limit"
+        "document exceeds the 32 MB import limit"
     );
     let file_name = validate_file_name(file_name)?;
     let extension = extension(&file_name)?;
     let tags = normalize_tags(tags)?;
-    let indexed_text = extract_text(&extension, bytes)?;
     let sha256 = hex::encode(Sha256::digest(bytes));
 
     if let Some(document) = document_by_sha(connection, &sha256)? {
@@ -285,38 +283,128 @@ fn import(
         return Err(error).context("unable to store the managed Knowledge Vault document");
     }
 
+    let operation_id =
+        match document_extraction::begin_operation(connection, None, &file_name, "import") {
+            Ok(operation_id) => operation_id,
+            Err(error) => {
+                let _ = fs::remove_file(&destination);
+                return Err(error).context("unable to start the document extraction operation");
+            }
+        };
+    let extraction = document_extraction::extract_document(
+        config,
+        &extension,
+        bytes,
+        &destination,
+        |processed, total| {
+            document_extraction::update_operation_progress(
+                connection,
+                &operation_id,
+                processed,
+                total,
+            )
+        },
+    );
+    let extraction = match extraction {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = document_extraction::finish_operation(
+                connection,
+                &operation_id,
+                "failed",
+                "Document extraction failed",
+                Some("document_extraction_failed"),
+            );
+            let _ = fs::remove_file(&destination);
+            return Err(error).context("unable to extract managed Knowledge Vault document");
+        }
+    };
+
     let title = title_from_file_name(&file_name);
     let content_type = content_type(&extension);
     let tags_json = serde_json::to_string(&tags)?;
-    let transaction = connection.unchecked_transaction()?;
-    let insert_result = transaction.execute(
-        "INSERT INTO vault_documents (document_id,file_name,title,managed_path,content_type,size_bytes,sha256,state,tags_json,indexed_text,indexed_at_utc) VALUES (?1,?2,?3,?4,?5,?6,?7,'indexed',?8,?9,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
-        params![
-            document_id,
-            file_name,
-            title,
-            destination.to_string_lossy(),
-            content_type,
-            bytes.len() as i64,
-            sha256,
-            tags_json,
-            indexed_text,
-        ],
-    );
-    if let Err(error) = insert_result {
+    let document_state = if extraction.state == "ocr_required" || extraction.state == "failed" {
+        "failed"
+    } else {
+        "indexed"
+    };
+    let registration_result = (|| -> Result<()> {
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute(
+            "INSERT INTO vault_documents (document_id,file_name,title,managed_path,content_type,size_bytes,sha256,state,tags_json,indexed_text,failure_code,indexed_at_utc) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,CASE WHEN ?8='indexed' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE NULL END)",
+            params![
+                document_id,
+                file_name,
+                title,
+                destination.to_string_lossy(),
+                content_type,
+                bytes.len() as i64,
+                sha256,
+                document_state,
+                tags_json,
+                extraction.indexed_text,
+                extraction.failure_code,
+            ],
+        )?;
+        document_extraction::store_extraction(&transaction, &document_id, &sha256, &extraction)?;
+        transaction.execute(
+            "UPDATE vault_extraction_operations SET document_id=?1,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE operation_id=?2",
+            params![document_id, operation_id],
+        )?;
+        transaction.execute(
+            "INSERT INTO service_events (event_type,message,metadata_json) VALUES ('vault.document_indexed','A local document was processed in Knowledge Vault',json_object('document_id',?1,'file_name',?2,'size_bytes',?3,'extraction_method',?4,'page_count',?5,'state',?6))",
+            params![
+                document_id,
+                file_name,
+                bytes.len() as i64,
+                extraction.extraction_method,
+                extraction.pages.len() as i64,
+                extraction.state,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    })();
+    if let Err(error) = registration_result {
         let _ = fs::remove_file(&destination);
+        let _ = document_extraction::finish_operation(
+            connection,
+            &operation_id,
+            "failed",
+            "Document registration failed",
+            Some("document_registration_failed"),
+        );
         return Err(error).context("unable to register the Knowledge Vault document");
     }
-    transaction.execute(
-        "INSERT INTO service_events (event_type,message,metadata_json) VALUES ('vault.document_indexed','A local document was indexed in Knowledge Vault',json_object('document_id',?1,'file_name',?2,'size_bytes',?3))",
-        params![document_id, file_name, bytes.len() as i64],
+    document_extraction::finish_operation(
+        connection,
+        &operation_id,
+        "completed",
+        if document_state == "indexed" {
+            "Document extraction completed"
+        } else {
+            "Document stored; local OCR runtime is required"
+        },
+        extraction.failure_code.as_deref(),
     )?;
-    transaction.commit()?;
 
     Ok(VaultActionResult {
         document: Some(document_by_id(connection, &document_id)?),
         affected: 1,
-        message: "Document copied into managed local storage and indexed.".to_owned(),
+        message: if extraction.state == "ocr_required" {
+            "Document copied into managed storage. Install the local OCR runtime, then use Check Files to extract searchable text.".to_owned()
+        } else if extraction.state == "partial" {
+            format!(
+                "Document indexed with {} pages; {} scanned pages still need local OCR.",
+                extraction.pages.len(),
+                extraction.ocr_required_page_count
+            )
+        } else {
+            format!(
+                "Document copied into managed storage and extracted across {} page(s).",
+                extraction.pages.len()
+            )
+        },
     })
 }
 
@@ -351,10 +439,11 @@ fn snapshot(connection: &Connection) -> Result<VaultSnapshot> {
         failed_count: counts.4.max(0) as u64,
         total_size_bytes: counts.5.max(0) as u64,
         last_indexed_at_utc: counts.6.map(parse_utc).transpose()?,
-        supported_extensions: SUPPORTED_EXTENSIONS
+        supported_extensions: document_extraction::supported_extensions()
             .iter()
             .map(|value| (*value).to_owned())
             .collect(),
+        extraction: document_extraction::snapshot(connection)?,
         local_only: true,
     })
 }
@@ -448,27 +537,87 @@ fn reindex(connection: &Connection, config: &AppConfig) -> Result<VaultActionRes
             continue;
         }
         let extension = extension(&file_name)?;
-        match extract_text(&extension, &bytes) {
-            Ok(indexed_text) => {
-                connection.execute(
-                    "UPDATE vault_documents SET state='indexed',indexed_text=?1,failure_code=NULL,indexed_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE document_id=?2",
-                    params![indexed_text, document_id],
+        let operation_id = document_extraction::begin_operation(
+            connection,
+            Some(&document_id),
+            &file_name,
+            "reindex",
+        )?;
+        match document_extraction::extract_document(
+            config,
+            &extension,
+            &bytes,
+            &path,
+            |processed, total| {
+                document_extraction::update_operation_progress(
+                    connection,
+                    &operation_id,
+                    processed,
+                    total,
+                )
+            },
+        ) {
+            Ok(extraction) => {
+                let document_state =
+                    if extraction.state == "ocr_required" || extraction.state == "failed" {
+                        "failed"
+                    } else {
+                        "indexed"
+                    };
+                let transaction = connection.unchecked_transaction()?;
+                transaction.execute(
+                    "UPDATE vault_documents SET state=?1,indexed_text=?2,failure_code=?3,indexed_at_utc=CASE WHEN ?1='indexed' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE NULL END,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE document_id=?4",
+                    params![
+                        document_state,
+                        extraction.indexed_text,
+                        extraction.failure_code,
+                        document_id,
+                    ],
+                )?;
+                document_extraction::store_extraction(
+                    &transaction,
+                    &document_id,
+                    &expected_sha256,
+                    &extraction,
+                )?;
+                transaction.execute(
+                    "UPDATE vault_semantic_documents SET state='stale',failure_code='extracted_text_changed',updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE document_id=?1 AND state='ready'",
+                    params![document_id],
+                )?;
+                transaction.commit()?;
+                document_extraction::finish_operation(
+                    connection,
+                    &operation_id,
+                    "completed",
+                    if document_state == "indexed" {
+                        "Document re-extraction completed"
+                    } else {
+                        "Document still requires local OCR"
+                    },
+                    extraction.failure_code.as_deref(),
                 )?;
             }
             Err(error) => {
                 mark_document_state(connection, &document_id, "failed", "text_extraction_failed")?;
+                document_extraction::finish_operation(
+                    connection,
+                    &operation_id,
+                    "failed",
+                    "Document re-extraction failed",
+                    Some("text_extraction_failed"),
+                )?;
                 tracing::warn!(?error, %document_id, "Knowledge Vault reindex failed");
             }
         }
     }
     connection.execute(
-        "INSERT INTO service_events (event_type,message,metadata_json) VALUES ('vault.reindex_completed','Knowledge Vault managed documents were checked and reindexed',json_object('affected',?1))",
+        "INSERT INTO service_events (event_type,message,metadata_json) VALUES ('vault.reindex_completed','Knowledge Vault managed documents were checked and re-extracted',json_object('affected',?1))",
         params![affected as i64],
     )?;
     Ok(VaultActionResult {
         document: None,
         affected,
-        message: format!("Checked and reindexed {affected} managed documents."),
+        message: format!("Checked and re-extracted {affected} managed documents."),
     })
 }
 
@@ -620,7 +769,7 @@ fn extension(file_name: &str) -> Result<String> {
         .map(str::to_ascii_lowercase)
         .context("document must have a supported file extension")?;
     ensure!(
-        SUPPORTED_EXTENSIONS.contains(&extension.as_str()),
+        document_extraction::supported_extensions().contains(&extension.as_str()),
         "unsupported Knowledge Vault document type"
     );
     Ok(extension)
@@ -643,26 +792,13 @@ fn content_type(extension: &str) -> &'static str {
         "csv" => "text/csv",
         "json" => "application/json",
         "log" => "text/plain",
+        "pdf" => "application/pdf",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "tif" | "tiff" => "image/tiff",
         _ => "text/plain",
     }
-}
-
-fn extract_text(extension: &str, bytes: &[u8]) -> Result<String> {
-    let text = std::str::from_utf8(bytes).context("document must be UTF-8 text")?;
-    ensure!(
-        !text.contains('\0'),
-        "document contains unsupported null bytes"
-    );
-    if extension == "json" {
-        let _: serde_json::Value =
-            serde_json::from_str(text).context("JSON document is invalid")?;
-    }
-    Ok(text
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .chars()
-        .take(MAX_INDEXED_CHARS)
-        .collect())
 }
 
 fn normalize_tags(tags: Vec<String>) -> Result<Vec<String>> {
@@ -845,13 +981,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn file_names_are_basenames_and_supported_text_types_only() {
+    fn file_names_are_basenames_and_supported_document_types_only() {
         assert_eq!(
             validate_file_name("operations.md").unwrap(),
             "operations.md"
         );
         assert!(validate_file_name("../operations.md").is_err());
-        assert!(validate_file_name("operations.pdf").is_err());
+        assert_eq!(
+            validate_file_name("operations.pdf").unwrap(),
+            "operations.pdf"
+        );
+        assert_eq!(
+            validate_file_name("handbook.docx").unwrap(),
+            "handbook.docx"
+        );
+        assert!(validate_file_name("macro.docm").is_err());
         assert!(validate_file_name("folder/operations.txt").is_err());
     }
 

@@ -447,3 +447,47 @@ svg { flex: none; }
     width: 100%;
   }
 }
+
+
+.ocr-runtime-notice {
+  display: grid;
+  gap: 10px;
+}
+
+.ocr-runtime-notice > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.ocr-command-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.ocr-command-row code {
+  min-width: 0;
+  overflow-x: auto;
+  padding: 10px 12px;
+  border: 1px solid #d8e1ee;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #253247;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.processing-queue .diagnostic-list {
+  margin-bottom: 16px;
+}
+
+@media (max-width: 700px) {
+  .ocr-command-row {
+    grid-template-columns: 1fr;
+  }
+
+  .ocr-command-row .button {
+    justify-self: start;
+  }
+}

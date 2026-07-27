@@ -81,6 +81,25 @@ try {
         throw "Expected unapproved local model rejection, received HTTP $($unapproved.StatusCode)"
     }
 
+    $vault = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/vault" -TimeoutSec 15
+    if (-not $vault.local_only -or -not $vault.extraction.local_only) {
+        throw "Knowledge Vault extraction did not initialize as local-only"
+    }
+    foreach ($requiredExtension in @("pdf", "docx", "png", "jpg", "tiff")) {
+        if ($requiredExtension -notin @($vault.supported_extensions)) {
+            throw "Knowledge Vault is missing the $requiredExtension extraction type"
+        }
+    }
+    if ([int]$vault.extraction.total_pages -ne 0 -or @($vault.extraction.documents).Count -ne 0) {
+        throw "Fresh document extraction catalog is not empty"
+    }
+    if ($vault.extraction.runtime.tesseract_install_command -ne "winget install --id tesseract-ocr.tesseract --exact --scope machine") {
+        throw "Tesseract installation guidance is not fixed to the approved package"
+    }
+    if ($vault.extraction.runtime.poppler_install_command -ne "winget install --id oschwartz10612.Poppler --exact --scope machine") {
+        throw "Poppler installation guidance is not fixed to the approved package"
+    }
+
     $semantic = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/vault/semantic" -TimeoutSec 15
     if (-not $semantic.local_only -or $semantic.state -ne "not_configured") {
         throw "Semantic Knowledge Vault did not initialize in the safe unconfigured state"

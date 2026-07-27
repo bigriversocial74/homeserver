@@ -1,4 +1,4 @@
-use crate::{model_center, AppState};
+use crate::{document_extraction, model_center, AppState};
 use anyhow::{ensure, Context, Result};
 use axum::{
     extract::State,
@@ -120,6 +120,13 @@ struct SourceDocument {
     content_type: String,
     source_sha256: String,
     indexed_text: String,
+    pages: Vec<(u32, String)>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingChunk {
+    text: String,
+    page_number: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -466,7 +473,7 @@ async fn index_document(
     model: &str,
     document: SourceDocument,
 ) -> Result<u64> {
-    let chunks = chunk_text(&document.indexed_text);
+    let chunks = document_chunks(&document);
     ensure!(!chunks.is_empty(), "document produced no semantic chunks");
     ensure!(
         chunks.len() <= MAX_CHUNKS_PER_DOCUMENT,
@@ -490,8 +497,11 @@ async fn index_document(
 
     let mut embeddings = Vec::with_capacity(chunks.len());
     for batch in chunks.chunks(EMBEDDING_BATCH_SIZE) {
-        let values =
-            model_center::embed_texts(state.clone(), model.to_owned(), batch.to_vec()).await?;
+        let inputs = batch
+            .iter()
+            .map(|chunk| chunk.text.clone())
+            .collect::<Vec<_>>();
+        let values = model_center::embed_texts(state.clone(), model.to_owned(), inputs).await?;
         ensure!(
             values.len() == batch.len(),
             "embedding runtime returned an unexpected batch size"
@@ -745,12 +755,16 @@ fn source_documents(state: &AppState) -> Result<Vec<SourceDocument>> {
     let mut statement = connection.prepare(
         "SELECT document_id,title,file_name,content_type,sha256,indexed_text FROM vault_documents WHERE state='indexed' AND length(indexed_text) > 0 ORDER BY document_id LIMIT ?1",
     )?;
-    let documents = statement
+    let mut documents = statement
         .query_map(
             params![MAX_DOCUMENTS_PER_REBUILD as i64],
             source_document_from_row,
         )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    for document in &mut documents {
+        document.pages = document_extraction::page_texts(&connection, &document.document_id)?;
+    }
     Ok(documents)
 }
 
@@ -762,6 +776,7 @@ fn source_document_from_row(row: &Row<'_>) -> rusqlite::Result<SourceDocument> {
         content_type: row.get(3)?,
         source_sha256: row.get(4)?,
         indexed_text: row.get(5)?,
+        pages: Vec::new(),
     })
 }
 
@@ -850,7 +865,7 @@ fn store_document_embeddings(
     state: &AppState,
     document: &SourceDocument,
     model: &str,
-    chunks: Vec<String>,
+    chunks: Vec<PendingChunk>,
     embeddings: Vec<Vec<f32>>,
     dimensions: usize,
 ) -> Result<()> {
@@ -866,16 +881,17 @@ fn store_document_embeddings(
     )?;
     {
         let mut statement = transaction.prepare(
-            "INSERT INTO vault_semantic_chunks (chunk_id,document_id,chunk_ordinal,page_number,chunk_text,chunk_sha256,embedding_model,dimensions,embedding_json) VALUES (?1,?2,?3,NULL,?4,?5,?6,?7,?8)",
+            "INSERT INTO vault_semantic_chunks (chunk_id,document_id,chunk_ordinal,page_number,chunk_text,chunk_sha256,embedding_model,dimensions,embedding_json) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         )?;
         for (ordinal, (chunk, embedding)) in chunks.into_iter().zip(embeddings).enumerate() {
-            let chunk_sha256 = hex::encode(Sha256::digest(chunk.as_bytes()));
+            let chunk_sha256 = hex::encode(Sha256::digest(chunk.text.as_bytes()));
             let embedding_json = serde_json::to_string(&embedding)?;
             statement.execute(params![
                 Uuid::new_v4().to_string(),
                 document.document_id,
                 ordinal as i64,
-                chunk,
+                chunk.page_number.map(i64::from),
+                chunk.text,
                 chunk_sha256,
                 model,
                 dimensions as i64,
@@ -1014,6 +1030,33 @@ fn finish_operation(
         params![operation_id, state_value],
     )?;
     Ok(())
+}
+
+fn document_chunks(document: &SourceDocument) -> Vec<PendingChunk> {
+    let mut chunks = Vec::new();
+    if !document.pages.is_empty() {
+        for (page_number, page_text) in &document.pages {
+            for text in chunk_text(page_text) {
+                if chunks.len() >= MAX_CHUNKS_PER_DOCUMENT {
+                    return chunks;
+                }
+                chunks.push(PendingChunk {
+                    text,
+                    page_number: Some(*page_number),
+                });
+            }
+        }
+    } else {
+        chunks.extend(
+            chunk_text(&document.indexed_text)
+                .into_iter()
+                .map(|text| PendingChunk {
+                    text,
+                    page_number: None,
+                }),
+        );
+    }
+    chunks
 }
 
 fn chunk_text(text: &str) -> Vec<String> {
@@ -1231,6 +1274,22 @@ mod tests {
         let orthogonal = cosine_similarity(&[1.0, 0.0], &[0.0, 1.0]);
         assert!(identical > orthogonal);
         assert!((identical - 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn extracted_pages_keep_page_numbers_in_semantic_chunks() {
+        let document = SourceDocument {
+            document_id: "doc-1".to_owned(),
+            title: "Policy".to_owned(),
+            file_name: "policy.pdf".to_owned(),
+            content_type: "application/pdf".to_owned(),
+            source_sha256: "0".repeat(64),
+            indexed_text: String::new(),
+            pages: vec![(2, "Second-page safety procedure".to_owned())],
+        };
+        let chunks = document_chunks(&document);
+        assert!(!chunks.is_empty());
+        assert!(chunks.iter().all(|chunk| chunk.page_number == Some(2)));
     }
 
     #[test]
