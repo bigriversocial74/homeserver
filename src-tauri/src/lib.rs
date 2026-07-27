@@ -321,7 +321,7 @@ pub fn run() {
             model::homeserver_test_model,
             model::homeserver_update_model_settings,
             ollama_install::homeserver_open_ollama_official,
-            ollama_install::homeserver_open_ollama_terminal
+            ollama_install::homeserver_open_ollama_terminal,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Microgifter HomeServer Control Center");
