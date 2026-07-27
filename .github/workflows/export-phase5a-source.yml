@@ -1,9 +1,9 @@
 name: Apply Phase 5A MCP Runtime
 
 on:
-  push:
+  pull_request:
     branches:
-      - feature/phase-5a-local-readonly-mcp-20260727
+      - main
 
 permissions:
   contents: write
@@ -144,9 +144,6 @@ jobs:
           git add -A
           $changed = @(git diff --cached --name-only)
           if ($changed.Count -lt 25) { throw "Unexpectedly small Phase 5A change set: $($changed.Count) files." }
-          if ($changed -match '^\.phase5a-payload/' -or $changed -contains '.github/workflows/export-phase5a-source.yml') {
-            Write-Host 'Temporary files are staged only for deletion.'
-          }
           $unexpected = $changed | Where-Object { $_ -match '\.exe$' -or $_ -match '^target/' }
           if ($unexpected) { throw "Generated binary staged unexpectedly: $($unexpected -join ', ')" }
           git commit -m 'Build Phase 5A local read-only MCP runtime'
