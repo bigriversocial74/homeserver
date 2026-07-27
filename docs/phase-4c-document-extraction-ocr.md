@@ -64,6 +64,10 @@ A scanned document imported before OCR tools are installed remains in managed st
 
 Extraction failures expose bounded status codes and redacted diagnostics. Production logs never include document text, OCR text, embeddings, or user search queries.
 
+## Build reproducibility
+
+Rust and frontend lockfiles are regenerated and verified with the same pinned toolchains used by HomeServer Production Quality before a Phase 4C candidate can be merged.
+
 ## Page-aware retrieval
 
 Extracted page records feed Phase 4D semantic indexing. PDF and image-derived matches can therefore return citations such as `policy.pdf · page 3`; formats without meaningful page boundaries retain section citations.
