@@ -61,21 +61,21 @@ for marker in (
     '"/v1/agent/approvals/approve"',
     '"/v1/agent/plans/execute"',
     '"/v1/world/missions"',
-    'ALLOWED_ACTION_TYPES',
+    "ALLOWED_ACTION_TYPES",
     '"backup.create"',
     '"model.health_test"',
     '"cloud.sync_connection"',
     '"cloud.sync_all"',
     '"report.save"',
-    'fresh_state_token',
-    'plan_hash',
-    'consumed_at_utc',
-    'agent_action_idempotency',
-    'agent_execution_receipts',
-    'LOCAL_ACTOR_ID',
-    'requesting MCP client',
-    'mission_drafting_only',
-    'provider_import_not_enabled_until_phase_5c',
+    "fresh_state_token",
+    "plan_hash",
+    "consumed_at_utc",
+    "agent_action_idempotency",
+    "agent_execution_receipts",
+    "LOCAL_ACTOR_ID",
+    "requesting MCP client",
+    "mission_drafting_only",
+    "provider_import_not_enabled_until_phase_5c",
 ):
     require(SERVICE, marker, f"Agent Workspace service boundary is missing {marker}")
 
@@ -133,6 +133,8 @@ for marker in (
 
 # MCP may request plans and missions, but must never receive approval or execution tools.
 MCP = "crates/homeserver-service/src/mcp_runtime.rs"
+MCP_SOURCE = read(MCP)
+MCP_PRODUCTION = MCP_SOURCE.split("#[cfg(test)]", 1)[0]
 for marker in (
     "homeserver_agent_prompt",
     "homeserver_agent_plan_submit",
@@ -143,7 +145,8 @@ for marker in (
     "homeserver_world_mission_get",
     "homeserver_agent_receipts_list",
 ):
-    require(MCP, marker, f"request-only MCP surface is missing {marker}")
+    if marker not in MCP_PRODUCTION:
+        ERRORS.append(f"request-only MCP surface is missing {marker}")
 
 for forbidden in (
     "homeserver_agent_plan_approve",
@@ -155,17 +158,44 @@ for forbidden in (
     "reward.issue",
     "claim.redeem",
 ):
-    forbid(MCP, forbidden, f"MCP contains prohibited approval/execution capability: {forbidden}")
+    if forbidden in MCP_PRODUCTION:
+        ERRORS.append(
+            f"MCP contains prohibited approval/execution capability: {forbidden}"
+        )
 
 # The agent runtime may call only the fixed loopback HomeServer API and local model endpoint.
 for forbidden in ("0.0.0.0", "localhost:", "MG_HOMESERVER_AGENT_URL"):
-    forbid(SERVICE, forbidden, f"Agent runtime contains a configurable or non-fixed local boundary: {forbidden}")
+    forbid(
+        SERVICE,
+        forbidden,
+        f"Agent runtime contains a configurable or non-fixed local boundary: {forbidden}",
+    )
 
-require("crates/homeserver-service/src/app.rs", ".merge(agent_runtime::router(state.clone()))", "Agent Workspace router is not inside the secured local API")
-require("crates/homeserver-service/src/app.rs", "agent_runtime::initialize(&connection)?", "Agent Workspace migration is not initialized")
-require("src-tauri/src/lib.rs", "mod agent;", "Agent Workspace Tauri module is not registered")
-require("index.html", "/src/agent-workspace.js", "Agent Workspace frontend module is not loaded")
-require("package.json", "validate-agent-workspace.py", "Agent Workspace validator is not part of frontend validation")
+require(
+    "crates/homeserver-service/src/app.rs",
+    ".merge(agent_runtime::router(state.clone()))",
+    "Agent Workspace router is not inside the secured local API",
+)
+require(
+    "crates/homeserver-service/src/app.rs",
+    "agent_runtime::initialize(&connection)?",
+    "Agent Workspace migration is not initialized",
+)
+require(
+    "src-tauri/src/lib.rs",
+    "mod agent;",
+    "Agent Workspace Tauri module is not registered",
+)
+require(
+    "index.html",
+    "/src/agent-workspace.js",
+    "Agent Workspace frontend module is not loaded",
+)
+require(
+    "package.json",
+    "validate-agent-workspace.py",
+    "Agent Workspace validator is not part of frontend validation",
+)
 
 if ERRORS:
     print("Phase 5B Agent Workspace validation failed:", file=sys.stderr)
@@ -173,4 +203,6 @@ if ERRORS:
         print(f"- {error}", file=sys.stderr)
     raise SystemExit(1)
 
-print("Phase 5B Agent Workspace, supervised approval, and World Mission boundaries validated.")
+print(
+    "Phase 5B Agent Workspace, supervised approval, and World Mission boundaries validated."
+)
