@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the Phase 5B Agent Workspace and World Mission security contract."""
+"""Validate the Phase 5B Agent Workspace, World Mission, and Phase 5C evidence boundaries."""
 from __future__ import annotations
 
 import sys
@@ -75,7 +75,10 @@ for marker in (
     "LOCAL_ACTOR_ID",
     "requesting MCP client",
     "mission_drafting_only",
-    "provider_import_not_enabled_until_phase_5c",
+    '"operational_data_evidence"',
+    '"authorized_local_evidence"',
+    "operational_data::query_for_agent",
+    'key.starts_with("dataset:")',
 ):
     require(SERVICE, marker, f"Agent Workspace service boundary is missing {marker}")
 
@@ -104,7 +107,8 @@ for marker in (
 for marker in (
     "Agent Workspace",
     "Talk to your HomeServer",
-    "Operational data · Phase 5C",
+    "Operational data",
+    "dataset:",
     "World Mission drafting",
     "Execute Once",
     "homeserver_agent_prompt",
@@ -196,13 +200,18 @@ require(
     "validate-agent-workspace.py",
     "Agent Workspace validator is not part of frontend validation",
 )
+require(
+    "package.json",
+    "validate-operational-data.py",
+    "Operational evidence validator is not part of frontend validation",
+)
 
 if ERRORS:
-    print("Phase 5B Agent Workspace validation failed:", file=sys.stderr)
+    print("Agent Workspace validation failed:", file=sys.stderr)
     for error in ERRORS:
         print(f"- {error}", file=sys.stderr)
     raise SystemExit(1)
 
 print(
-    "Phase 5B Agent Workspace, supervised approval, and World Mission boundaries validated."
+    "Agent Workspace, supervised approval, World Mission, and Phase 5C operational evidence boundaries validated."
 )
