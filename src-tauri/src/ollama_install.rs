@@ -13,10 +13,7 @@ pub(crate) struct OllamaSetupLaunchResult {
 }
 
 #[cfg(windows)]
-fn launch_url(
-    url: &'static str,
-    target: &'static str,
-) -> Result<OllamaSetupLaunchResult, String> {
+fn launch_url(url: &'static str, target: &'static str) -> Result<OllamaSetupLaunchResult, String> {
     Command::new("rundll32.exe")
         .args(["url.dll,FileProtocolHandler", url])
         .spawn()
@@ -84,10 +81,7 @@ mod tests {
             OLLAMA_SETUP_URL,
             "https://ollama.com/download/OllamaSetup.exe"
         );
-        assert_eq!(
-            OLLAMA_WINDOWS_PAGE,
-            "https://ollama.com/download/windows"
-        );
+        assert_eq!(OLLAMA_WINDOWS_PAGE, "https://ollama.com/download/windows");
         assert_eq!(
             OLLAMA_INSTALL_COMMAND,
             "irm https://ollama.com/install.ps1 | iex"
