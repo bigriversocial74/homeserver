@@ -46,7 +46,12 @@ jobs:
           if (Select-String -Path crates/homeserver-service/src/main.rs -Pattern '^mod operational_data;$' -Quiet) {
             "Phase 5C integration is already applied." | Tee-Object phase5c-integration.log
           } else {
-            python scripts/apply-phase5c-operational-data.py *> phase5c-integration.log
+            python scripts/fix-phase5c-integration-script.py *> phase5c-integration.log
+            if ($LASTEXITCODE -ne 0) {
+              Get-Content phase5c-integration.log -Tail 400
+              exit $LASTEXITCODE
+            }
+            python scripts/apply-phase5c-operational-data.py *>> phase5c-integration.log
             $exitCode = $LASTEXITCODE
             Get-Content phase5c-integration.log -Tail 400
             if ($exitCode -ne 0) { exit $exitCode }
