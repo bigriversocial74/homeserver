@@ -31,8 +31,20 @@ jobs:
       - name: Capture frontend and PowerShell validation
         shell: pwsh
         run: |
-          npm run validate:frontend *> phase5b-frontend-validation.log
+          npm run check:frontend *> phase5b-frontend-validation.log
           $exitCode = $LASTEXITCODE
+          if ($exitCode -eq 0) {
+            foreach ($script in Get-ChildItem scripts -Filter "*.ps1") {
+              $tokens = $null
+              $errors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+              if ($errors.Count -gt 0) {
+                Add-Content phase5b-frontend-validation.log "PowerShell syntax failed: $($script.Name)"
+                $errors | ForEach-Object { Add-Content phase5b-frontend-validation.log $_.Message }
+                $exitCode = 1
+              }
+            }
+          }
           if ($exitCode -ne 0) {
             Get-Content phase5b-frontend-validation.log -Tail 400
           }
