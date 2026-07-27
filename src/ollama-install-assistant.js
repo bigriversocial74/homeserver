@@ -56,8 +56,37 @@ async function copyText(value, button) {
       button.textContent = previous;
       button.classList.remove("copied");
     }, 1600);
+    return true;
   } catch (error) {
     window.prompt("Copy this value:", value);
+    return false;
+  }
+}
+
+async function openOfficialTarget(target, fallbackUrl, button) {
+  const previous = button.textContent;
+  button.disabled = true;
+  button.textContent = "Opening…";
+  try {
+    await invoke("homeserver_open_ollama_official", { target });
+    button.textContent = "Opened";
+  } catch (error) {
+    window.prompt(`HomeServer could not open your browser. Copy this official Ollama URL instead:\n\n${String(error)}`, fallbackUrl);
+    button.textContent = "Copy URL";
+  } finally {
+    window.setTimeout(() => {
+      button.disabled = false;
+      button.textContent = previous;
+    }, 1800);
+  }
+}
+
+async function openPowerShell(button) {
+  const copied = await copyText(OLLAMA_INSTALL_COMMAND, button);
+  try {
+    await invoke("homeserver_open_ollama_terminal");
+  } catch (error) {
+    if (copied) window.alert(`The command was copied, but PowerShell could not be opened: ${String(error)}`);
   }
 }
 
@@ -76,14 +105,15 @@ function unavailableMarkup(errorMessage = "") {
       <article class="ollama-install-card primary-path">
         <div class="ollama-step-number">1</div>
         <div><span class="ollama-eyebrow">Recommended</span><h3>Official Windows installer</h3><p>Download <strong>OllamaSetup.exe</strong> from Ollama. The standard installer runs in your Windows account and keeps Ollama updated.</p></div>
-        <div class="ollama-action-row"><a class="button primary" href="${OLLAMA_SETUP_URL}" target="_blank" rel="noopener noreferrer">Download official installer</a><button type="button" class="button secondary" data-ollama-copy="setup-url">Copy link</button></div>
+        <div class="ollama-action-row"><button type="button" class="button primary" data-ollama-open="installer">Download official installer</button><button type="button" class="button secondary" data-ollama-copy="setup-url">Copy link</button></div>
         <small>Official source: <span class="mono">ollama.com</span> · Windows 10 or later</small>
       </article>
       <article class="ollama-install-card">
         <div class="ollama-step-number">2</div>
         <div><span class="ollama-eyebrow">Terminal option</span><h3>Install with PowerShell</h3><p>Open PowerShell as your normal Windows user, paste the official command, and approve the Ollama installer.</p></div>
         ${commandBlock("Official install command", OLLAMA_INSTALL_COMMAND, "install-command")}
-        <small>HomeServer displays this command but does not execute remote scripts automatically.</small>
+        <button type="button" class="button secondary full" data-ollama-terminal>Copy command & open PowerShell</button>
+        <small>HomeServer displays and copies this command but never executes the remote script automatically.</small>
       </article>
       <article class="ollama-install-card verification-card">
         <div class="ollama-step-number">3</div>
@@ -93,7 +123,7 @@ function unavailableMarkup(errorMessage = "") {
         <button type="button" class="button primary full" data-ollama-refresh>Check Ollama again</button>
       </article>
     </div>
-    <details class="ollama-help-details"><summary>Repair, update, or change model storage</summary><div><p>Run the latest official installer again to repair or update Ollama. Windows registers Ollama under <strong>Installed apps</strong> for uninstall. Models are normally stored under <code>%HOMEPATH%\\.ollama</code>.</p><p>To use another drive, set the user-level <code>OLLAMA_MODELS</code> environment variable before downloading models, restart Ollama, and refresh Model Center.</p><a href="${OLLAMA_WINDOWS_PAGE}" target="_blank" rel="noopener noreferrer">Open official Windows documentation</a></div></details>`;
+    <details class="ollama-help-details"><summary>Repair, update, or change model storage</summary><div><p>Run the latest official installer again to repair or update Ollama. Windows registers Ollama under <strong>Installed apps</strong> for uninstall. Models are normally stored under <code>%HOMEPATH%\\.ollama</code>.</p><p>To use another drive, set the user-level <code>OLLAMA_MODELS</code> environment variable before downloading models, restart Ollama, and refresh Model Center.</p><button type="button" class="text-button ollama-doc-button" data-ollama-open="documentation">Open official Windows documentation</button></div></details>`;
 }
 
 function readyMarkup(snapshot) {
@@ -104,7 +134,7 @@ function readyMarkup(snapshot) {
       <span class="ollama-state ready">Connected</span>
     </div>
     <div class="ollama-ready-grid"><div><span>Runtime</span><strong>${escapeHtml(runtimeVersion(snapshot))}</strong></div><div><span>Endpoint</span><strong class="mono">127.0.0.1:11434</strong></div><div><span>Installed models</span><strong>${installed}</strong></div><div><span>Boundary</span><strong>Local only</strong></div></div>
-    <div class="ollama-action-row ready-actions"><button type="button" class="button secondary" data-ollama-refresh>Recheck runtime</button><a class="button ghost" href="${OLLAMA_WINDOWS_PAGE}" target="_blank" rel="noopener noreferrer">Ollama documentation</a></div>`;
+    <div class="ollama-action-row ready-actions"><button type="button" class="button secondary" data-ollama-refresh>Recheck runtime</button><button type="button" class="button ghost" data-ollama-open="documentation">Ollama documentation</button></div>`;
 }
 
 function bindAssistantEvents(container) {
@@ -120,6 +150,14 @@ function bindAssistantEvents(container) {
   });
   container.querySelectorAll("[data-ollama-refresh]").forEach((button) => {
     button.addEventListener("click", () => refreshAssistant(true));
+  });
+  container.querySelectorAll("[data-ollama-open]").forEach((button) => {
+    const target = button.dataset.ollamaOpen;
+    const fallbackUrl = target === "installer" ? OLLAMA_SETUP_URL : OLLAMA_WINDOWS_PAGE;
+    button.addEventListener("click", () => openOfficialTarget(target, fallbackUrl, button));
+  });
+  container.querySelectorAll("[data-ollama-terminal]").forEach((button) => {
+    button.addEventListener("click", () => openPowerShell(button));
   });
 }
 
