@@ -1,0 +1,113 @@
+name: Fix Phase 5B strict Clippy blocker
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phase5b-clippy-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.head_ref == 'feature/phase-5b-agent-workspace-approvals-world-missions-20260727'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out Phase 5B branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-5b-agent-workspace-approvals-world-missions-20260727
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt, clippy
+
+      - name: Replace complex connection tuple and remove temporary workflows
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          path = Path("crates/homeserver-service/src/agent_runtime.rs")
+          content = path.read_text(encoding="utf-8")
+          old = '''fn cloud_connection_identity(
+              connection: &Connection,
+              connection_id: &str,
+          ) -> Result<(String, Option<String>, Option<String>, String, String)> {
+              connection
+                  .query_row(
+                      "SELECT provider_key,tenant_id,site_id,device_id,state FROM cloud_connections WHERE connection_id=?1",
+                      params![connection_id],
+                      |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                  )
+                  .context("cloud connection was not found")
+          }'''
+          new = '''#[derive(Debug)]
+          struct CloudConnectionIdentity {
+              provider_key: String,
+              tenant_id: Option<String>,
+              site_id: Option<String>,
+              device_id: String,
+              state: String,
+          }
+
+          fn cloud_connection_identity(
+              connection: &Connection,
+              connection_id: &str,
+          ) -> Result<CloudConnectionIdentity> {
+              connection
+                  .query_row(
+                      "SELECT provider_key,tenant_id,site_id,device_id,state FROM cloud_connections WHERE connection_id=?1",
+                      params![connection_id],
+                      |row| {
+                          Ok(CloudConnectionIdentity {
+                              provider_key: row.get(0)?,
+                              tenant_id: row.get(1)?,
+                              site_id: row.get(2)?,
+                              device_id: row.get(3)?,
+                              state: row.get(4)?,
+                          })
+                      },
+                  )
+                  .context("cloud connection was not found")
+          }'''
+          if content.count(old) != 1:
+              raise SystemExit("expected exactly one cloud_connection_identity tuple definition")
+          content = content.replace(old, new, 1)
+          replacements = {
+              '"provider_key": summary.0,': '"provider_key": summary.provider_key,',
+              '"tenant_id": summary.1,': '"tenant_id": summary.tenant_id,',
+              '"site_id": summary.2,': '"site_id": summary.site_id,',
+              '"device_id": summary.3,': '"device_id": summary.device_id,',
+              '"state": summary.4,': '"state": summary.state,',
+              'let (_, _, _, _, state) = cloud_connection_identity(connection, connection_id)?;': 'let identity = cloud_connection_identity(connection, connection_id)?;',
+              '["connected", "degraded", "pairing"].contains(&state.as_str()),': '["connected", "degraded", "pairing"].contains(&identity.state.as_str()),',
+          }
+          for source, target in replacements.items():
+              if content.count(source) != 1:
+                  raise SystemExit(f"expected one repair anchor: {source}")
+              content = content.replace(source, target, 1)
+          path.write_text(content, encoding="utf-8", newline="\n")
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          cargo fmt --all
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --package microgifter-homeserver-service --all-targets --locked -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/homeserver-service/src/agent_runtime.rs
+          git rm --ignore-unmatch .github/workflows/diagnose-phase5b-frontend-validation.yml
+          git rm --ignore-unmatch .github/workflows/fix-phase5b-clippy.yml
+          git commit -m "Repair Phase 5B strict Clippy blocker"
+          git push origin HEAD:feature/phase-5b-agent-workspace-approvals-world-missions-20260727
