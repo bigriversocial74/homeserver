@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - feature/phase-4d-semantic-vault-search-20260726
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
