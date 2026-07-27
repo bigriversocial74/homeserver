@@ -44,9 +44,12 @@ jobs:
         shell: pwsh
         run: |
           if (Select-String -Path crates/homeserver-service/src/main.rs -Pattern '^mod operational_data;$' -Quiet) {
-            Write-Host "Phase 5C integration is already applied."
+            "Phase 5C integration is already applied." | Tee-Object phase5c-integration.log
           } else {
-            python scripts/apply-phase5c-operational-data.py
+            python scripts/apply-phase5c-operational-data.py *> phase5c-integration.log
+            $exitCode = $LASTEXITCODE
+            Get-Content phase5c-integration.log -Tail 400
+            if ($exitCode -ne 0) { exit $exitCode }
           }
 
       - name: Validate frontend and Phase 5C contract
@@ -84,6 +87,7 @@ jobs:
         with:
           name: phase5c-focused-validation
           path: |
+            phase5c-integration.log
             phase5c-service-tests.log
             phase5c-service-clippy.log
           if-no-files-found: warn
