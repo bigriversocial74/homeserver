@@ -1,3 +1,9 @@
+#[path = "cloud_pairing_v2.rs"]
+mod cloud_pairing_v2;
+
+#[path = "cloud_registry.rs"]
+mod cloud_registry;
+
 #[path = "cloud_connector.rs"]
 mod cloud_connector;
 
@@ -30,6 +36,7 @@ pub async fn run(
     let connection = database::initialize(&config.database_path)?;
     update_store::initialize(&connection)?;
     cloud_connector::initialize(&connection)?;
+    cloud_registry::initialize(&connection)?;
     knowledge_vault::initialize(&connection, &config)?;
     document_extraction::initialize(&connection)?;
     model_center::initialize(&connection)?;
@@ -88,15 +95,20 @@ pub async fn run(
 
     let backup_scheduler = tokio::spawn(run_backup_scheduler(state.clone(), shutdown.clone()));
     let update_scheduler = tokio::spawn(run_update_scheduler(state.clone(), shutdown.clone()));
-    let cloud_worker = tokio::spawn(cloud_connector::run(state.clone(), shutdown.clone()));
+    let cloud_worker = tokio::spawn(cloud_registry::run(state.clone(), shutdown.clone()));
     info!(%address, "HomeServer local API ready");
     if let Some(ready) = ready {
         let _ = ready.send(());
     }
 
+    let registry_router = cloud_registry::router(state.clone()).layer(axum::middleware::from_fn(
+        cloud_pairing_v2::reject_legacy_pairing,
+    ));
     let router = http::secure(
         http::router(state.clone())
             .merge(cloud_connector::router(state.clone()))
+            .merge(registry_router)
+            .merge(cloud_pairing_v2::router(state.clone()))
             .merge(knowledge_vault::router(state.clone()))
             .merge(model_center::router(state.clone()))
             .merge(semantic_vault::router(state.clone()))
