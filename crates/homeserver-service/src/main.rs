@@ -3,6 +3,7 @@ mod backup;
 mod backup_key;
 mod config;
 mod database;
+mod document_extraction;
 mod http;
 mod knowledge_vault;
 mod model_center;
@@ -94,6 +95,17 @@ impl AppState {
             return HealthSnapshot::needs_attention(
                 &self.config.server_name,
                 "semantic_vault_integrity_check_failed",
+            );
+        }
+
+        if let Err(error) = document_extraction::health_check(&connection) {
+            error!(
+                ?error,
+                "HomeServer document extraction database health check failed"
+            );
+            return HealthSnapshot::needs_attention(
+                &self.config.server_name,
+                "document_extraction_integrity_check_failed",
             );
         }
 

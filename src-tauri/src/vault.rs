@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use std::path::Path;
 use tokio_util::io::ReaderStream;
 
-const MAX_VAULT_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_VAULT_DOCUMENT_BYTES: u64 = 32 * 1024 * 1024;
 const FILE_NAME_HEADER: &str = "x-mg-vault-file-name";
 const TAGS_HEADER: &str = "x-mg-vault-tags";
 
@@ -64,8 +64,11 @@ pub(crate) async fn homeserver_import_vault_document(
 ) -> Result<Option<Value>, String> {
     let Some(source) = AsyncFileDialog::new()
         .add_filter(
-            "Knowledge Vault text documents",
-            &["txt", "md", "csv", "json", "log"],
+            "Knowledge Vault documents",
+            &[
+                "txt", "md", "csv", "json", "log", "pdf", "docx", "png", "jpg", "jpeg", "tif",
+                "tiff",
+            ],
         )
         .pick_file()
         .await
@@ -78,7 +81,7 @@ pub(crate) async fn homeserver_import_vault_document(
         .await
         .map_err(|error| error.to_string())?;
     if metadata.len() == 0 || metadata.len() > MAX_VAULT_DOCUMENT_BYTES {
-        return Err("Knowledge Vault documents must be between 1 byte and 16 MB.".to_owned());
+        return Err("Knowledge Vault documents must be between 1 byte and 32 MB.".to_owned());
     }
     let file_name = path
         .file_name()
@@ -125,6 +128,6 @@ mod tests {
 
     #[test]
     fn maximum_document_size_is_bounded() {
-        assert_eq!(MAX_VAULT_DOCUMENT_BYTES, 16 * 1024 * 1024);
+        assert_eq!(MAX_VAULT_DOCUMENT_BYTES, 32 * 1024 * 1024);
     }
 }
