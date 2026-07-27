@@ -86,36 +86,43 @@ function findMount() {
   return integrationGrid.parentElement;
 }
 
-function mount() {
+function mount(force = false) {
   const parent = findMount();
   if (!parent) return;
   let panel = document.querySelector("#cloud-connections-registry");
+  let changed = false;
   if (!panel) {
-    panel = document.createElement("div");
-    panel.innerHTML = renderPanel();
-    panel = panel.firstElementChild;
+    const holder = document.createElement("div");
+    holder.innerHTML = renderPanel();
+    panel = holder.firstElementChild;
     const mcpPanel = parent.querySelector("#mcp-runtime");
     if (mcpPanel) parent.insertBefore(panel, mcpPanel);
     else parent.append(panel);
-  } else {
-    panel.outerHTML = renderPanel();
+    changed = true;
+  } else if (force) {
+    const holder = document.createElement("div");
+    holder.innerHTML = renderPanel();
+    const replacement = holder.firstElementChild;
+    panel.replaceWith(replacement);
+    panel = replacement;
+    changed = true;
   }
-  bindEvents();
+  if (changed) bindEvents(panel);
   if (!snapshot && !loading) void refresh();
 }
 
-function bindEvents() {
-  document.querySelector("#cloud-connection-pair-form")?.addEventListener("submit", pairConnection);
-  document.querySelector("#cloud-connections-refresh")?.addEventListener("click", () => refresh(true));
-  document.querySelector("#cloud-connections-sync-all")?.addEventListener("click", syncAll);
-  document.querySelectorAll("[data-cloud-action]").forEach((button) => {
+function bindEvents(panel) {
+  panel.querySelector("#cloud-connection-pair-form")?.addEventListener("submit", pairConnection);
+  panel.querySelector("#cloud-connections-refresh")?.addEventListener("click", () => refresh(true));
+  panel.querySelector("#cloud-connections-sync-all")?.addEventListener("click", syncAll);
+  panel.querySelectorAll("[data-cloud-action]").forEach((button) => {
     button.addEventListener("click", handleConnectionAction);
   });
 }
 
 async function refresh(showNotice = false) {
   loading = true;
-  mount();
+  mount(true);
   try {
     snapshot = await invoke("homeserver_cloud_connections");
     if (showNotice) notice = { kind: "info", message: "Cloud connection registry refreshed." };
@@ -123,24 +130,25 @@ async function refresh(showNotice = false) {
     notice = { kind: "warning", message: `Cloud connection registry unavailable: ${String(error)}` };
   } finally {
     loading = false;
-    mount();
+    mount(true);
   }
 }
 
 async function pairConnection(event) {
   event.preventDefault();
+  const form = event.currentTarget;
   actionBusy = true;
   notice = null;
-  mount();
   const request = {
-    provider_key: document.querySelector("#cloud-connection-provider")?.value || "microgifter",
-    display_name: document.querySelector("#cloud-connection-name")?.value?.trim() || "",
-    cloud_base_url: document.querySelector("#cloud-connection-url")?.value?.trim() || "",
-    pairing_code: document.querySelector("#cloud-connection-token")?.value?.trim() || "",
-    tenant_id: document.querySelector("#cloud-connection-tenant")?.value?.trim() || null,
-    site_id: document.querySelector("#cloud-connection-site")?.value?.trim() || null,
-    make_default: Boolean(document.querySelector("#cloud-connection-default")?.checked),
+    provider_key: form.querySelector("#cloud-connection-provider")?.value || "microgifter",
+    display_name: form.querySelector("#cloud-connection-name")?.value?.trim() || "",
+    cloud_base_url: form.querySelector("#cloud-connection-url")?.value?.trim() || "",
+    pairing_code: form.querySelector("#cloud-connection-token")?.value?.trim() || "",
+    tenant_id: form.querySelector("#cloud-connection-tenant")?.value?.trim() || null,
+    site_id: form.querySelector("#cloud-connection-site")?.value?.trim() || null,
+    make_default: Boolean(form.querySelector("#cloud-connection-default")?.checked),
   };
+  mount(true);
   try {
     const connection = await invoke("homeserver_pair_cloud_connection", { request });
     notice = { kind: "success", message: `${connection.display_name} was paired and verified.` };
@@ -149,7 +157,7 @@ async function pairConnection(event) {
     notice = { kind: "warning", message: String(error) };
   } finally {
     actionBusy = false;
-    mount();
+    mount(true);
   }
 }
 
@@ -161,7 +169,7 @@ async function handleConnectionAction(event) {
   if (action === "disconnect" && !window.confirm("Disconnect this cloud site and remove its stored credential? Other connections will remain active.")) return;
   actionBusy = true;
   notice = null;
-  mount();
+  mount(true);
   try {
     if (action === "sync") {
       const result = await invoke("homeserver_sync_cloud_connection", { connectionId });
@@ -175,14 +183,14 @@ async function handleConnectionAction(event) {
     notice = { kind: "warning", message: String(error) };
   } finally {
     actionBusy = false;
-    mount();
+    mount(true);
   }
 }
 
 async function syncAll() {
   actionBusy = true;
   notice = null;
-  mount();
+  mount(true);
   try {
     const result = await invoke("homeserver_sync_all_cloud_connections");
     notice = { kind: "success", message: `All connections synchronized: ${Number(result.processed || 0)} processed, ${Number(result.pending || 0)} still pending.` };
@@ -191,11 +199,14 @@ async function syncAll() {
     notice = { kind: "warning", message: String(error) };
   } finally {
     actionBusy = false;
-    mount();
+    mount(true);
   }
 }
 
-const observer = new MutationObserver(() => mount());
-observer.observe(document.querySelector("#app"), { childList: true, subtree: true });
-window.addEventListener("hashchange", () => window.setTimeout(mount, 0));
-window.addEventListener("DOMContentLoaded", () => window.setTimeout(mount, 0));
+const app = document.querySelector("#app");
+if (app) {
+  const observer = new MutationObserver(() => mount(false));
+  observer.observe(app, { childList: true, subtree: true });
+}
+window.addEventListener("hashchange", () => window.setTimeout(() => mount(false), 0));
+window.addEventListener("DOMContentLoaded", () => window.setTimeout(() => mount(false), 0));
