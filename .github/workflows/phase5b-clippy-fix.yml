@@ -34,35 +34,20 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-
-          $connectorPath = 'crates/homeserver-service/src/cloud_connector.rs'
-          $connector = Get-Content $connectorPath -Raw
-          $connector = $connector.Replace("use tokio::sync::watch;`r`n", '')
-          $connector = $connector.Replace("use tokio::sync::watch;`n", '')
-          $connector = $connector.Replace('use tracing::{info, warn};', 'use tracing::warn;')
-          $connector = $connector.Replace("const SYNC_INTERVAL: Duration = Duration::from_secs(60);`r`n", '')
-          $connector = $connector.Replace("const SYNC_INTERVAL: Duration = Duration::from_secs(60);`n", '')
-          $pattern = '(?ms)\r?\npub async fn run\(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>\) \{.*?\r?\n\}\r?\n\r?\nimpl AppState'
-          $updatedConnector = [regex]::Replace($connector, $pattern, "`nimpl AppState")
-          if ($updatedConnector -eq $connector) {
-            throw 'Expected superseded singleton synchronization worker was not found.'
-          }
-          Set-Content $connectorPath $updatedConnector -NoNewline
-
-          $registryPath = 'crates/homeserver-service/src/cloud_registry.rs'
-          $registry = Get-Content $registryPath -Raw
-          $updatedRegistry = $registry.Replace('.is_none_or(|value| value.len() <= 120)', '.map_or(true, |value| value.len() <= 120)')
-          if ($updatedRegistry -eq $registry) {
-            throw 'Expected post-MSRV Option helper was not found.'
-          }
-          Set-Content $registryPath $updatedRegistry -NoNewline
-
+          python scripts/repair-phase5b-clippy.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo fmt --all
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo clippy --package microgifter-homeserver-service --all-targets --locked -- -D warnings
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --package microgifter-homeserver-service --all-targets --locked -- -D warnings *> clippy-fix.log
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content clippy-fix.log -Tail 240
+            exit $LASTEXITCODE
+          }
 
-          $allowed = @($connectorPath, $registryPath)
+          $allowed = @(
+            'crates/homeserver-service/src/cloud_connector.rs',
+            'crates/homeserver-service/src/cloud_registry.rs'
+          )
           $changed = @(git diff --name-only)
           $unexpected = @($changed | Where-Object { $_ -notin $allowed })
           if ($unexpected.Count -gt 0) {
@@ -77,3 +62,12 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'Repair Phase 5B strict Clippy findings'
           git push origin HEAD:feature/phase-5b-multi-connection-supervised-agents-20260727
+
+      - name: Upload Clippy repair diagnostic
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase5b-clippy-repair-log
+          path: clippy-fix.log
+          if-no-files-found: warn
+          retention-days: 7
