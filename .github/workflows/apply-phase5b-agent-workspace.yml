@@ -1,0 +1,63 @@
+name: Apply Phase 5B Agent Workspace integration
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phase5b-agent-workspace-integration
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    if: github.head_ref == 'feature/phase-5b-agent-workspace-approvals-world-missions-20260727'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out Phase 5B branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-5b-agent-workspace-approvals-world-missions-20260727
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt, clippy
+
+      - name: Apply deterministic integration patch
+        shell: pwsh
+        run: |
+          python scripts/apply-phase5b-agent-workspace.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo fmt --all
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --check src/agent-workspace.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/validate-agent-workspace.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/validate-mcp-runtime.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo check --package microgifter-homeserver-service --package microgifter-homeserver-control-center --locked *> phase5b-agent-check.log
+          if ($LASTEXITCODE -ne 0) { Get-Content phase5b-agent-check.log -Tail 300; exit $LASTEXITCODE }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/homeserver-service/src/app.rs crates/homeserver-service/src/main.rs crates/homeserver-service/src/mcp_runtime.rs crates/homeserver-service/src/agent_runtime.rs src-tauri/src/lib.rs index.html package.json src/main.js scripts/validate-security-boundaries.py scripts/validate-mcp-runtime.py
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "Integrate supervised Agent Workspace runtime"
+            git push origin HEAD:feature/phase-5b-agent-workspace-approvals-world-missions-20260727
+          }
+
+      - name: Upload focused compiler log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase5b-agent-workspace-check
+          path: phase5b-agent-check.log
+          if-no-files-found: warn
+          retention-days: 7
