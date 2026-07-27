@@ -495,11 +495,11 @@ pub async fn run(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>) {
 
 impl AppState {
     pub(crate) fn cloud_connections_snapshot(&self) -> Result<CloudConnectionsSnapshot> {
-        registry_snapshot(&self.connection()?)
+        registry_snapshot(&*self.connection()?)
     }
 
     fn active_cloud_connection_ids(&self) -> Result<Vec<String>> {
-        active_connection_ids(&self.connection()?)
+        active_connection_ids(&*self.connection()?)
     }
 
     async fn pair_cloud_connection(
@@ -512,7 +512,7 @@ impl AppState {
                 .context("connection display name is required")?;
         let tenant_id = sanitize_optional_text(request.tenant_id.as_deref(), 120, "tenant id")?;
         let site_id = sanitize_optional_text(request.site_id.as_deref(), 120, "site id")?;
-        let installation_id = database::installation_id(&self.connection()?)?;
+        let installation_id = database::installation_id(&*self.connection()?)?;
         let connection_id = Uuid::new_v4().to_string();
         let credential_key = format!("{installation_id}:cloud:{connection_id}");
         let client = provider_client(&provider_key)?;
@@ -527,7 +527,7 @@ impl AppState {
 
         save_secrets(&credential_key, &outcome.secrets)?;
         let save_result = save_connection(
-            &self.connection()?,
+            &*self.connection()?,
             NewConnection {
                 connection_id: &connection_id,
                 provider_key: &provider_key,
@@ -547,24 +547,24 @@ impl AppState {
             return Err(error).context("unable to persist cloud connection");
         }
 
-        let record = connection_record(&self.connection()?, &connection_id)?;
+        let record = connection_record(&*self.connection()?, &connection_id)?;
         if let Err(error) = client.status(&record, &outcome.secrets).await {
             mark_connection_error(
-                &self.connection()?,
+                &*self.connection()?,
                 &connection_id,
                 &public_cloud_error(&error),
                 authentication_failed(&error),
             )?;
             return Err(error).context("pairing completed but signed cloud verification failed");
         }
-        mark_connection_success(&self.connection()?, &connection_id)?;
+        mark_connection_success(&*self.connection()?, &connection_id)?;
         self.enqueue_connection_heartbeat(&connection_id)?;
-        connection_summary(&self.connection()?, &connection_id)
+        connection_summary(&*self.connection()?, &connection_id)
     }
 
     fn disconnect_cloud_connection(&self, connection_id: &str) -> Result<CloudConnectionsSnapshot> {
         validate_connection_id(connection_id)?;
-        let record = connection_record(&self.connection()?, connection_id)?;
+        let record = connection_record(&*self.connection()?, connection_id)?;
         delete_secrets(&record.credential_key)?;
         let connection = self.connection()?;
         connection.execute(
@@ -598,7 +598,7 @@ impl AppState {
         });
         validate_idempotency_key(&idempotency_key)?;
         enqueue_operation(
-            &self.connection()?,
+            &*self.connection()?,
             &request.connection_id,
             &idempotency_key,
             &operation_type,
@@ -663,7 +663,7 @@ impl AppState {
             Ok(secrets) => secrets,
             Err(error) => {
                 mark_connection_error(
-                    &self.connection()?,
+                    &*self.connection()?,
                     connection_id,
                     "credential_vault_unavailable",
                     false,
@@ -675,10 +675,10 @@ impl AppState {
 
         if operations.is_empty() {
             match client.status(&record, &secrets).await {
-                Ok(()) => mark_connection_success(&self.connection()?, connection_id)?,
+                Ok(()) => mark_connection_success(&*self.connection()?, connection_id)?,
                 Err(error) => {
                     mark_connection_error(
-                        &self.connection()?,
+                        &*self.connection()?,
                         connection_id,
                         &public_cloud_error(&error),
                         authentication_failed(&error),
@@ -692,7 +692,7 @@ impl AppState {
                 accepted: 0,
                 rejected: 0,
                 review: 0,
-                pending: pending_sync_count(&self.connection()?, connection_id)?,
+                pending: pending_sync_count(&*self.connection()?, connection_id)?,
             });
         }
 
@@ -1092,9 +1092,9 @@ fn active_connection_ids(connection: &Connection) -> Result<Vec<String>> {
     let mut statement = connection.prepare(
         "SELECT connection_id FROM cloud_connections WHERE state IN ('pairing','connected','degraded') ORDER BY is_default DESC,connection_id",
     )?;
-    Ok(statement
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?)
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let connection_ids = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(connection_ids)
 }
 
 fn ensure_default_connection(connection: &Connection) -> Result<()> {

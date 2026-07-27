@@ -275,7 +275,7 @@ async fn pair_connection(
     let tenant_id = sanitize_optional_text(request.tenant_id.as_deref(), 120, "tenant id")?;
     let site_id = sanitize_optional_text(request.site_id.as_deref(), 120, "site id")?;
     let connection_id = Uuid::new_v4().to_string();
-    let installation_id = database::installation_id(&state.connection()?)?;
+    let installation_id = database::installation_id(&*state.connection()?)?;
     let credential_key = format!("{installation_id}:cloud:{connection_id}");
     let client = MicrogifterPairingClient::new()?;
     let outcome = client
