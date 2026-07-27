@@ -1,10 +1,9 @@
 name: Materialize Phase 5A source
 
-# Second commit intentionally triggers this already-present one-time workflow.
 on:
-  push:
+  pull_request:
     branches:
-      - repair/materialize-phase-5a-source-20260727
+      - main
     paths:
       - .github/workflows/materialize-phase5a-source.yml
   workflow_dispatch:
