@@ -1,0 +1,131 @@
+name: Apply Phase 4D Verified Payload
+
+on:
+  push:
+    branches:
+      - feature/phase-4d-semantic-vault-search-20260726
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    runs-on: windows-2025
+    steps:
+      - name: Check out exact feature branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-4d-semantic-vault-search-20260726
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Reconstruct and verify Phase 4D payload
+        shell: pwsh
+        run: |
+          $expected = [ordered]@{
+            '.phase4d-payload/part-00.txt' = 'fa1ab12533ed43e12947c2ae6c28281449fa9661261d20596490f456ccb699a2'
+            '.phase4d-payload/part-01.txt' = '616f8bcdbda14dc4ed6478bd0ed1c54205c8bbc98feab9ab48a34aa537820202'
+            '.phase4d-payload/part-02.txt' = 'd45afe9b27a32ba250538ae50fe07504fe5f67d277ccba82d5e9288edd1932c4'
+            '.phase4d-payload/tail-00.txt' = '33dbd8470ebd2ce55c96f03f4aad347f826d0c86f8356162fd4e802faedd3197'
+            '.phase4d-payload/tail-01.txt' = '1c999e60c8f196cf3f7b7f49e5c8f47fc4c3efc8aff7086e88f2457d16625cf2'
+            '.phase4d-payload/tail-02.txt' = '10d1807dd640147c44a92527334dc4844da22061f264646ca80f6508c641416f'
+            '.phase4d-payload/tail-03.txt' = '27b4000ebf2d7ead78b7217cee26a86e21e53a38110601a7e8206ffcba148518'
+            '.phase4d-payload/tail-04.txt' = 'c6b45e8b9137a23f9ff18146722db65fca7d773ef775566b11a087f3c2785268'
+            '.phase4d-payload/tail-05.txt' = '4e2dedd2bd29a5698980b9cf4c42cb048dd4c6b9501d67e43499b86e570ec8ab'
+            '.phase4d-payload/tail-06.txt' = 'ffa4c234866b56c84ac5a85de66ab1796da6f961a025897792b7c7b73b528332'
+            '.phase4d-payload/tail-07.txt' = 'cfd4c56a1f67d14dddc00385958cf2aae5a9b546903bb0ddf8b8e74e1489f2c1'
+            '.phase4d-payload/tail-08.txt' = '83c572cf33711b9781fc3762c389c01943c22eb42a17d5f2dd8ad5e56c0a2346'
+            '.phase4d-payload/tail-09.txt' = '5451bf7d95f3e23e7e59812496650b75818ec9763454fecadb92223eb742d8d1'
+            '.phase4d-payload/tail-10.txt' = 'e15e47d2dd6a964658710249c12970dd151782b2c8bbb36408fdc1f7834da30a'
+            '.phase4d-payload/tail-11.txt' = '6192ebb43d32fa04f550f21d3c4dc157eeabe68bd0a7790974487e25f42cb7f6'
+            '.phase4d-payload/tail-12.txt' = 'c579d46ac76a86527bf0afcb5a053187e5ecc9dfe41517264f0d1f61bc1c4e4e'
+            '.phase4d-payload/tail-13a.txt' = 'c0992007c0b453a3a2067438a4117635b8a1543a464bc00109dc3dba7ec41d61'
+            '.phase4d-payload/tail-13b.txt' = '7738ecda2aedef530971e478cfeb8c4c92b894885f0ee93fa0730c3ff79d4338'
+          }
+          foreach ($entry in $expected.GetEnumerator()) {
+            if (-not (Test-Path $entry.Key)) { throw "Missing payload chunk: $($entry.Key)" }
+            $actual = (Get-FileHash $entry.Key -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $entry.Value) { throw "Payload chunk checksum mismatch: $($entry.Key)" }
+          }
+          $encoded = ($expected.Keys | ForEach-Object { Get-Content $_ -Raw }) -join ''
+          $zipPath = Join-Path $env:RUNNER_TEMP 'phase4d-payload.zip'
+          [IO.File]::WriteAllBytes($zipPath, [Convert]::FromBase64String($encoded))
+          $zipHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($zipHash -ne 'a07f655d06b8c931fc94eaa9b6707bd4a8b8c9d653e3eeafcb8ebe9cc140341a') {
+            throw 'Phase 4D payload ZIP checksum mismatch.'
+          }
+          $stage = Join-Path $env:RUNNER_TEMP 'phase4d-stage'
+          Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -Path $zipPath -DestinationPath $stage -Force
+          $manifestPath = Join-Path $stage 'phase4d-manifest.json'
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          foreach ($property in $manifest.PSObject.Properties) {
+            $source = Join-Path $stage $property.Name
+            if (-not (Test-Path $source -PathType Leaf)) { throw "Missing staged product file: $($property.Name)" }
+            $actual = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne [string]$property.Value) { throw "Product file checksum mismatch: $($property.Name)" }
+            $destination = Join-Path $PWD $property.Name
+            $parent = Split-Path $destination -Parent
+            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+            Copy-Item $source $destination -Force
+          }
+          Remove-Item '.phase4d-payload' -Recurse -Force
+          Remove-Item '.github/workflows/export-phase4d-source.yml' -Force -ErrorAction SilentlyContinue
+          Remove-Item '.github/workflows/apply-phase4d-payload.yml' -Force
+
+      - name: Validate frontend and security boundaries
+        shell: pwsh
+        run: |
+          npm ci
+          npm run check:frontend
+          npm run build
+          python scripts/validate-security-boundaries.py
+          npm run prepare:icons
+
+      - name: Validate Rust workspace
+        shell: pwsh
+        run: |
+          cargo fmt --all --check
+          cargo build --release --package microgifter-homeserver-service --locked *> service-build.log
+          if ($LASTEXITCODE -ne 0) { Get-Content service-build.log -Tail 240; exit $LASTEXITCODE }
+          cargo build --release --package microgifter-homeserver-updater --locked *> updater-build.log
+          if ($LASTEXITCODE -ne 0) { Get-Content updater-build.log -Tail 240; exit $LASTEXITCODE }
+          Copy-Item target/release/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
+          Copy-Item target/release/microgifter-homeserver-updater.exe src-tauri/resources/microgifter-homeserver-updater.exe -Force
+          cargo test --workspace --locked *> cargo-test.log
+          if ($LASTEXITCODE -ne 0) { Get-Content cargo-test.log -Tail 300; exit $LASTEXITCODE }
+          cargo clippy --workspace --all-targets --locked -- -D warnings *> cargo-clippy.log
+          if ($LASTEXITCODE -ne 0) { Get-Content cargo-clippy.log -Tail 300; exit $LASTEXITCODE }
+
+      - name: Run local service smoke tests
+        shell: pwsh
+        run: |
+          & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-service.ps1 *> service-smoke.log
+          if ($LASTEXITCODE -ne 0) { Get-Content service-smoke.log -Tail 300; exit $LASTEXITCODE }
+          & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-cloud-connector.ps1 *> cloud-smoke.log
+          if ($LASTEXITCODE -ne 0) { Get-Content cloud-smoke.log -Tail 240; exit $LASTEXITCODE }
+          & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-update-api.ps1 *> update-smoke.log
+          if ($LASTEXITCODE -ne 0) { Get-Content update-smoke.log -Tail 240; exit $LASTEXITCODE }
+
+      - name: Commit clean Phase 4D product files
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if (-not (git diff --cached --quiet)) {
+            git commit -m 'Build Phase 4D semantic Knowledge Vault search'
+            git push origin HEAD:feature/phase-4d-semantic-vault-search-20260726
+          } else {
+            throw 'Phase 4D payload produced no product changes.'
+          }
