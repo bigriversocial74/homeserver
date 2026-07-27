@@ -1,4 +1,5 @@
 mod cloud;
+mod model;
 mod vault;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -311,7 +312,13 @@ pub fn run() {
             vault::homeserver_import_vault_document,
             vault::homeserver_search_vault,
             vault::homeserver_reindex_vault,
-            vault::homeserver_delete_vault_document
+            vault::homeserver_delete_vault_document,
+            model::homeserver_models,
+            model::homeserver_pull_model,
+            model::homeserver_delete_model,
+            model::homeserver_unload_model,
+            model::homeserver_test_model,
+            model::homeserver_update_model_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running Microgifter HomeServer Control Center");

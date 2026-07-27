@@ -5,6 +5,7 @@ mod config;
 mod database;
 mod http;
 mod knowledge_vault;
+mod model_center;
 mod recovery_transfer;
 mod update;
 mod update_apply;
@@ -71,6 +72,16 @@ impl AppState {
             return HealthSnapshot::needs_attention(
                 &self.config.server_name,
                 "update_integrity_check_failed",
+            );
+        }
+        if let Err(error) = model_center::health_check(&connection) {
+            error!(
+                ?error,
+                "HomeServer Model Center database health check failed"
+            );
+            return HealthSnapshot::needs_attention(
+                &self.config.server_name,
+                "model_center_integrity_check_failed",
             );
         }
 
@@ -167,6 +178,7 @@ impl AppState {
             let connection = self.connection()?;
             database::maintain_history(&connection)?;
             update_store::maintain_history(&connection)?;
+            model_center::maintain_history(&connection)?;
             backup::enforce_pre_update_retention(&connection)?;
         }
         prune_artifact_generations(&self.config.update_rollback_dir, 3, true)?;

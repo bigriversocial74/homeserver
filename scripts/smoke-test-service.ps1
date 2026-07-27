@@ -62,6 +62,25 @@ try {
         throw "Expected ready backup service, received '$($status.backup)'"
     }
 
+    $models = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/models" -TimeoutSec 15
+    if ($models.runtime.api_url -ne "http://127.0.0.1:11434") {
+        throw "Model Center runtime URL is not fixed to the approved loopback endpoint"
+    }
+    if ($models.runtime.state -notin @("running", "not_running")) {
+        throw "Unexpected Model Center runtime state '$($models.runtime.state)'"
+    }
+    if (-not $models.local_only -or @($models.catalog).Count -ne 5) {
+        throw "Model Center local-only catalog is incomplete"
+    }
+    if ([int]$models.settings.context_size -lt 512 -or [int]$models.settings.max_download_gb -lt 1) {
+        throw "Model Center bounded settings were not initialized"
+    }
+    $unapprovedBody = @{ model = "unapproved/model:latest" } | ConvertTo-Json -Compress
+    $unapproved = Invoke-WebRequest -SkipHttpErrorCheck -Method Post -Headers $controlHeaders -Uri "$apiBase/v1/models/pull" -ContentType "application/json" -Body $unapprovedBody -TimeoutSec 10
+    if ($unapproved.StatusCode -ne 422) {
+        throw "Expected unapproved local model rejection, received HTTP $($unapproved.StatusCode)"
+    }
+
     $manualBody = @{
         kind = "manual"
         passphrase = $null
