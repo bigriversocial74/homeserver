@@ -1795,11 +1795,11 @@ fn fresh_state_token(
             json!({
                 "action": action_type,
                 "connection_id": connection_id,
-                "provider_key": summary.0,
-                "tenant_id": summary.1,
-                "site_id": summary.2,
-                "device_id": summary.3,
-                "state": summary.4,
+                "provider_key": summary.provider_key,
+                "tenant_id": summary.tenant_id,
+                "site_id": summary.site_id,
+                "device_id": summary.device_id,
+                "state": summary.state,
             })
         }
         "cloud.sync_all" => {
@@ -1824,15 +1824,32 @@ fn fresh_state_token(
     hash_json(&payload)
 }
 
+#[derive(Debug)]
+struct CloudConnectionIdentity {
+    provider_key: String,
+    tenant_id: Option<String>,
+    site_id: Option<String>,
+    device_id: String,
+    state: String,
+}
+
 fn cloud_connection_identity(
     connection: &Connection,
     connection_id: &str,
-) -> Result<(String, Option<String>, Option<String>, String, String)> {
+) -> Result<CloudConnectionIdentity> {
     connection
         .query_row(
             "SELECT provider_key,tenant_id,site_id,device_id,state FROM cloud_connections WHERE connection_id=?1",
             params![connection_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            |row| {
+                Ok(CloudConnectionIdentity {
+                    provider_key: row.get(0)?,
+                    tenant_id: row.get(1)?,
+                    site_id: row.get(2)?,
+                    device_id: row.get(3)?,
+                    state: row.get(4)?,
+                })
+            },
         )
         .context("cloud connection was not found")
 }
@@ -1846,9 +1863,9 @@ fn validate_action_target(
         "cloud.sync_connection" => {
             let connection_id =
                 connection_id.context("connection id is required for a connection sync")?;
-            let (_, _, _, _, state) = cloud_connection_identity(connection, connection_id)?;
+            let identity = cloud_connection_identity(connection, connection_id)?;
             ensure!(
-                ["connected", "degraded", "pairing"].contains(&state.as_str()),
+                ["connected", "degraded", "pairing"].contains(&identity.state.as_str()),
                 "cloud connection is inactive"
             );
         }
