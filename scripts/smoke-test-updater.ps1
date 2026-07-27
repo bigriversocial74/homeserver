@@ -29,6 +29,10 @@ $diagnosticDirectory = Join-Path $env:SystemRoot "Temp\Microgifter-HomeServer-Up
 $uninstallerPath = $null
 $scriptExitCode = 0
 $currentUserTrustStores = @("Root", "TrustedPublisher")
+$registryPaths = @(
+    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+)
 
 function Read-TrimmedText {
     param(
@@ -147,13 +151,21 @@ $signature = Get-AuthenticodeSignature -LiteralPath $env:MG_UPDATE_FILE
 function Wait-ForHomeServerHealth {
     param([Parameter(Mandatory = $true)][string]$ExpectedVersion)
 
+    $lastServiceStatus = "missing"
+    $lastHealthStatus = $null
+    $lastStatus = $null
+    $lastError = $null
+
     for ($attempt = 0; $attempt -lt 120; $attempt++) {
         try {
             $service = Get-Service -Name $serviceName -ErrorAction Stop
+            $lastServiceStatus = [string]$service.Status
             if ($service.Status -eq "Running") {
                 $health = Invoke-WebRequest -UseBasicParsing -Uri "$apiBase/healthz" -TimeoutSec 2
+                $lastHealthStatus = [int]$health.StatusCode
                 if ($health.StatusCode -eq 204) {
                     $status = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/status" -TimeoutSec 3
+                    $lastStatus = $status
                     if ($status.version -eq $ExpectedVersion -and $status.state -eq "running") {
                         return $status
                     }
@@ -161,11 +173,63 @@ function Wait-ForHomeServerHealth {
             }
         }
         catch {
-            Start-Sleep -Milliseconds 500
+            $lastError = $_.Exception.Message
         }
+        Start-Sleep -Milliseconds 500
     }
 
+    Write-Host "HomeServer health wait diagnostics: service=$lastServiceStatus health=$lastHealthStatus error=$lastError"
+    if ($lastStatus) {
+        Write-Host "HomeServer status snapshot: $($lastStatus | ConvertTo-Json -Depth 8 -Compress)"
+    }
+    $serviceLogs = Get-ChildItem (Join-Path $dataDirectory "logs") -Filter "microgifter-homeserver-service.log*" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTimeUtc -Descending
+    foreach ($serviceLog in $serviceLogs) {
+        Write-Host "HomeServer service log $($serviceLog.FullName):"
+        Get-Content -LiteralPath $serviceLog.FullName -Tail 200 -ErrorAction SilentlyContinue
+    }
+    & "$env:SystemRoot\System32\sc.exe" queryex $serviceName 2>$null
     throw "HomeServer did not become healthy at version $ExpectedVersion"
+}
+
+function Get-HomeServerRegistryEntries {
+    @(
+        Get-ItemProperty $registryPaths -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -eq "Microgifter HomeServer" }
+    )
+}
+
+function Reset-HomeServerInstallationBoundary {
+    for ($attempt = 0; $attempt -lt 120; $attempt++) {
+        Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+        & "$env:SystemRoot\System32\sc.exe" delete $serviceName 2>$null | Out-Null
+        Get-Process -Name "microgifter-homeserver*" -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+
+        if (Test-Path $installDirectory) {
+            Remove-Item $installDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path $dataDirectory) {
+            Remove-Item $dataDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        foreach ($entry in Get-HomeServerRegistryEntries) {
+            Remove-Item -LiteralPath $entry.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        $processes = @(Get-Process -Name "microgifter-homeserver*" -ErrorAction SilentlyContinue)
+        $registryEntries = @(Get-HomeServerRegistryEntries)
+        if (-not $service -and $processes.Count -eq 0 -and $registryEntries.Count -eq 0 -and -not (Test-Path $installDirectory) -and -not (Test-Path $dataDirectory)) {
+            Start-Sleep -Milliseconds 1500
+            if (-not (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) -and
+                @(Get-Process -Name "microgifter-homeserver*" -ErrorAction SilentlyContinue).Count -eq 0) {
+                return
+            }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+
+    throw "Previous HomeServer installation did not fully release before updater validation"
 }
 
 function Resolve-HomeServerUninstaller {
@@ -381,6 +445,7 @@ try {
         throw "Windows PowerShell resolved an unexpected CI update signer"
     }
 
+    Reset-HomeServerInstallationBoundary
     $install = Start-Process -FilePath $installer -ArgumentList "/S" -PassThru -Wait
     if ($install.ExitCode -ne 0) {
         throw "HomeServer installer failed with exit code $($install.ExitCode)"
