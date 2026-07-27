@@ -58,4 +58,34 @@ try:
 finally:
     archive_path.unlink(missing_ok=True)
 
-print("Phase 4B product payload verified and applied.")
+model_center = ROOT / "crates" / "homeserver-service" / "src" / "model_center.rs"
+source = model_center.read_text(encoding="utf-8")
+replacements = {
+    """fn read_settings(state: &AppState) -> Result<ModelSettings> {
+    read_settings_from_connection(&state.connection()?)
+}
+""": """fn read_settings(state: &AppState) -> Result<ModelSettings> {
+    let connection = state.connection()?;
+    read_settings_from_connection(&connection)
+}
+""",
+    """    statement
+        .query_map([], operation_from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+""": """    let operations = statement
+        .query_map([], operation_from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)?;
+    Ok(operations)
+}
+""",
+}
+for old, new in replacements.items():
+    if source.count(old) != 1:
+        raise SystemExit(f"Expected exactly one Phase 4B compiler repair marker: {old[:80]!r}")
+    source = source.replace(old, new, 1)
+model_center.write_text(source, encoding="utf-8")
+
+print("Phase 4B product payload verified, repaired, and applied.")
