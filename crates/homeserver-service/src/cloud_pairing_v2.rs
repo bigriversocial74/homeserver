@@ -197,12 +197,7 @@ impl MicrogifterPairingClient {
         })
     }
 
-    async fn verify(
-        &self,
-        base_url: &str,
-        device_id: &str,
-        secrets: &DeviceSecrets,
-    ) -> Result<()> {
+    async fn verify(&self, base_url: &str, device_id: &str, secrets: &DeviceSecrets) -> Result<()> {
         let timestamp = Utc::now().timestamp().to_string();
         let nonce = Uuid::new_v4().simple().to_string();
         let canonical = canonical_request(&Method::GET, STATUS_PATH, &timestamp, &nonce, "");
@@ -674,7 +669,10 @@ mod tests {
 
     #[test]
     fn provider_and_transport_are_closed_world() {
-        assert_eq!(normalize_cloud_base_url("https://microgifter.com/").unwrap(), "https://microgifter.com");
+        assert_eq!(
+            normalize_cloud_base_url("https://microgifter.com/").unwrap(),
+            "https://microgifter.com"
+        );
         assert!(normalize_cloud_base_url("http://microgifter.com").is_err());
         assert_eq!(LEGACY_PAIR_PATH, "/v1/cloud/connections/pair");
     }

@@ -395,10 +395,7 @@ impl MicrogifterCloudClient {
 
         let mut request = self
             .client
-            .request(
-                method,
-                format!("{}{}", record.summary.cloud_base_url, path),
-            )
+            .request(method, format!("{}{}", record.summary.cloud_base_url, path))
             .bearer_auth(&secrets.device_token)
             .header("X-MG-Homeserver-ID", &record.summary.device_id)
             .header("X-MG-Timestamp", timestamp)
@@ -510,8 +507,9 @@ impl AppState {
         request: PairCloudConnectionRequest,
     ) -> Result<CloudConnectionSummary> {
         let provider_key = normalize_provider_key(&request.provider_key)?;
-        let display_name = sanitize_optional_text(Some(&request.display_name), 120, "display name")?
-            .context("connection display name is required")?;
+        let display_name =
+            sanitize_optional_text(Some(&request.display_name), 120, "display name")?
+                .context("connection display name is required")?;
         let tenant_id = sanitize_optional_text(request.tenant_id.as_deref(), 120, "tenant id")?;
         let site_id = sanitize_optional_text(request.site_id.as_deref(), 120, "site id")?;
         let installation_id = database::installation_id(&self.connection()?)?;
@@ -574,7 +572,14 @@ impl AppState {
             params![connection_id],
         )?;
         ensure_default_connection(&connection)?;
-        record_event(&connection, connection_id, "connection.disconnected", "success", None, &json!({}))?;
+        record_event(
+            &connection,
+            connection_id,
+            "connection.disconnected",
+            "success",
+            None,
+            &json!({}),
+        )?;
         registry_snapshot(&connection)
     }
 
@@ -647,8 +652,7 @@ impl AppState {
             let record = connection_record(&connection, connection_id)?;
             if matches!(
                 record.summary.state,
-                CloudRegistryConnectionState::Revoked
-                    | CloudRegistryConnectionState::Disconnected
+                CloudRegistryConnectionState::Revoked | CloudRegistryConnectionState::Disconnected
             ) {
                 bail!("cloud connection is inactive; pair it again before synchronizing");
             }
@@ -850,17 +854,17 @@ fn sanitize_optional_text(value: Option<&str>, max: usize, label: &str) -> Resul
         return Ok(None);
     }
     ensure!(
-        value.chars().count() <= max
-            && value
-                .chars()
-                .all(|character| !character.is_control()),
+        value.chars().count() <= max && value.chars().all(|character| !character.is_control()),
         "{label} is invalid"
     );
     Ok(Some(value.to_owned()))
 }
 
 fn validate_connection_id(value: &str) -> Result<()> {
-    ensure!(Uuid::parse_str(value).is_ok(), "cloud connection identity is invalid");
+    ensure!(
+        Uuid::parse_str(value).is_ok(),
+        "cloud connection identity is invalid"
+    );
     Ok(())
 }
 
@@ -922,11 +926,10 @@ fn save_connection(connection: &Connection, value: NewConnection<'_>) -> Result<
 }
 
 fn migrate_legacy_connection(connection: &Connection) -> Result<()> {
-    let registry_count: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM cloud_connections",
-        [],
-        |row| row.get(0),
-    )?;
+    let registry_count: i64 =
+        connection.query_row("SELECT COUNT(*) FROM cloud_connections", [], |row| {
+            row.get(0)
+        })?;
     if registry_count > 0 {
         return Ok(());
     }
@@ -948,7 +951,9 @@ fn migrate_legacy_connection(connection: &Connection) -> Result<()> {
             },
         )
         .optional()?;
-    let Some((base_url, device_id, public_key, state, scopes, paired_at, last_success, last_error)) = legacy else {
+    let Some((base_url, device_id, public_key, state, scopes, paired_at, last_success, last_error)) =
+        legacy
+    else {
         return Ok(());
     };
     let installation_id = database::installation_id(connection)?;
@@ -1028,7 +1033,10 @@ fn registry_snapshot(connection: &Connection) -> Result<CloudConnectionsSnapshot
     })
 }
 
-fn summary_from_row(connection: &Connection, row: &Row<'_>) -> rusqlite::Result<CloudConnectionSummary> {
+fn summary_from_row(
+    connection: &Connection,
+    row: &Row<'_>,
+) -> rusqlite::Result<CloudConnectionSummary> {
     let connection_id = row.get::<_, String>(0)?;
     let scopes_json = row.get::<_, String>(8)?;
     let pending_sync = pending_sync_count(connection, &connection_id).unwrap_or(0);
@@ -1050,7 +1058,10 @@ fn summary_from_row(connection: &Connection, row: &Row<'_>) -> rusqlite::Result<
     })
 }
 
-fn connection_summary(connection: &Connection, connection_id: &str) -> Result<CloudConnectionSummary> {
+fn connection_summary(
+    connection: &Connection,
+    connection_id: &str,
+) -> Result<CloudConnectionSummary> {
     connection
         .query_row(
             "SELECT connection_id,provider_key,display_name,cloud_base_url,tenant_id,site_id,device_id,state,scopes_json,is_default,paired_at_utc,last_success_utc,last_error FROM cloud_connections WHERE connection_id=?1",
@@ -1061,7 +1072,10 @@ fn connection_summary(connection: &Connection, connection_id: &str) -> Result<Cl
         .context("cloud connection was not found")
 }
 
-fn connection_record(connection: &Connection, connection_id: &str) -> Result<CloudConnectionRecord> {
+fn connection_record(
+    connection: &Connection,
+    connection_id: &str,
+) -> Result<CloudConnectionRecord> {
     let summary = connection_summary(connection, connection_id)?;
     let credential_key: String = connection.query_row(
         "SELECT credential_key FROM cloud_connections WHERE connection_id=?1",
@@ -1194,8 +1208,7 @@ fn enqueue_operation(
         return Ok(queue_id);
     }
     ensure!(
-        pending_sync_count(connection, connection_id)?
-            < MAX_PENDING_SYNC_OPERATIONS_PER_CONNECTION,
+        pending_sync_count(connection, connection_id)? < MAX_PENDING_SYNC_OPERATIONS_PER_CONNECTION,
         "synchronization queue has reached its safety limit"
     );
     connection.execute(
@@ -1404,10 +1417,9 @@ fn validate_receipts(operations: &[QueuedOperation], receipts: &[ReceiptRecord])
         validate_idempotency_key(&receipt.idempotency_key)?;
         ensure!(
             receipt.receipt_id.len() <= 190
-                && receipt
-                    .receipt_id
-                    .chars()
-                    .all(|character| character.is_ascii_alphanumeric() || "_.:-".contains(character)),
+                && receipt.receipt_id.chars().all(
+                    |character| character.is_ascii_alphanumeric() || "_.:-".contains(character)
+                ),
             "cloud provider returned an invalid synchronization receipt identity"
         );
         ensure!(
@@ -1489,7 +1501,10 @@ fn normalize_cloud_base_url(value: &str) -> Result<String> {
         url.username().is_empty() && url.password().is_none(),
         "cloud URL cannot contain credentials"
     );
-    ensure!(url.query().is_none() && url.fragment().is_none(), "cloud URL cannot contain a query or fragment");
+    ensure!(
+        url.query().is_none() && url.fragment().is_none(),
+        "cloud URL cannot contain a query or fragment"
+    );
     let host = url.host_str().context("cloud URL host is required")?;
     let loopback = host
         .parse::<IpAddr>()
@@ -1499,7 +1514,10 @@ fn normalize_cloud_base_url(value: &str) -> Result<String> {
         url.scheme() == "https" || (loopback && url.scheme() == "http"),
         "cloud URL must use HTTPS"
     );
-    ensure!(url.path() == "/" || url.path().is_empty(), "cloud URL cannot contain a path");
+    ensure!(
+        url.path() == "/" || url.path().is_empty(),
+        "cloud URL cannot contain a path"
+    );
     let mut normalized = url;
     normalized.set_path("");
     Ok(normalized.as_str().trim_end_matches('/').to_owned())
@@ -1541,9 +1559,13 @@ fn action_error(code: &'static str, error: anyhow::Error) -> (HttpStatusCode, Js
         HttpStatusCode::UNPROCESSABLE_ENTITY
     } else if text.contains("not found") {
         HttpStatusCode::NOT_FOUND
-    } else if text.contains("inactive") || text.contains("revoked") || text.contains("disconnected") {
+    } else if text.contains("inactive") || text.contains("revoked") || text.contains("disconnected")
+    {
         HttpStatusCode::CONFLICT
-    } else if text.contains("cloud") || text.contains("microgifter") || text.contains("pairing service") {
+    } else if text.contains("cloud")
+        || text.contains("microgifter")
+        || text.contains("pairing service")
+    {
         HttpStatusCode::BAD_GATEWAY
     } else {
         HttpStatusCode::INTERNAL_SERVER_ERROR
@@ -1588,7 +1610,10 @@ mod tests {
                 device_id: "2c1aa5b0-00a4-4d06-b773-4e27ae331d6f",
                 public_key_base64: "public-key",
                 credential_key: "test-credential",
-                scopes: &["homeserver.status".to_owned(), "homeserver.sync.write".to_owned()],
+                scopes: &[
+                    "homeserver.status".to_owned(),
+                    "homeserver.sync.write".to_owned(),
+                ],
                 make_default: true,
             },
         )
@@ -1620,8 +1645,22 @@ mod tests {
             },
         )
         .unwrap();
-        enqueue_operation(&connection, &first, "same-key", "device.heartbeat", &json!({"site": "a"})).unwrap();
-        enqueue_operation(&connection, &second, "same-key", "device.heartbeat", &json!({"site": "b"})).unwrap();
+        enqueue_operation(
+            &connection,
+            &first,
+            "same-key",
+            "device.heartbeat",
+            &json!({"site": "a"}),
+        )
+        .unwrap();
+        enqueue_operation(
+            &connection,
+            &second,
+            "same-key",
+            "device.heartbeat",
+            &json!({"site": "b"}),
+        )
+        .unwrap();
         assert_eq!(pending_sync_count(&connection, &first).unwrap(), 1);
         assert_eq!(pending_sync_count(&connection, &second).unwrap(), 1);
         let snapshot = registry_snapshot(&connection).unwrap();

@@ -101,9 +101,9 @@ pub async fn run(
         let _ = ready.send(());
     }
 
-    let registry_router = cloud_registry::router(state.clone()).layer(
-        axum::middleware::from_fn(cloud_pairing_v2::reject_legacy_pairing),
-    );
+    let registry_router = cloud_registry::router(state.clone()).layer(axum::middleware::from_fn(
+        cloud_pairing_v2::reject_legacy_pairing,
+    ));
     let router = http::secure(
         http::router(state.clone())
             .merge(cloud_connector::router(state.clone()))

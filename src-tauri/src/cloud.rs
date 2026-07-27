@@ -42,7 +42,9 @@ pub async fn homeserver_pair_cloud_connection(request: Value) -> Result<Value, S
 }
 
 #[tauri::command]
-pub async fn homeserver_disconnect_cloud_connection(connection_id: String) -> Result<Value, String> {
+pub async fn homeserver_disconnect_cloud_connection(
+    connection_id: String,
+) -> Result<Value, String> {
     post_json(
         "/v1/cloud/connections/disconnect",
         &json!({ "connection_id": connection_id }),
