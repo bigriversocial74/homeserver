@@ -33,7 +33,9 @@ jobs:
       - name: Apply deterministic integration patch
         shell: pwsh
         run: |
-          python scripts/apply-phase5b-agent-workspace.py *> phase5b-integration.log
+          python scripts/fix-phase5b-patch-anchor.py *> phase5b-integration.log
+          if ($LASTEXITCODE -ne 0) { Get-Content phase5b-integration.log -Tail 200; exit $LASTEXITCODE }
+          python scripts/apply-phase5b-agent-workspace.py *>> phase5b-integration.log
           if ($LASTEXITCODE -ne 0) { Get-Content phase5b-integration.log -Tail 200; exit $LASTEXITCODE }
           cargo fmt --all *>> phase5b-integration.log
           if ($LASTEXITCODE -ne 0) { Get-Content phase5b-integration.log -Tail 200; exit $LASTEXITCODE }
