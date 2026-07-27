@@ -106,24 +106,31 @@ jobs:
       - name: Rust formatting
         run: cargo fmt --all --check
 
-      - name: Build native service and updater from clean output
+      - name: Build native service, updater, and MCP bridge from clean output
         shell: pwsh
         run: |
-          cargo clean --package microgifter-homeserver-service --package microgifter-homeserver-updater
+          cargo clean --package microgifter-homeserver-service --package microgifter-homeserver-updater --package microgifter-homeserver-mcp
           Remove-Item target/release/microgifter-homeserver-service.exe -Force -ErrorAction SilentlyContinue
           Remove-Item target/release/microgifter-homeserver-updater.exe -Force -ErrorAction SilentlyContinue
+          Remove-Item target/release/microgifter-homeserver-mcp.exe -Force -ErrorAction SilentlyContinue
           Remove-Item src-tauri/resources/microgifter-homeserver-service.exe -Force -ErrorAction SilentlyContinue
           Remove-Item src-tauri/resources/microgifter-homeserver-updater.exe -Force -ErrorAction SilentlyContinue
+          Remove-Item src-tauri/resources/microgifter-homeserver-mcp.exe -Force -ErrorAction SilentlyContinue
           cargo build --release --package microgifter-homeserver-service --locked *> service-build.log
           if ($LASTEXITCODE -ne 0) { Get-Content service-build.log -Tail 200; exit $LASTEXITCODE }
           cargo build --release --package microgifter-homeserver-updater --locked *> updater-build.log
           if ($LASTEXITCODE -ne 0) { Get-Content updater-build.log -Tail 200; exit $LASTEXITCODE }
+          cargo build --release --package microgifter-homeserver-mcp --locked *> mcp-build.log
+          if ($LASTEXITCODE -ne 0) { Get-Content mcp-build.log -Tail 200; exit $LASTEXITCODE }
           $expectedService = "MicrogifterHomeServer ${{ steps.release.outputs.version }}"
           $expectedUpdater = "MicrogifterHomeServerUpdater ${{ steps.release.outputs.version }}"
+          $expectedMcp = "MicrogifterHomeServerMCP ${{ steps.release.outputs.version }}"
           if ((& target/release/microgifter-homeserver-service.exe --version | Out-String).Trim() -ne $expectedService) { throw "Service version mismatch" }
           if ((& target/release/microgifter-homeserver-updater.exe --version | Out-String).Trim() -ne $expectedUpdater) { throw "Updater version mismatch" }
+          if ((& target/release/microgifter-homeserver-mcp.exe --version | Out-String).Trim() -ne $expectedMcp) { throw "MCP bridge version mismatch" }
           Copy-Item target/release/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
           Copy-Item target/release/microgifter-homeserver-updater.exe src-tauri/resources/microgifter-homeserver-updater.exe -Force
+          Copy-Item target/release/microgifter-homeserver-mcp.exe src-tauri/resources/microgifter-homeserver-mcp.exe -Force
 
       - name: Upload native compiler logs
         if: always()
@@ -133,6 +140,7 @@ jobs:
           path: |
             service-build.log
             updater-build.log
+            mcp-build.log
           if-no-files-found: warn
           retention-days: 7
 
