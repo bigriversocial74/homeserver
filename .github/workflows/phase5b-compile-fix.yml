@@ -43,31 +43,22 @@ jobs:
           $registryPath = 'crates/homeserver-service/src/cloud_registry.rs'
           $registry = Get-Content $registryPath -Raw
           $registry = $registry.Replace('&self.connection()?', '&*self.connection()?')
-          $old = @'
-fn active_connection_ids(connection: &Connection) -> Result<Vec<String>> {
-    let mut statement = connection.prepare(
-        "SELECT connection_id FROM cloud_connections WHERE state IN ('pairing','connected','degraded') ORDER BY is_default DESC,connection_id",
-    )?;
-    Ok(statement
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?)
-}
-'@
-          $new = @'
-fn active_connection_ids(connection: &Connection) -> Result<Vec<String>> {
-    let mut statement = connection.prepare(
-        "SELECT connection_id FROM cloud_connections WHERE state IN ('pairing','connected','degraded') ORDER BY is_default DESC,connection_id",
-    )?;
-    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-    let connection_ids = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(connection_ids)
-}
-'@
-          if (-not $registry.Contains($old)) {
+          $pattern = '(?ms)fn active_connection_ids\(connection: &Connection\) -> Result<Vec<String>> \{.*?^\}'
+          $replacement = @(
+            'fn active_connection_ids(connection: &Connection) -> Result<Vec<String>> {'
+            '    let mut statement = connection.prepare('
+            '        "SELECT connection_id FROM cloud_connections WHERE state IN (''pairing'',''connected'',''degraded'') ORDER BY is_default DESC,connection_id",'
+            '    )?;'
+            '    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;'
+            '    let connection_ids = rows.collect::<rusqlite::Result<Vec<_>>>()?;'
+            '    Ok(connection_ids)'
+            '}'
+          ) -join "`n"
+          $updated = [regex]::Replace($registry, $pattern, $replacement, 1)
+          if ($updated -eq $registry) {
             throw 'Expected active_connection_ids implementation was not found.'
           }
-          $registry = $registry.Replace($old, $new)
-          Set-Content $registryPath $registry -NoNewline
+          Set-Content $registryPath $updated -NoNewline
 
           cargo fmt --all
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
