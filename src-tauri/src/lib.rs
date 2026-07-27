@@ -1,3 +1,4 @@
+mod agent;
 mod cloud;
 mod mcp;
 mod model;
@@ -294,6 +295,17 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             homeserver_status,
+            agent::homeserver_agent_workspace,
+            agent::homeserver_agent_prompt,
+            agent::homeserver_create_agent_goal,
+            agent::homeserver_archive_agent_goal,
+            agent::homeserver_create_agent_plan,
+            agent::homeserver_cancel_agent_plan,
+            agent::homeserver_approve_agent_plan,
+            agent::homeserver_reject_agent_plan,
+            agent::homeserver_execute_agent_plan,
+            agent::homeserver_create_world_mission,
+            agent::homeserver_cancel_world_mission,
             cloud::homeserver_cloud_status,
             cloud::homeserver_pair_cloud,
             cloud::homeserver_disconnect_cloud,

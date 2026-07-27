@@ -1,3 +1,4 @@
+mod agent_runtime;
 mod app;
 mod backup;
 mod backup_key;
@@ -119,6 +120,16 @@ impl AppState {
                 "mcp_runtime_integrity_check_failed",
             );
         }
+        if let Err(error) = agent_runtime::health_check(&connection) {
+            error!(
+                ?error,
+                "HomeServer Agent Workspace database health check failed"
+            );
+            return HealthSnapshot::needs_attention(
+                &self.config.server_name,
+                "agent_workspace_integrity_check_failed",
+            );
+        }
 
         let mut snapshot = HealthSnapshot::running(&self.config.server_name, "ready");
         snapshot.pending_sync = match database::pending_sync_count(&connection) {
@@ -214,6 +225,7 @@ impl AppState {
             database::maintain_history(&connection)?;
             update_store::maintain_history(&connection)?;
             model_center::maintain_history(&connection)?;
+            agent_runtime::maintain_history(&connection)?;
             mcp_runtime::maintain_history(&connection)?;
             backup::enforce_pre_update_retention(&connection)?;
         }

@@ -73,6 +73,7 @@ for marker in (
     ".merge(knowledge_vault::router(state.clone()))",
     ".merge(model_center::router(state.clone()))",
     ".merge(semantic_vault::router(state.clone()))",
+    ".merge(agent_runtime::router(state.clone()))",
     ".merge(mcp_runtime::router(state))",
 ):
     require(
@@ -164,7 +165,7 @@ forbid(
     "Control Center CSP still permits unsafe inline content",
 )
 
-# Phase 5A MCP must remain fixed-loopback, client-scoped, read-only, and audited.
+# MCP must remain fixed-loopback, client-scoped, request-only for state changes, and audited.
 for marker in (
     'const MCP_ENDPOINT: &str = "http://127.0.0.1:47831/mcp"',
     'const MAX_MCP_BODY_BYTES: usize = 128 * 1024',
@@ -173,6 +174,11 @@ for marker in (
     'readOnlyHint": true',
     'destructiveHint": false',
     'mcp_audit_receipts',
+    'homeserver_world_mission_draft',
+    'homeserver_agent_plan_submit',
+    'requestOnly',
+    '"world.request"',
+    '"agents.request"',
 ):
     require(
         "crates/homeserver-service/src/mcp_runtime.rs",

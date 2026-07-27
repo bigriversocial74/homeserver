@@ -1,5 +1,5 @@
-use crate::{cloud_registry, model_center, semantic_vault, AppState};
-use anyhow::{anyhow, bail, ensure, Context, Result};
+use crate::{app::cloud_registry, model_center, semantic_vault, AppState};
+use anyhow::{bail, ensure, Context, Result};
 use axum::{
     extract::{DefaultBodyLimit, State},
     http::StatusCode,
@@ -74,7 +74,8 @@ const MESSAGE_COLUMNS: &str = "message_id,thread_id,role,mode,content,context_js
 const PLAN_COLUMNS: &str = "plan_id,thread_id,goal_id,requested_by_type,requested_by_id,title,rationale,action_type,arguments_json,connection_id,dataset_keys_json,risk_level,state,plan_hash,fresh_state_token,expires_at_utc,failure_code,created_at_utc,updated_at_utc,completed_at_utc";
 const APPROVAL_COLUMNS: &str = "r.approval_request_id,r.plan_id,r.plan_hash,r.state,r.risk_summary,r.requested_at_utc,r.expires_at_utc,r.decided_at_utc,r.decision_reason,a.approval_id,a.approved_by,a.approved_at_utc,a.consumed_at_utc";
 const RECEIPT_COLUMNS: &str = "receipt_id,plan_id,approval_id,plan_hash,action_type,connection_id,idempotency_key,state,result_code,result_summary,result_json,started_at_utc,completed_at_utc";
-const REPORT_COLUMNS: &str = "report_id,plan_id,title,content_markdown,connection_ids_json,dataset_keys_json,created_at_utc";
+const REPORT_COLUMNS: &str =
+    "report_id,plan_id,title,content_markdown,connection_ids_json,dataset_keys_json,created_at_utc";
 const MISSION_COLUMNS: &str = "mission_id,thread_id,goal_id,connection_id,world_agent_id,title,objective,allowed_operations_json,prohibited_operations_json,limits_json,disclosure_policy_json,state,expires_at_utc,created_at_utc,updated_at_utc";
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
@@ -376,8 +377,6 @@ struct WorkspaceLocalSnapshot {
 #[derive(Debug, Clone)]
 struct ApprovalRecord {
     approval_id: String,
-    approval_request_id: String,
-    plan_id: String,
     plan_hash: String,
     expires_at_utc: String,
     consumed_at_utc: Option<String>,
@@ -510,26 +509,22 @@ async fn create_plan(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CreatePlanRequest>,
 ) -> ApiResult<AgentPlanSummary> {
-    tokio::task::spawn_blocking(move || {
-        save_plan(&state, request, "local_user", LOCAL_ACTOR_ID)
-    })
-    .await
-    .map_err(task_error)?
-    .map(Json)
-    .map_err(|error| action_error("agent_plan_rejected", error))
+    tokio::task::spawn_blocking(move || save_plan(&state, request, "local_user", LOCAL_ACTOR_ID))
+        .await
+        .map_err(task_error)?
+        .map(Json)
+        .map_err(|error| action_error("agent_plan_rejected", error))
 }
 
 async fn cancel_plan(
     State(state): State<Arc<AppState>>,
     Json(request): Json<PlanReferenceRequest>,
 ) -> ApiResult<AgentPlanSummary> {
-    tokio::task::spawn_blocking(move || {
-        cancel_plan_record(&state, request, None, true)
-    })
-    .await
-    .map_err(task_error)?
-    .map(Json)
-    .map_err(|error| action_error("agent_plan_cancel_rejected", error))
+    tokio::task::spawn_blocking(move || cancel_plan_record(&state, request, None, true))
+        .await
+        .map_err(task_error)?
+        .map(Json)
+        .map_err(|error| action_error("agent_plan_cancel_rejected", error))
 }
 
 async fn approve_plan(
@@ -648,8 +643,7 @@ pub(crate) fn mcp_submit_plan(
 ) -> Result<Value> {
     let request = serde_json::from_value::<CreatePlanRequest>(arguments)
         .context("invalid supervised plan arguments")?;
-    serde_json::to_value(save_plan(state, request, "mcp_client", client_id)?)
-        .map_err(Into::into)
+    serde_json::to_value(save_plan(state, request, "mcp_client", client_id)?).map_err(Into::into)
 }
 
 pub(crate) fn mcp_get_plan(state: &AppState, plan_id: &str, client_id: &str) -> Result<Value> {
@@ -671,11 +665,7 @@ pub(crate) fn mcp_list_plans(state: &AppState, client_id: &str) -> Result<Value>
     Ok(json!({ "plans": plans }))
 }
 
-pub(crate) fn mcp_cancel_plan(
-    state: &AppState,
-    client_id: &str,
-    plan_id: &str,
-) -> Result<Value> {
+pub(crate) fn mcp_cancel_plan(state: &AppState, client_id: &str, plan_id: &str) -> Result<Value> {
     let plan = cancel_plan_record(
         state,
         PlanReferenceRequest {
@@ -696,19 +686,11 @@ pub(crate) fn mcp_draft_world_mission(
 ) -> Result<Value> {
     let request = serde_json::from_value::<CreateWorldMissionRequest>(arguments)
         .context("invalid World Mission arguments")?;
-    serde_json::to_value(save_world_mission(
-        state,
-        request,
-        "mcp_client",
-        client_id,
-    )?)
-    .map_err(Into::into)
+    serde_json::to_value(save_world_mission(state, request, "mcp_client", client_id)?)
+        .map_err(Into::into)
 }
 
-pub(crate) fn mcp_get_world_mission(
-    state: &AppState,
-    mission_id: &str,
-) -> Result<Value> {
+pub(crate) fn mcp_get_world_mission(state: &AppState, mission_id: &str) -> Result<Value> {
     let connection = state.connection()?;
     serde_json::to_value(mission_by_id(&connection, mission_id)?).map_err(Into::into)
 }
@@ -733,7 +715,8 @@ async fn handle_prompt(
 ) -> Result<AgentPromptResponse> {
     request.mode = normalize_mode(&request.mode)?;
     request.prompt = sanitize_required_text(&request.prompt, MAX_PROMPT_CHARS, "prompt")?;
-    request.connection_ids = normalize_ids(&request.connection_ids, MAX_CONTEXT_ITEMS, "connection")?;
+    request.connection_ids =
+        normalize_ids(&request.connection_ids, MAX_CONTEXT_ITEMS, "connection")?;
     request.dataset_keys = normalize_dataset_keys(&request.dataset_keys)?;
     request.goal_ids = normalize_ids(&request.goal_ids, MAX_CONTEXT_ITEMS, "goal")?;
     let thread_id = ensure_thread(&state, request.thread_id.as_deref(), &request.prompt)?;
@@ -744,9 +727,9 @@ async fn handle_prompt(
         &request.mode,
         &request.prompt,
         &json!({
-            "connection_ids": request.connection_ids,
-            "dataset_keys": request.dataset_keys,
-            "goal_ids": request.goal_ids,
+            "connection_ids": &request.connection_ids,
+            "dataset_keys": &request.dataset_keys,
+            "goal_ids": &request.goal_ids,
             "actor_type": actor_type,
             "actor_id": actor_id,
         }),
@@ -914,11 +897,16 @@ async fn generate_grounded_response(
                     snapshot
                         .installed_models
                         .iter()
-                        .any(|model| model.name == ***candidate)
+                        .any(|model| model.name == candidate.as_str())
                 })
                 .cloned()
                 .or_else(|| snapshot.settings.default_chat_model.clone())
-                .or_else(|| snapshot.installed_models.first().map(|model| model.name.clone()));
+                .or_else(|| {
+                    snapshot
+                        .installed_models
+                        .first()
+                        .map(|model| model.name.clone())
+                });
             if let Some(model) = selected_model {
                 let compact_prompt = truncate_chars(
                     &format!(
@@ -949,12 +937,18 @@ fn save_goal(state: &AppState, request: CreateGoalRequest) -> Result<AgentGoalSu
     let title = sanitize_required_text(&request.title, 160, "goal title")?;
     let description = sanitize_optional_text(Some(&request.description), 4000, "goal description")?
         .unwrap_or_default();
-    let target_metric = sanitize_optional_text(request.target_metric.as_deref(), 160, "target metric")?;
-    let target_value = sanitize_optional_text(request.target_value.as_deref(), 160, "target value")?;
+    let target_metric =
+        sanitize_optional_text(request.target_metric.as_deref(), 160, "target metric")?;
+    let target_value =
+        sanitize_optional_text(request.target_value.as_deref(), 160, "target value")?;
     let target_date = sanitize_optional_text(request.target_date.as_deref(), 40, "target date")?;
     let connection_ids = normalize_ids(&request.connection_ids, MAX_CONTEXT_ITEMS, "connection")?;
     let dataset_keys = normalize_dataset_keys(&request.dataset_keys)?;
-    ensure_json_object(&request.constraints, MAX_WORLD_LIMIT_BYTES, "goal constraints")?;
+    ensure_json_object(
+        &request.constraints,
+        MAX_WORLD_LIMIT_BYTES,
+        "goal constraints",
+    )?;
     let allowed_actions = normalize_action_list(&request.allowed_actions)?;
     let approval_policy = request
         .approval_policy
@@ -988,7 +982,10 @@ fn save_goal(state: &AppState, request: CreateGoalRequest) -> Result<AgentGoalSu
 }
 
 fn archive_goal_record(state: &AppState, request: ArchiveGoalRequest) -> Result<AgentGoalSummary> {
-    ensure!(request.confirmation == "ARCHIVE", "type ARCHIVE to archive the goal");
+    ensure!(
+        request.confirmation == "ARCHIVE",
+        "type ARCHIVE to archive the goal"
+    );
     validate_uuid(&request.goal_id, "goal id")?;
     let connection = state.connection()?;
     let affected = connection.execute(
@@ -1005,7 +1002,10 @@ fn save_plan(
     actor_type: &str,
     actor_id: &str,
 ) -> Result<AgentPlanSummary> {
-    ensure!(["local_user", "mcp_client", "system"].contains(&actor_type), "plan actor type is invalid");
+    ensure!(
+        ["local_user", "mcp_client", "system"].contains(&actor_type),
+        "plan actor type is invalid"
+    );
     let actor_id = sanitize_required_text(actor_id, 160, "plan actor")?;
     let title = sanitize_required_text(&request.title, 180, "plan title")?;
     let rationale = sanitize_required_text(&request.rationale, 4000, "plan rationale")?;
@@ -1039,19 +1039,19 @@ fn save_plan(
     let plan_id = Uuid::new_v4().to_string();
     let canonical = json!({
         "schema": 1,
-        "plan_id": plan_id,
+        "plan_id": &plan_id,
         "requested_by_type": actor_type,
-        "requested_by_id": actor_id,
-        "title": title,
-        "rationale": rationale,
-        "action_type": action_type,
-        "arguments": arguments,
-        "connection_id": connection_id,
-        "goal_id": goal_id,
-        "dataset_keys": dataset_keys,
-        "fresh_state_token": fresh_state_token,
-        "expires_at_utc": expires_at_utc,
-        "created_at_utc": created_at_utc,
+        "requested_by_id": &actor_id,
+        "title": &title,
+        "rationale": &rationale,
+        "action_type": &action_type,
+        "arguments": &arguments,
+        "connection_id": &connection_id,
+        "goal_id": &goal_id,
+        "dataset_keys": &dataset_keys,
+        "fresh_state_token": &fresh_state_token,
+        "expires_at_utc": &expires_at_utc,
+        "created_at_utc": &created_at_utc,
     });
     let plan_hash = hash_json(&canonical)?;
     let risk_level = action_risk(&action_type).to_owned();
@@ -1097,17 +1097,35 @@ fn save_plan(
     plan_by_id(&connection, &plan_id)
 }
 
-fn approve_plan_record(state: &AppState, request: PlanReferenceRequest) -> Result<ApprovalDecisionResult> {
-    ensure!(request.confirmation == "APPROVE", "type APPROVE to approve this plan");
+fn approve_plan_record(
+    state: &AppState,
+    request: PlanReferenceRequest,
+) -> Result<ApprovalDecisionResult> {
+    ensure!(
+        request.confirmation == "APPROVE",
+        "type APPROVE to approve this plan"
+    );
     validate_uuid(&request.plan_id, "plan id")?;
     let mut connection = state.connection()?;
     expire_pending(&connection)?;
     let plan = plan_by_id(&connection, &request.plan_id)?;
-    ensure!(plan.state == "awaiting_approval", "plan is not awaiting approval");
+    ensure!(
+        plan.state == "awaiting_approval",
+        "plan is not awaiting approval"
+    );
     let approval_request = approval_by_plan(&connection, &plan.plan_id)?;
-    ensure!(approval_request.state == "pending", "approval request is not pending");
-    ensure!(approval_request.plan_hash == plan.plan_hash, "approval hash does not match the plan");
-    ensure!(!is_expired(&plan.expires_at_utc), "plan approval has expired");
+    ensure!(
+        approval_request.state == "pending",
+        "approval request is not pending"
+    );
+    ensure!(
+        approval_request.plan_hash == plan.plan_hash,
+        "approval hash does not match the plan"
+    );
+    ensure!(
+        !is_expired(&plan.expires_at_utc),
+        "plan approval has expired"
+    );
     let approval_id = Uuid::new_v4().to_string();
     let now = now_string();
     let transaction = connection.transaction()?;
@@ -1131,15 +1149,24 @@ fn approve_plan_record(state: &AppState, request: PlanReferenceRequest) -> Resul
     })
 }
 
-fn reject_plan_record(state: &AppState, request: PlanReferenceRequest) -> Result<ApprovalDecisionResult> {
-    ensure!(request.confirmation == "REJECT", "type REJECT to reject this plan");
+fn reject_plan_record(
+    state: &AppState,
+    request: PlanReferenceRequest,
+) -> Result<ApprovalDecisionResult> {
+    ensure!(
+        request.confirmation == "REJECT",
+        "type REJECT to reject this plan"
+    );
     validate_uuid(&request.plan_id, "plan id")?;
     let reason = sanitize_optional_text(request.reason.as_deref(), 500, "rejection reason")?
         .unwrap_or_else(|| "Rejected by the local user".to_owned());
     let connection = state.connection()?;
     expire_pending(&connection)?;
     let plan = plan_by_id(&connection, &request.plan_id)?;
-    ensure!(plan.state == "awaiting_approval", "plan is not awaiting approval");
+    ensure!(
+        plan.state == "awaiting_approval",
+        "plan is not awaiting approval"
+    );
     let now = now_string();
     let transaction = connection.unchecked_transaction()?;
     transaction.execute(
@@ -1168,7 +1195,10 @@ fn cancel_plan_record(
     requesting_mcp_client: Option<&str>,
     allow_approved: bool,
 ) -> Result<AgentPlanSummary> {
-    ensure!(request.confirmation == "CANCEL", "type CANCEL to cancel this plan");
+    ensure!(
+        request.confirmation == "CANCEL",
+        "type CANCEL to cancel this plan"
+    );
     validate_uuid(&request.plan_id, "plan id")?;
     let connection = state.connection()?;
     let plan = plan_by_id(&connection, &request.plan_id)?;
@@ -1180,7 +1210,10 @@ fn cancel_plan_record(
     } else {
         ["draft", "awaiting_approval"].as_slice()
     };
-    ensure!(allowed_states.contains(&plan.state.as_str()), "only an unexecuted plan may be cancelled");
+    ensure!(
+        allowed_states.contains(&plan.state.as_str()),
+        "only an unexecuted plan may be cancelled"
+    );
     let reason = sanitize_optional_text(request.reason.as_deref(), 500, "cancellation reason")?
         .unwrap_or_else(|| "Cancelled before execution".to_owned());
     let now = now_string();
@@ -1205,7 +1238,10 @@ async fn execute_approved_plan(
     state: Arc<AppState>,
     request: PlanReferenceRequest,
 ) -> Result<AgentExecutionReceiptSummary> {
-    ensure!(request.confirmation == "EXECUTE", "type EXECUTE to run this approved plan");
+    ensure!(
+        request.confirmation == "EXECUTE",
+        "type EXECUTE to run this approved plan"
+    );
     validate_uuid(&request.plan_id, "plan id")?;
     if let Some(existing) = {
         let connection = state.connection()?;
@@ -1218,12 +1254,27 @@ async fn execute_approved_plan(
         let mut connection = state.connection()?;
         expire_pending(&connection)?;
         let mut plan = plan_by_id(&connection, &request.plan_id)?;
-        ensure!(plan.state == "approved", "plan is not approved for execution");
-        ensure!(!is_expired(&plan.expires_at_utc), "approved plan has expired");
+        ensure!(
+            plan.state == "approved",
+            "plan is not approved for execution"
+        );
+        ensure!(
+            !is_expired(&plan.expires_at_utc),
+            "approved plan has expired"
+        );
         let approval = approval_record_by_plan(&connection, &plan.plan_id)?;
-        ensure!(approval.plan_hash == plan.plan_hash, "approval is not bound to the current plan hash");
-        ensure!(approval.consumed_at_utc.is_none(), "approval has already been consumed");
-        ensure!(!is_expired(&approval.expires_at_utc), "approval has expired");
+        ensure!(
+            approval.plan_hash == plan.plan_hash,
+            "approval is not bound to the current plan hash"
+        );
+        ensure!(
+            approval.consumed_at_utc.is_none(),
+            "approval has already been consumed"
+        );
+        ensure!(
+            !is_expired(&approval.expires_at_utc),
+            "approval has expired"
+        );
         let current_fresh_state = fresh_state_token(
             &connection,
             &plan.action_type,
@@ -1294,7 +1345,7 @@ async fn execute_approved_plan(
         transaction.commit()?;
     }
     let connection = state.connection()?;
-    receipt_by_plan(&connection, &plan.plan_id)
+    Ok(receipt_by_plan(&connection, &plan.plan_id)?)
 }
 
 async fn execute_action(
@@ -1327,12 +1378,20 @@ async fn execute_action(
         }
         "model.health_test" => {
             let snapshot = model_center::snapshot(state.clone()).await?;
-            ensure!(snapshot.runtime.state == "running", "local model runtime is not running");
+            ensure!(
+                snapshot.runtime.state == "running",
+                "local model runtime is not running"
+            );
             let requested_model = plan.arguments.get("model").and_then(Value::as_str);
             let model = requested_model
                 .map(ToOwned::to_owned)
                 .or_else(|| snapshot.settings.default_chat_model.clone())
-                .or_else(|| snapshot.installed_models.first().map(|model| model.name.clone()))
+                .or_else(|| {
+                    snapshot
+                        .installed_models
+                        .first()
+                        .map(|model| model.name.clone())
+                })
                 .context("no installed local model is available for the health test")?;
             let test: model_center::ModelTestResult = local_post_json(
                 "/v1/models/test",
@@ -1344,12 +1403,18 @@ async fn execute_action(
             .await?;
             Ok((
                 "model_health_passed".to_owned(),
-                format!("Local model {} responded in {} ms.", test.model, test.duration_ms),
+                format!(
+                    "Local model {} responded in {} ms.",
+                    test.model, test.duration_ms
+                ),
                 serde_json::to_value(test)?,
             ))
         }
         "cloud.sync_connection" => {
-            let connection_id = plan.connection_id.as_deref().context("connection id is required")?;
+            let connection_id = plan
+                .connection_id
+                .as_deref()
+                .context("connection id is required")?;
             let result: Value = local_post_json(
                 "/v1/cloud/connections/sync",
                 &json!({ "connection_id": connection_id }),
@@ -1362,11 +1427,8 @@ async fn execute_action(
             ))
         }
         "cloud.sync_all" => {
-            let result: Value = local_post_json(
-                "/v1/cloud/connections/sync-all",
-                &json!({}),
-            )
-            .await?;
+            let result: Value =
+                local_post_json("/v1/cloud/connections/sync-all", &json!({})).await?;
             Ok((
                 "all_connections_sync_completed".to_owned(),
                 "Approved synchronization completed across active connections.".to_owned(),
@@ -1386,11 +1448,7 @@ async fn execute_action(
                 .context("report content is required")?;
             let report_state = state.clone();
             let plan_id = plan.plan_id.clone();
-            let connection_ids = plan
-                .connection_id
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>();
+            let connection_ids = plan.connection_id.iter().cloned().collect::<Vec<_>>();
             let dataset_keys = plan.dataset_keys.clone();
             let title = title.to_owned();
             let content = content.to_owned();
@@ -1422,7 +1480,10 @@ fn save_world_mission(
     actor_type: &str,
     actor_id: &str,
 ) -> Result<WorldMissionSummary> {
-    ensure!(["local_user", "mcp_client", "system"].contains(&actor_type), "mission actor type is invalid");
+    ensure!(
+        ["local_user", "mcp_client", "system"].contains(&actor_type),
+        "mission actor type is invalid"
+    );
     let actor_id = sanitize_required_text(actor_id, 160, "mission actor")?;
     let thread_id = normalize_optional_uuid(request.thread_id.as_deref(), "thread id")?;
     let goal_id = normalize_optional_uuid(request.goal_id.as_deref(), "goal id")?;
@@ -1431,7 +1492,8 @@ fn save_world_mission(
     let title = sanitize_required_text(&request.title, 180, "mission title")?;
     let objective = sanitize_required_text(&request.objective, 4000, "mission objective")?;
     let allowed_operations = normalize_world_operations(&request.allowed_operations, false)?;
-    let mut prohibited_operations = normalize_world_operations(&request.prohibited_operations, true)?;
+    let mut prohibited_operations =
+        normalize_world_operations(&request.prohibited_operations, true)?;
     if prohibited_operations.is_empty() {
         prohibited_operations = PROHIBITED_WORLD_OPERATIONS
             .iter()
@@ -1444,7 +1506,10 @@ fn save_world_mission(
         MAX_WORLD_LIMIT_BYTES,
         "mission disclosure policy",
     )?;
-    let expires_minutes = request.expires_minutes.unwrap_or(240).clamp(15, 7 * 24 * 60);
+    let expires_minutes = request
+        .expires_minutes
+        .unwrap_or(240)
+        .clamp(15, 7 * 24 * 60);
     let expires_at_utc = (Utc::now() + ChronoDuration::minutes(i64::from(expires_minutes)))
         .to_rfc3339_opts(SecondsFormat::Millis, true);
     let connection = state.connection()?;
@@ -1481,7 +1546,10 @@ fn cancel_mission_record(
     request: MissionReferenceRequest,
     _requesting_mcp_client: Option<&str>,
 ) -> Result<WorldMissionSummary> {
-    ensure!(request.confirmation == "CANCEL", "type CANCEL to cancel this World Mission");
+    ensure!(
+        request.confirmation == "CANCEL",
+        "type CANCEL to cancel this World Mission"
+    );
     validate_uuid(&request.mission_id, "mission id")?;
     let connection = state.connection()?;
     let mission = mission_by_id(&connection, &request.mission_id)?;
@@ -1613,7 +1681,10 @@ fn build_data_sources(
             detail: format!(
                 "{} · tenant {} · site {} · {} pending",
                 connection.provider_key,
-                connection.tenant_id.as_deref().unwrap_or("provider-managed"),
+                connection
+                    .tenant_id
+                    .as_deref()
+                    .unwrap_or("provider-managed"),
                 connection.site_id.as_deref().unwrap_or("provider-managed"),
                 connection.pending_sync
             ),
@@ -1652,7 +1723,10 @@ fn save_message(
     content: &str,
     context: &Value,
 ) -> Result<String> {
-    ensure!(["user", "assistant", "system"].contains(&role), "message role is invalid");
+    ensure!(
+        ["user", "assistant", "system"].contains(&role),
+        "message role is invalid"
+    );
     let content = sanitize_required_text(content, MAX_MESSAGE_CHARS, "message")?;
     ensure_json_size(context, 64 * 1024, "message context")?;
     let connection = state.connection()?;
@@ -1674,20 +1748,20 @@ fn refresh_plan_for_reapproval(
     plan: &mut AgentPlanSummary,
     current_fresh_state: &str,
 ) -> Result<()> {
-    let expires_at_utc = (Utc::now() + ChronoDuration::minutes(30))
-        .to_rfc3339_opts(SecondsFormat::Millis, true);
+    let expires_at_utc =
+        (Utc::now() + ChronoDuration::minutes(30)).to_rfc3339_opts(SecondsFormat::Millis, true);
     let canonical = json!({
         "schema": 1,
-        "plan_id": plan.plan_id,
-        "requested_by_type": plan.requested_by_type,
-        "requested_by_id": plan.requested_by_id,
-        "title": plan.title,
-        "rationale": plan.rationale,
-        "action_type": plan.action_type,
-        "arguments": plan.arguments,
-        "connection_id": plan.connection_id,
-        "goal_id": plan.goal_id,
-        "dataset_keys": plan.dataset_keys,
+        "plan_id": &plan.plan_id,
+        "requested_by_type": &plan.requested_by_type,
+        "requested_by_id": &plan.requested_by_id,
+        "title": &plan.title,
+        "rationale": &plan.rationale,
+        "action_type": &plan.action_type,
+        "arguments": &plan.arguments,
+        "connection_id": &plan.connection_id,
+        "goal_id": &plan.goal_id,
+        "dataset_keys": &plan.dataset_keys,
         "fresh_state_token": current_fresh_state,
         "expires_at_utc": expires_at_utc,
         "reapproval_revision": Uuid::new_v4().to_string(),
@@ -1772,12 +1846,22 @@ fn validate_action_target(
 ) -> Result<()> {
     match action_type {
         "cloud.sync_connection" => {
-            let connection_id = connection_id.context("connection id is required for a connection sync")?;
+            let connection_id =
+                connection_id.context("connection id is required for a connection sync")?;
             let (_, _, _, _, state) = cloud_connection_identity(connection, connection_id)?;
-            ensure!(["connected", "degraded", "pairing"].contains(&state.as_str()), "cloud connection is inactive");
+            ensure!(
+                ["connected", "degraded", "pairing"].contains(&state.as_str()),
+                "cloud connection is inactive"
+            );
         }
-        "cloud.sync_all" => ensure!(connection_id.is_none(), "sync-all cannot be redirected to one connection"),
-        _ => ensure!(connection_id.is_none() || action_type == "report.save", "local action cannot target a cloud connection"),
+        "cloud.sync_all" => ensure!(
+            connection_id.is_none(),
+            "sync-all cannot be redirected to one connection"
+        ),
+        _ => ensure!(
+            connection_id.is_none() || action_type == "report.save",
+            "local action cannot target a cloud connection"
+        ),
     }
     Ok(())
 }
@@ -1810,22 +1894,24 @@ fn validate_action_arguments(action_type: &str, arguments: Value) -> Result<Valu
         "cloud.sync_connection" | "cloud.sync_all" => reject_unknown_keys(&object, &[])?,
         "report.save" => {
             reject_unknown_keys(&object, &["title", "content_markdown"])?;
-            let title = object
-                .get("title")
-                .and_then(Value::as_str)
-                .context("report title is required")?;
-            let content = object
-                .get("content_markdown")
-                .and_then(Value::as_str)
-                .context("report content is required")?;
-            object.insert(
-                "title".to_owned(),
-                Value::String(sanitize_required_text(title, 180, "report title")?),
-            );
-            object.insert(
-                "content_markdown".to_owned(),
-                Value::String(sanitize_required_text(content, MAX_REPORT_CHARS, "report content")?),
-            );
+            let title = sanitize_required_text(
+                object
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .context("report title is required")?,
+                180,
+                "report title",
+            )?;
+            let content = sanitize_required_text(
+                object
+                    .get("content_markdown")
+                    .and_then(Value::as_str)
+                    .context("report content is required")?,
+                MAX_REPORT_CHARS,
+                "report content",
+            )?;
+            object.insert("title".to_owned(), Value::String(title));
+            object.insert("content_markdown".to_owned(), Value::String(content));
         }
         _ => bail!("action type is not installed"),
     }
@@ -1854,7 +1940,10 @@ fn action_risk(action_type: &str) -> &'static str {
 
 fn normalize_mode(value: &str) -> Result<String> {
     let mode = value.trim().to_ascii_lowercase();
-    ensure!(ALLOWED_MODES.contains(&mode.as_str()), "agent mode is invalid");
+    ensure!(
+        ALLOWED_MODES.contains(&mode.as_str()),
+        "agent mode is invalid"
+    );
     Ok(mode)
 }
 
@@ -1863,9 +1952,15 @@ fn normalize_dataset_keys(values: &[String]) -> Result<Vec<String>> {
     for value in values.iter().take(MAX_CONTEXT_ITEMS) {
         let key = value.trim().to_ascii_lowercase();
         if key.starts_with("connection:") {
-            validate_uuid(key.trim_start_matches("connection:"), "connection dataset id")?;
+            validate_uuid(
+                key.trim_start_matches("connection:"),
+                "connection dataset id",
+            )?;
         } else {
-            ensure!(ALLOWED_DATASET_KEYS.contains(&key.as_str()), "dataset key is not available");
+            ensure!(
+                ALLOWED_DATASET_KEYS.contains(&key.as_str()),
+                "dataset key is not available"
+            );
         }
         if !normalized.contains(&key) {
             normalized.push(key);
@@ -1878,7 +1973,10 @@ fn normalize_action_list(values: &[String]) -> Result<Vec<String>> {
     let mut normalized = Vec::new();
     for value in values.iter().take(MAX_CONTEXT_ITEMS) {
         let action = value.trim().to_ascii_lowercase();
-        ensure!(ALLOWED_ACTION_TYPES.contains(&action.as_str()), "goal action is not enabled");
+        ensure!(
+            ALLOWED_ACTION_TYPES.contains(&action.as_str()),
+            "goal action is not enabled"
+        );
         if !normalized.contains(&action) {
             normalized.push(action);
         }
@@ -1895,13 +1993,20 @@ fn normalize_world_operations(values: &[String], prohibited: bool) -> Result<Vec
     let defaults = if prohibited {
         Vec::new()
     } else {
-        vec!["discover".to_owned(), "compare".to_owned(), "prepare_recommendation".to_owned()]
+        vec![
+            "discover".to_owned(),
+            "compare".to_owned(),
+            "prepare_recommendation".to_owned(),
+        ]
     };
     let source = if values.is_empty() { &defaults } else { values };
     let mut normalized = Vec::new();
     for value in source.iter().take(MAX_CONTEXT_ITEMS) {
         let operation = value.trim().to_ascii_lowercase();
-        ensure!(allowed_set.contains(&operation.as_str()), "World Mode operation is not enabled");
+        ensure!(
+            allowed_set.contains(&operation.as_str()),
+            "World Mode operation is not enabled"
+        );
         if !normalized.contains(&operation) {
             normalized.push(operation);
         }
@@ -1910,7 +2015,10 @@ fn normalize_world_operations(values: &[String], prohibited: bool) -> Result<Vec
 }
 
 fn normalize_ids(values: &[String], maximum: usize, label: &str) -> Result<Vec<String>> {
-    ensure!(values.len() <= maximum, "too many {label} ids were supplied");
+    ensure!(
+        values.len() <= maximum,
+        "too many {label} ids were supplied"
+    );
     let mut normalized = Vec::new();
     for value in values {
         validate_uuid(value, label)?;
@@ -1962,7 +2070,10 @@ fn select_connections(
         .filter(|connection| requested.contains(&connection.connection_id))
         .cloned()
         .collect::<Vec<_>>();
-    ensure!(selected.len() == requested.len(), "one or more selected connections were not found");
+    ensure!(
+        selected.len() == requested.len(),
+        "one or more selected connections were not found"
+    );
     Ok(selected)
 }
 
@@ -1971,7 +2082,9 @@ fn goals_by_ids(state: &AppState, ids: &[String]) -> Result<Vec<AgentGoalSummary
         return Ok(Vec::new());
     }
     let connection = state.connection()?;
-    ids.iter().map(|goal_id| goal_by_id(&connection, goal_id)).collect()
+    ids.iter()
+        .map(|goal_id| goal_by_id(&connection, goal_id))
+        .collect()
 }
 
 fn ensure_mcp_plan_access(plan: &AgentPlanSummary, client_id: &str) -> Result<()> {
@@ -2018,11 +2131,19 @@ async fn local_post_json<B: Serialize, T: DeserializeOwned>(path: &str, body: &B
         .await?;
     let status = response.status();
     let bytes = response.bytes().await?;
-    ensure!(bytes.len() <= MAX_LOCAL_RESPONSE_BYTES, "local action response exceeded the size limit");
+    ensure!(
+        bytes.len() <= MAX_LOCAL_RESPONSE_BYTES,
+        "local action response exceeded the size limit"
+    );
     if !status.is_success() {
         let message = serde_json::from_slice::<Value>(&bytes)
             .ok()
-            .and_then(|value| value.get("message").and_then(Value::as_str).map(ToOwned::to_owned))
+            .and_then(|value| {
+                value
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
             .unwrap_or_else(|| format!("local action failed with HTTP {status}"));
         bail!(message);
     }
@@ -2031,30 +2152,49 @@ async fn local_post_json<B: Serialize, T: DeserializeOwned>(path: &str, body: &B
 
 fn reject_unknown_keys(object: &Map<String, Value>, allowed: &[&str]) -> Result<()> {
     for key in object.keys() {
-        ensure!(allowed.contains(&key.as_str()), "action argument '{key}' is not allowed");
+        ensure!(
+            allowed.contains(&key.as_str()),
+            "action argument '{key}' is not allowed"
+        );
     }
     Ok(())
 }
 
 fn ensure_json_object(value: &Value, maximum_bytes: usize, label: &str) -> Result<()> {
-    ensure!(value.is_object() || value.is_null(), "{label} must be a JSON object");
+    ensure!(
+        value.is_object() || value.is_null(),
+        "{label} must be a JSON object"
+    );
     ensure_json_size(value, maximum_bytes, label)
 }
 
 fn ensure_json_size(value: &Value, maximum_bytes: usize, label: &str) -> Result<()> {
-    ensure!(serde_json::to_vec(value)?.len() <= maximum_bytes, "{label} exceeds its size limit");
+    ensure!(
+        serde_json::to_vec(value)?.len() <= maximum_bytes,
+        "{label} exceeds its size limit"
+    );
     Ok(())
 }
 
 fn sanitize_required_text(value: &str, maximum: usize, label: &str) -> Result<String> {
     let value = value.trim();
     ensure!(!value.is_empty(), "{label} is required");
-    ensure!(value.chars().count() <= maximum, "{label} exceeds the {maximum} character limit");
-    ensure!(!value.chars().any(|character| character == '\0'), "{label} contains invalid characters");
+    ensure!(
+        value.chars().count() <= maximum,
+        "{label} exceeds the {maximum} character limit"
+    );
+    ensure!(
+        !value.chars().any(|character| character == '\0'),
+        "{label} contains invalid characters"
+    );
     Ok(value.to_owned())
 }
 
-fn sanitize_optional_text(value: Option<&str>, maximum: usize, label: &str) -> Result<Option<String>> {
+fn sanitize_optional_text(
+    value: Option<&str>,
+    maximum: usize,
+    label: &str,
+) -> Result<Option<String>> {
     match value.map(str::trim).filter(|value| !value.is_empty()) {
         Some(value) => sanitize_required_text(value, maximum, label).map(Some),
         None => Ok(None),
@@ -2084,7 +2224,10 @@ fn public_failure_code(error: &anyhow::Error) -> String {
     let message = error.to_string().to_ascii_lowercase();
     if message.contains("model") && message.contains("not running") {
         "model_runtime_unavailable"
-    } else if message.contains("cloud") || message.contains("connection") || message.contains("sync") {
+    } else if message.contains("cloud")
+        || message.contains("connection")
+        || message.contains("sync")
+    {
         "connection_action_failed"
     } else if message.contains("backup") {
         "backup_action_failed"
@@ -2101,7 +2244,8 @@ fn list_goals(connection: &Connection) -> Result<Vec<AgentGoalSummary>> {
         "SELECT {GOAL_COLUMNS} FROM agent_goals ORDER BY CASE state WHEN 'active' THEN 0 ELSE 1 END,updated_at_utc DESC,goal_id DESC LIMIT 100"
     ))?;
     let rows = statement.query_map([], map_goal)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 fn goal_by_id(connection: &Connection, goal_id: &str) -> Result<AgentGoalSummary> {
@@ -2138,7 +2282,8 @@ fn list_threads(connection: &Connection) -> Result<Vec<AgentThreadSummary>> {
         "SELECT {THREAD_COLUMNS} FROM agent_threads ORDER BY updated_at_utc DESC,thread_id DESC LIMIT 100"
     ))?;
     let rows = statement.query_map([], map_thread)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 fn thread_by_id(connection: &Connection, thread_id: &str) -> Result<AgentThreadSummary> {
@@ -2198,7 +2343,8 @@ fn list_plans(connection: &Connection) -> Result<Vec<AgentPlanSummary>> {
         "SELECT {PLAN_COLUMNS} FROM agent_plans ORDER BY created_at_utc DESC,plan_id DESC LIMIT 100"
     ))?;
     let rows = statement.query_map([], map_plan)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 fn plan_by_id(connection: &Connection, plan_id: &str) -> Result<AgentPlanSummary> {
@@ -2241,7 +2387,8 @@ fn list_approvals(connection: &Connection) -> Result<Vec<AgentApprovalSummary>> 
         "SELECT {APPROVAL_COLUMNS} FROM agent_approval_requests r LEFT JOIN agent_approvals a ON a.approval_request_id=r.approval_request_id ORDER BY r.requested_at_utc DESC,r.approval_request_id DESC LIMIT 100"
     ))?;
     let rows = statement.query_map([], map_approval)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 fn approval_by_plan(connection: &Connection, plan_id: &str) -> Result<AgentApprovalSummary> {
@@ -2275,16 +2422,14 @@ fn map_approval(row: &Row<'_>) -> rusqlite::Result<AgentApprovalSummary> {
 fn approval_record_by_plan(connection: &Connection, plan_id: &str) -> Result<ApprovalRecord> {
     connection
         .query_row(
-            "SELECT approval_id,approval_request_id,plan_id,plan_hash,expires_at_utc,consumed_at_utc FROM agent_approvals WHERE plan_id=?1",
+            "SELECT approval_id,plan_hash,expires_at_utc,consumed_at_utc FROM agent_approvals WHERE plan_id=?1",
             params![plan_id],
             |row| {
                 Ok(ApprovalRecord {
                     approval_id: row.get(0)?,
-                    approval_request_id: row.get(1)?,
-                    plan_id: row.get(2)?,
-                    plan_hash: row.get(3)?,
-                    expires_at_utc: row.get(4)?,
-                    consumed_at_utc: row.get(5)?,
+                    plan_hash: row.get(1)?,
+                    expires_at_utc: row.get(2)?,
+                    consumed_at_utc: row.get(3)?,
                 })
             },
         )
@@ -2296,10 +2441,14 @@ fn list_receipts(connection: &Connection) -> Result<Vec<AgentExecutionReceiptSum
         "SELECT {RECEIPT_COLUMNS} FROM agent_execution_receipts ORDER BY completed_at_utc DESC,receipt_id DESC LIMIT 100"
     ))?;
     let rows = statement.query_map([], map_receipt)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
-fn receipt_by_plan(connection: &Connection, plan_id: &str) -> rusqlite::Result<AgentExecutionReceiptSummary> {
+fn receipt_by_plan(
+    connection: &Connection,
+    plan_id: &str,
+) -> rusqlite::Result<AgentExecutionReceiptSummary> {
     connection.query_row(
         &format!("SELECT {RECEIPT_COLUMNS} FROM agent_execution_receipts WHERE plan_id=?1"),
         params![plan_id],
@@ -2330,7 +2479,8 @@ fn list_reports(connection: &Connection) -> Result<Vec<AgentReportSummary>> {
         "SELECT {REPORT_COLUMNS} FROM agent_reports ORDER BY created_at_utc DESC,report_id DESC LIMIT 100"
     ))?;
     let rows = statement.query_map([], map_report)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 fn report_by_id(connection: &Connection, report_id: &str) -> Result<AgentReportSummary> {
@@ -2360,7 +2510,8 @@ fn list_missions(connection: &Connection) -> Result<Vec<WorldMissionSummary>> {
         "SELECT {MISSION_COLUMNS} FROM world_missions ORDER BY created_at_utc DESC,mission_id DESC LIMIT 100"
     ))?;
     let rows = statement.query_map([], map_mission)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 fn mission_by_id(connection: &Connection, mission_id: &str) -> Result<WorldMissionSummary> {
@@ -2419,7 +2570,8 @@ fn internal_error(code: &'static str, error: anyhow::Error) -> (StatusCode, Json
         Json(ApiError {
             ok: false,
             error: code,
-            message: "HomeServer could not complete the local Agent Workspace operation.".to_owned(),
+            message: "HomeServer could not complete the local Agent Workspace operation."
+                .to_owned(),
         }),
     )
 }

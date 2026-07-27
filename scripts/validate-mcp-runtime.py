@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate Phase 5A local read-only MCP security and packaging boundaries."""
+"""Validate local MCP read and request-only security and packaging boundaries."""
 from __future__ import annotations
 
 import sys
@@ -12,7 +12,7 @@ ERRORS: list[str] = []
 def read(path: str) -> str:
     target = ROOT / path
     if not target.is_file():
-        ERRORS.append(f"required Phase 5A file is missing: {path}")
+        ERRORS.append(f"required HomeServer MCP file is missing: {path}")
         return ""
     return target.read_text(encoding="utf-8")
 
@@ -45,6 +45,9 @@ for marker in (
     'homeserver_knowledge_search',
     'homeserver_knowledge_document',
     'mcp_audit_receipts',
+    'requestOnly',
+    'homeserver_agent_plan_submit',
+    'homeserver_world_mission_draft',
     'Bearer realm=\\"Microgifter HomeServer MCP\\"',
 ):
     path = MIGRATION if marker in ('token_hash TEXT NOT NULL UNIQUE', 'mcp_audit_receipts') else SERVICE
@@ -83,18 +86,20 @@ for path in (SERVICE, BRIDGE):
 service_runtime = read(SERVICE).split("#[cfg(test)]", 1)[0]
 for marker in (
     'models.write', 'knowledge.write', 'cloud.write', 'files.write', 'commerce.write',
-    'campaign.create', 'reward.issue', 'claim.redeem', 'shell.execute'
+    'campaign.create', 'reward.issue', 'claim.redeem', 'shell.execute',
+    'homeserver_agent_plan_approve', 'homeserver_agent_plan_execute',
+    'homeserver_world_mission_dispatch'
 ):
     if marker in service_runtime:
-        ERRORS.append(f"Phase 5A contains a state-changing MCP capability: {marker}")
+        ERRORS.append(f"HomeServer MCP contains a state-changing MCP capability: {marker}")
 
 require('src-tauri/tauri.conf.json', 'resources/microgifter-homeserver-mcp.exe', 'MCP bridge is not packaged as a Tauri resource')
 require('Cargo.toml', 'crates/homeserver-mcp', 'MCP bridge is not a workspace member')
 require('crates/homeserver-service/src/app.rs', '.merge(mcp_runtime::router(state))', 'MCP router is not merged inside the secured local API')
 
 if ERRORS:
-    print('Phase 5A MCP validation failed:', file=sys.stderr)
+    print('HomeServer MCP MCP validation failed:', file=sys.stderr)
     for error in ERRORS:
         print(f'- {error}', file=sys.stderr)
     raise SystemExit(1)
-print('Phase 5A local read-only MCP boundaries validated.')
+print('HomeServer MCP local read-only MCP boundaries validated.')
