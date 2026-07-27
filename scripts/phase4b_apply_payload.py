@@ -76,8 +76,7 @@ replacements = {
 }
 """: """    let operations = statement
         .query_map([], operation_from_row)?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)?;
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(operations)
 }
 """,
