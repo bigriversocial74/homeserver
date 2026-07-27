@@ -1,0 +1,79 @@
+name: Repair Phase 5B strict Clippy
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phase5b-clippy-fix
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.head_ref == 'feature/phase-5b-multi-connection-supervised-agents-20260727'
+    runs-on: windows-2025
+    steps:
+      - name: Check out Phase 5B branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-5b-multi-connection-supervised-agents-20260727
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Remove superseded worker and honor MSRV
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $connectorPath = 'crates/homeserver-service/src/cloud_connector.rs'
+          $connector = Get-Content $connectorPath -Raw
+          $connector = $connector.Replace("use tokio::sync::watch;`r`n", '')
+          $connector = $connector.Replace("use tokio::sync::watch;`n", '')
+          $connector = $connector.Replace('use tracing::{info, warn};', 'use tracing::warn;')
+          $connector = $connector.Replace("const SYNC_INTERVAL: Duration = Duration::from_secs(60);`r`n", '')
+          $connector = $connector.Replace("const SYNC_INTERVAL: Duration = Duration::from_secs(60);`n", '')
+          $pattern = '(?ms)\r?\npub async fn run\(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>\) \{.*?\r?\n\}\r?\n\r?\nimpl AppState'
+          $updatedConnector = [regex]::Replace($connector, $pattern, "`nimpl AppState")
+          if ($updatedConnector -eq $connector) {
+            throw 'Expected superseded singleton synchronization worker was not found.'
+          }
+          Set-Content $connectorPath $updatedConnector -NoNewline
+
+          $registryPath = 'crates/homeserver-service/src/cloud_registry.rs'
+          $registry = Get-Content $registryPath -Raw
+          $updatedRegistry = $registry.Replace('.is_none_or(|value| value.len() <= 120)', '.map_or(true, |value| value.len() <= 120)')
+          if ($updatedRegistry -eq $registry) {
+            throw 'Expected post-MSRV Option helper was not found.'
+          }
+          Set-Content $registryPath $updatedRegistry -NoNewline
+
+          cargo fmt --all
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --package microgifter-homeserver-service --all-targets --locked -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $allowed = @($connectorPath, $registryPath)
+          $changed = @(git diff --name-only)
+          $unexpected = @($changed | Where-Object { $_ -notin $allowed })
+          if ($unexpected.Count -gt 0) {
+            throw "Clippy repair changed unexpected files: $($unexpected -join ', ')"
+          }
+          if ($changed.Count -eq 0) {
+            Write-Host 'Strict Clippy repair is already applied.'
+            exit 0
+          }
+          git add -- $allowed
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Repair Phase 5B strict Clippy findings'
+          git push origin HEAD:feature/phase-5b-multi-connection-supervised-agents-20260727
