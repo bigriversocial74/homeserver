@@ -1,4 +1,4 @@
-name: Validate Phase 5A MCP Runtime
+name: Diagnose Phase 5A MCP Runtime
 
 on:
   pull_request:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  diagnose:
     runs-on: windows-2025
     steps:
       - name: Check out exact branch
@@ -24,11 +24,15 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
 
-      - name: Install Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - name: Restore Production Quality Rust cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
-          node-version: 24
-          cache: npm
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-cargo-${{ hashFiles('Cargo.toml', '**/Cargo.toml', 'Cargo.lock') }}
+          restore-keys: windows-cargo-
 
       - name: Reconstruct and verify source patch
         shell: pwsh
@@ -43,76 +47,39 @@ jobs:
               $output.Write($bytes, 0, $bytes.Length)
             }
           } finally { $output.Dispose() }
-          $compressedHash = (Get-FileHash 'phase5a.patch.gz' -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($compressedHash -ne '8a1ae56abe4d387403654b60a107b0b5da39c67281f55fb8c3531b7dbdf9f185') { throw "Compressed checksum mismatch: $compressedHash" }
+          if ((Get-FileHash 'phase5a.patch.gz' -Algorithm SHA256).Hash.ToLowerInvariant() -ne '8a1ae56abe4d387403654b60a107b0b5da39c67281f55fb8c3531b7dbdf9f185') { throw 'Compressed checksum mismatch.' }
           $input = [System.IO.File]::OpenRead('phase5a.patch.gz')
           $gzip = [System.IO.Compression.GZipStream]::new($input, [System.IO.Compression.CompressionMode]::Decompress)
           $patch = [System.IO.File]::Create('phase5a.patch')
           try { $gzip.CopyTo($patch) } finally { $patch.Dispose(); $gzip.Dispose(); $input.Dispose() }
-          $patchHash = (Get-FileHash 'phase5a.patch' -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($patchHash -ne 'b3278f336f259b8494d96892a02baac1bacc4f66679a78ac912d15f49f8eebb8') { throw "Source checksum mismatch: $patchHash" }
+          if ((Get-FileHash 'phase5a.patch' -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'b3278f336f259b8494d96892a02baac1bacc4f66679a78ac912d15f49f8eebb8') { throw 'Source checksum mismatch.' }
           git apply --check phase5a.patch
           git apply phase5a.patch
           Remove-Item '.phase5a-payload' -Recurse -Force
           Remove-Item '.github/workflows/export-phase5a-source.yml' -Force
           Remove-Item 'phase5a.patch.gz', 'phase5a.patch' -Force
-
-      - name: Validate source boundaries
-        shell: pwsh
-        run: |
-          npm ci
-          node --check src/main.js
-          python scripts/validate-mcp-runtime.py
-          python scripts/validate-security-boundaries.py
-          python scripts/validate-document-extraction.py
-          python scripts/validate-ollama-install-assistant.py
-          @'
-          import sqlite3
-          from pathlib import Path
-          db = sqlite3.connect(':memory:')
-          db.execute('PRAGMA foreign_keys = ON')
-          for migration in sorted(Path('database/migrations').glob('*.sql')):
-              db.executescript(migration.read_text(encoding='utf-8'))
-          problems = db.execute('PRAGMA foreign_key_check').fetchall()
-          if problems:
-              raise SystemExit(f'foreign-key violations: {problems}')
-          print('All migrations and foreign keys validated.')
-          '@ | python -
-
-      - name: Format and build native resources
-        shell: pwsh
-        run: |
           cargo fmt --all
-          cargo build --release --package microgifter-homeserver-service
-          cargo build --release --package microgifter-homeserver-updater
-          cargo build --release --package microgifter-homeserver-mcp
-          New-Item -ItemType Directory -Force 'src-tauri/resources' | Out-Null
-          Copy-Item 'target/release/microgifter-homeserver-service.exe' 'src-tauri/resources/microgifter-homeserver-service.exe' -Force
-          Copy-Item 'target/release/microgifter-homeserver-updater.exe' 'src-tauri/resources/microgifter-homeserver-updater.exe' -Force
-          Copy-Item 'target/release/microgifter-homeserver-mcp.exe' 'src-tauri/resources/microgifter-homeserver-mcp.exe' -Force
-          cargo check --workspace --locked
-          cargo test --workspace --locked
-          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo generate-lockfile
 
-      - name: Package exact validated patch
+      - name: Capture complete Rust diagnostics
         shell: pwsh
+        continue-on-error: true
         run: |
-          git add -A
-          git diff --cached --binary | Set-Content -Encoding utf8 phase5a-validated.patch
-          $input = [System.IO.File]::OpenRead('phase5a-validated.patch')
-          $output = [System.IO.File]::Create('phase5a-validated.patch.gz')
-          $gzip = [System.IO.Compression.GZipStream]::new($output, [System.IO.Compression.CompressionLevel]::Optimal)
-          try { $input.CopyTo($gzip) } finally { $gzip.Dispose(); $output.Dispose(); $input.Dispose() }
-          Get-FileHash 'phase5a-validated.patch' -Algorithm SHA256 | Format-List | Out-File phase5a-validation.txt
-          Get-FileHash 'phase5a-validated.patch.gz' -Algorithm SHA256 | Format-List | Out-File phase5a-validation.txt -Append
-          git diff --cached --name-only | Out-File phase5a-validation.txt -Append
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo check --package microgifter-homeserver-service --package microgifter-homeserver-mcp --package microgifter-homeserver-updater --locked *>&1 | Tee-Object phase5a-compiler.txt
+          "EXIT_CODE=$LASTEXITCODE" | Out-File phase5a-compiler.txt -Append
 
-      - name: Upload validated source patch
+      - name: Upload compiler diagnostics and formatted source
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: phase5a-validated-source
+          name: phase5a-compiler-diagnostic
           path: |
-            phase5a-validated.patch.gz
-            phase5a-validation.txt
+            phase5a-compiler.txt
+            Cargo.lock
+            crates/homeserver-service/src/mcp_runtime.rs
+            crates/homeserver-mcp/src/main.rs
+            src-tauri/src/mcp.rs
+            src-tauri/src/lib.rs
           if-no-files-found: error
           retention-days: 1
