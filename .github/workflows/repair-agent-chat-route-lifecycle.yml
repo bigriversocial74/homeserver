@@ -1,0 +1,54 @@
+name: Repair Agent Chat route lifecycle
+
+on:
+  push:
+    branches:
+      - hotfix/agent-chat-dead-controls-20260728
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-agent-chat-route-lifecycle
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out hotfix branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: hotfix/agent-chat-dead-controls-20260728
+          fetch-depth: 0
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Rebuild one authoritative route lifecycle
+        shell: pwsh
+        run: python scripts/repair-agent-chat-route-lifecycle.py
+
+      - name: Validate frontend and route lifecycle
+        shell: pwsh
+        run: |
+          npm ci
+          npm run check:frontend
+          npm run build
+
+      - name: Commit product repair and remove helper
+        shell: pwsh
+        run: |
+          Remove-Item .github/workflows/repair-agent-chat-route-lifecycle.yml -Force
+          Remove-Item scripts/repair-agent-chat-route-lifecycle.py -Force
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/main.js src/homeserver-agent-chat.js package.json scripts/validate-agent-chat-route.py .github/workflows/repair-agent-chat-route-lifecycle.yml scripts/repair-agent-chat-route-lifecycle.py
+          git commit -m "Use one Agent Chat route lifecycle"
+          git push origin HEAD:hotfix/agent-chat-dead-controls-20260728
