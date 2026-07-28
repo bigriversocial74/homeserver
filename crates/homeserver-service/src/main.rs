@@ -11,6 +11,7 @@ mod mcp_runtime;
 mod model_center;
 mod operational_data;
 mod recovery_transfer;
+mod review_intelligence;
 mod semantic_vault;
 mod update;
 mod update_apply;
@@ -131,6 +132,16 @@ impl AppState {
                 "operational_data_integrity_check_failed",
             );
         }
+        if let Err(error) = review_intelligence::health_check(&connection) {
+            error!(
+                ?error,
+                "HomeServer review intelligence database health check failed"
+            );
+            return HealthSnapshot::needs_attention(
+                &self.config.server_name,
+                "review_intelligence_integrity_check_failed",
+            );
+        }
         if let Err(error) = agent_runtime::health_check(&connection) {
             error!(
                 ?error,
@@ -237,6 +248,7 @@ impl AppState {
             update_store::maintain_history(&connection)?;
             model_center::maintain_history(&connection)?;
             operational_data::maintain_history(&connection)?;
+            review_intelligence::maintain_history(&connection)?;
             agent_runtime::maintain_history(&connection)?;
             mcp_runtime::maintain_history(&connection)?;
             backup::enforce_pre_update_retention(&connection)?;

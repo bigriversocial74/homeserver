@@ -1,4 +1,7 @@
-use crate::{app::cloud_registry, model_center, operational_data, semantic_vault, AppState};
+use crate::{
+    app::cloud_registry, model_center, operational_data, review_intelligence, semantic_vault,
+    AppState,
+};
 use anyhow::{bail, ensure, Context, Result};
 use axum::{
     extract::{DefaultBodyLimit, State},
@@ -46,6 +49,12 @@ const ALLOWED_ACTION_TYPES: &[&str] = &[
     "cloud.sync_connection",
     "cloud.sync_all",
     "report.save",
+    "campaign.draft",
+    "campaign.publish",
+    "campaign.pause",
+    "campaign.resume",
+    "campaign.send_make_good",
+    "campaign.send_authorized",
 ];
 const ALLOWED_WORLD_OPERATIONS: &[&str] = &[
     "discover",
@@ -1549,6 +1558,14 @@ async fn execute_action(
                 "Approved synchronization completed across active connections.".to_owned(),
                 result,
             ))
+        }
+        "campaign.draft"
+        | "campaign.publish"
+        | "campaign.pause"
+        | "campaign.resume"
+        | "campaign.send_make_good"
+        | "campaign.send_authorized" => {
+            review_intelligence::execute_campaign_plan(state, plan).await
         }
         "report.save" => {
             let title = plan

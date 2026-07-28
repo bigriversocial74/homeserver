@@ -648,6 +648,55 @@ pub(crate) async fn snapshot(state: Arc<AppState>) -> Result<ModelCenterSnapshot
     })
 }
 
+pub(crate) async fn generate_text(
+    state: Arc<AppState>,
+    model: String,
+    prompt: String,
+    max_predict: u32,
+) -> Result<String> {
+    let definition = approved_model(&model)?;
+    ensure!(
+        definition.supports_chat,
+        "configured model does not support chat generation"
+    );
+    let prompt = prompt.trim();
+    ensure!(!prompt.is_empty(), "model prompt is required");
+    ensure!(
+        prompt.chars().count() <= 30_000,
+        "model prompt exceeds the 30000 character limit"
+    );
+    let max_predict = max_predict.clamp(64, 4_096);
+    let settings = {
+        let state_for_settings = state.clone();
+        tokio::task::spawn_blocking(move || read_settings(&state_for_settings))
+            .await
+            .context("model settings task failed")??
+    };
+    let client = ollama_client(settings.test_timeout_seconds.max(30))?;
+    let response = client
+        .post(format!("{OLLAMA_API_BASE}/api/generate"))
+        .json(&serde_json::json!({
+            "model": definition.model,
+            "prompt": prompt,
+            "stream": false,
+            "keep_alive": 0,
+            "format": "json",
+            "options": {
+                "num_ctx": settings.context_size,
+                "num_predict": max_predict,
+                "temperature": 0.2
+            }
+        }))
+        .send()
+        .await?;
+    let payload: OllamaGenerateResponse = decode_json(response, MAX_OLLAMA_JSON_BYTES).await?;
+    ensure!(
+        !payload.response.trim().is_empty(),
+        "model returned an empty response"
+    );
+    Ok(payload.response.trim().chars().take(40_000).collect())
+}
+
 fn local_snapshot(state: &AppState) -> Result<LocalSnapshot> {
     let connection = state.connection()?;
     Ok(LocalSnapshot {

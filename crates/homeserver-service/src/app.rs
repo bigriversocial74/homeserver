@@ -9,7 +9,8 @@ mod cloud_connector;
 
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
-    mcp_runtime, model_center, operational_data, semantic_vault, update, update_store, AppState,
+    mcp_runtime, model_center, operational_data, review_intelligence, semantic_vault, update,
+    update_store, AppState,
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -42,6 +43,7 @@ pub async fn run(
     document_extraction::initialize(&connection)?;
     model_center::initialize(&connection)?;
     semantic_vault::initialize(&connection)?;
+    review_intelligence::initialize(&connection)?;
     agent_runtime::initialize(&connection)?;
     mcp_runtime::initialize(&connection)?;
     if let Some(outcome) = restore_outcome {
@@ -115,6 +117,7 @@ pub async fn run(
             .merge(model_center::router(state.clone()))
             .merge(semantic_vault::router(state.clone()))
             .merge(operational_data::router(state.clone()))
+            .merge(review_intelligence::router(state.clone()))
             .merge(agent_runtime::router(state.clone()))
             .merge(mcp_runtime::router(state)),
     );

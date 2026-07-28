@@ -23,7 +23,28 @@ const MAX_EVENTS_PER_IMPORT: usize = 250;
 const MAX_RECORD_BYTES: usize = 128 * 1024;
 const MAX_QUERY_LIMIT: u32 = 100;
 const LOCAL_APPROVER: &str = "local_control_center";
-const PERMITTED_AGENT_USES: &[&str] = &["read", "analyze", "goal_match", "report"];
+const PERMITTED_AGENT_USES: &[&str] = &[
+    "read",
+    "analyze",
+    "goal_match",
+    "report",
+    "sentiment_analysis",
+    "semantic_clustering",
+    "conversation_continuity",
+    "commitment_extraction",
+    "follow_up",
+    "service_recovery",
+    "relationship_management",
+    "campaign_targeting",
+    "campaign_management",
+    "campaign_optimization",
+    "customer_value",
+    "product_affinity",
+    "gifting_relationships",
+    "consent_enforcement",
+    "policy_enforcement",
+    "supervised_planning",
+];
 const UNTRUSTED_PROVIDER_EVIDENCE: &str = "untrusted_provider_evidence";
 
 #[derive(Debug, Clone, Copy)]
@@ -36,16 +57,32 @@ struct BuiltinDataset {
 }
 
 const MICROGIFTER_DATASETS: &[BuiltinDataset] = &[
-    BuiltinDataset { key: "merchant.profile", label: "Merchant Profile", description: "Provider-authoritative merchant identity and public operating details.", sensitivity: "business", retention_days: 365 },
-    BuiltinDataset { key: "merchant.locations", label: "Merchant Locations", description: "Provider-authoritative merchant sites, geographic coordinates, and operating metadata.", sensitivity: "business", retention_days: 365 },
-    BuiltinDataset { key: "merchant.products", label: "Products", description: "Products, pricing, availability, and catalog attributes approved for local analysis.", sensitivity: "business", retention_days: 365 },
-    BuiltinDataset { key: "campaigns.summary", label: "Campaign Summary", description: "Campaign definitions and lifecycle summaries without publishing authority.", sensitivity: "business", retention_days: 365 },
-    BuiltinDataset { key: "campaigns.performance", label: "Campaign Performance", description: "Aggregated campaign engagement, claim, redemption, and conversion measures.", sensitivity: "business", retention_days: 365 },
-    BuiltinDataset { key: "rewards.summary", label: "Rewards Summary", description: "Aggregated reward definitions and performance measures.", sensitivity: "business", retention_days: 365 },
-    BuiltinDataset { key: "claims.summary", label: "Claims Summary", description: "Aggregated claim activity without gift ownership or claim mutation authority.", sensitivity: "restricted", retention_days: 180 },
-    BuiltinDataset { key: "redemptions.summary", label: "Redemptions Summary", description: "Aggregated redemption activity without redemption authority.", sensitivity: "restricted", retention_days: 180 },
-    BuiltinDataset { key: "crm.lifecycle_summary", label: "CRM Lifecycle Summary", description: "Aggregated customer lifecycle stages and engagement indicators without contact details.", sensitivity: "restricted", retention_days: 180 },
-    BuiltinDataset { key: "creator.attribution_summary", label: "Creator Attribution Summary", description: "Aggregated creator, referral, and campaign attribution measures.", sensitivity: "business", retention_days: 365 },
+    BuiltinDataset { key: "merchant.profile", label: "Merchant Profile", description: "Provider-authoritative merchant identity and operating details.", sensitivity: "business", retention_days: 365 },
+    BuiltinDataset { key: "merchant.locations", label: "Store Locations", description: "Locations, GPS coordinates, hours, and operating metadata.", sensitivity: "business", retention_days: 365 },
+    BuiltinDataset { key: "merchant.products", label: "Products", description: "Products, pricing, availability, and catalog attributes.", sensitivity: "business", retention_days: 365 },
+    BuiltinDataset { key: "merchant.inventory", label: "Inventory", description: "Product inventory, availability, and reservation state.", sensitivity: "business", retention_days: 180 },
+    BuiltinDataset { key: "merchant.staff", label: "Merchant Staff", description: "Authorized staff, roles, assignments, and schedules.", sensitivity: "restricted", retention_days: 180 },
+    BuiltinDataset { key: "merchant.store_activity", label: "Store Activity", description: "Provider-authoritative store and location activity evidence.", sensitivity: "business", retention_days: 365 },
+    BuiltinDataset { key: "reviews.customer_reviews", label: "Customer Reviews", description: "Review text, ratings, context, and merchant response state.", sensitivity: "restricted", retention_days: 730 },
+    BuiltinDataset { key: "reviews.resolution_history", label: "Review Resolution History", description: "Review responses, service recovery, and resolution events.", sensitivity: "restricted", retention_days: 730 },
+    BuiltinDataset { key: "conversations.threads", label: "Conversation Threads", description: "Customer and merchant conversation state, intent, ownership, and closure.", sensitivity: "restricted", retention_days: 730 },
+    BuiltinDataset { key: "conversations.messages", label: "Conversation Messages", description: "Authorized message bodies and delivery history for semantic understanding and continuity.", sensitivity: "sensitive", retention_days: 730 },
+    BuiltinDataset { key: "conversations.follow_ups", label: "Conversation Follow-Ups", description: "Commitments, next steps, due dates, and closure evidence.", sensitivity: "restricted", retention_days: 730 },
+    BuiltinDataset { key: "crm.contacts", label: "CRM Contacts", description: "Authorized customer identities, lifecycle, relationship, preference, and consent context.", sensitivity: "sensitive", retention_days: 730 },
+    BuiltinDataset { key: "crm.activities", label: "CRM Activities", description: "Customer activity and relationship timeline evidence.", sensitivity: "restricted", retention_days: 730 },
+    BuiltinDataset { key: "crm.tasks", label: "CRM Tasks", description: "Assigned CRM tasks, priorities, due dates, and completion state.", sensitivity: "restricted", retention_days: 365 },
+    BuiltinDataset { key: "crm.notes", label: "CRM Notes", description: "Authorized merchant CRM notes and relationship context.", sensitivity: "sensitive", retention_days: 730 },
+    BuiltinDataset { key: "crm.consent", label: "CRM Consent", description: "Provider-authoritative communication consent and preferences.", sensitivity: "sensitive", retention_days: 730 },
+    BuiltinDataset { key: "commerce.orders", label: "Orders", description: "Orders, totals, status, location, campaign attribution, and purchase history without payment credentials.", sensitivity: "sensitive", retention_days: 1095 },
+    BuiltinDataset { key: "commerce.order_items", label: "Order Items", description: "Products, quantities, prices, and product affinity evidence.", sensitivity: "sensitive", retention_days: 1095 },
+    BuiltinDataset { key: "commerce.refunds", label: "Refunds", description: "Refund and service-recovery history without payment credentials.", sensitivity: "sensitive", retention_days: 1095 },
+    BuiltinDataset { key: "gifts.ownership", label: "Gift and Wallet Ownership", description: "Provider-authoritative PPPM ownership and lifecycle copies for analysis.", sensitivity: "sensitive", retention_days: 1095 },
+    BuiltinDataset { key: "gifts.claims", label: "Gift Claims", description: "Gift claim history and status evidence.", sensitivity: "sensitive", retention_days: 1095 },
+    BuiltinDataset { key: "gifts.redemptions", label: "Gift Redemptions", description: "Gift redemption history and location evidence.", sensitivity: "sensitive", retention_days: 1095 },
+    BuiltinDataset { key: "campaigns.definition", label: "Campaign Definitions", description: "Campaign type, rules, audience, dates, rewards, and lifecycle state.", sensitivity: "business", retention_days: 730 },
+    BuiltinDataset { key: "campaigns.performance", label: "Campaign Performance", description: "Campaign events, delivery, claims, redemption, conversion, and CRM outcomes.", sensitivity: "restricted", retention_days: 1095 },
+    BuiltinDataset { key: "campaigns.authorizations", label: "Agent Campaign Authorizations", description: "Merchant-owned provider policy for campaign analysis, drafting, approval, and execution.", sensitivity: "sensitive", retention_days: 730 },
+    BuiltinDataset { key: "creator.attribution", label: "Creator Attribution", description: "Creator, referral, campaign, customer, and value attribution.", sensitivity: "restricted", retention_days: 1095 },
 ];
 
 #[derive(Debug, Serialize)]
@@ -369,9 +406,10 @@ pub(crate) fn query_for_agent(
     for (connection_id, dataset_key) in &selections {
         let grant = enabled_grant(&connection, connection_id, dataset_key)?;
         ensure!(
-            grant.permitted_agent_uses.iter().any(|use_name| {
-                ["read", "analyze", "goal_match", "report"].contains(&use_name.as_str())
-            }),
+            grant
+                .permitted_agent_uses
+                .iter()
+                .any(|use_name| { PERMITTED_AGENT_USES.contains(&use_name.as_str()) }),
             "dataset grant does not permit Agent Workspace use"
         );
         let result = query_from_connection(
@@ -514,6 +552,13 @@ fn update_dataset_grant(state: &AppState, request: UpdateDatasetGrantRequest) ->
         ensure!(affected == 1, "enabled dataset grant was not found");
     }
     Ok(())
+}
+
+pub(crate) fn import_for_provider(
+    state: &AppState,
+    request: ImportOperationalBatchRequest,
+) -> Result<ImportOperationalBatchResult> {
+    import_operational_batch(state, request)
 }
 
 fn import_operational_batch(

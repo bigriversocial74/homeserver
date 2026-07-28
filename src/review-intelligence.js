@@ -246,7 +246,10 @@ function mount(force = false) {
 function bindEvents() {
   document.querySelector("#review-refresh")?.addEventListener("click", refresh);
   document.querySelector("#review-settings-form")?.addEventListener("submit", saveSettings);
-  document.querySelector("#review-provider")?.addEventListener("change", () => mount(true));
+  document.querySelector("#review-provider")?.addEventListener("change", (event) => {
+    snapshot.settings.provider = event.target.value;
+    mount(true);
+  });
   document.querySelector("#review-connection")?.addEventListener("change", (event) => {
     selectedConnectionId = event.target.value;
     mount(true);
