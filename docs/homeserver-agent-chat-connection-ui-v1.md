@@ -1,6 +1,6 @@
 # HomeServer Agent Chat and Connection Interface v1
 
-Status: implementation complete; full Production Quality validation running
+Status: implementation complete; active-chat route stability repair running
 
 ## Scope
 
@@ -19,6 +19,7 @@ Status: implementation complete; full Production Quality validation running
 - Add `src/homeserver-agent-chat.css`.
 - Extend `src-tauri/src/cloud.rs` with Phase 6A local-service command bridges.
 - Register the new commands in `src-tauri/src/lib.rs`.
+- Update `src/main.js` so background system refreshes do not replace an active Agent Chat canvas.
 - Replace the legacy Agent Workspace script entry in `index.html` while retaining the previous source for rollback.
 
 ## Implemented interface
@@ -32,14 +33,15 @@ Status: implementation complete; full Production Quality validation running
 - Microgifter connection drawer with Sync Code connection, lifecycle state, entitlement, merchant/site counts, capabilities, heartbeat, lease refresh, and credential rotation.
 - Explicit local-first independence messaging.
 - Deterministic initial workspace refresh so existing chat history loads on first open.
+- Draft and composer preservation during the Control Center's periodic system-health refresh.
 
 ## Validation checkpoints
 
-- Coordinated Cloud Connector Contract run #245 passed before lock normalization, confirming the existing pairing node and exact cross-repository authority contract remained intact.
+- Coordinated Cloud Connector Contract run #255 passed on the clean Agent Chat branch, confirming the existing pairing node and exact cross-repository authority contract remained intact.
 - Agent Chat dependency lock normalization run #2 passed and committed only the Windows-generated lockfile update.
 - Agent Chat initial-load repair run #4 passed frontend syntax, frontend checks, and the production frontend build before committing.
-- All temporary workflow helpers removed themselves; the permanent Production Quality workflow is restored unchanged.
-- Full frontend, Rust, installer, security, and signed-update validation is running on the repaired clean branch.
+- Temporary workflow helpers are self-removing; the permanent Production Quality workflow remains the final validation authority.
+- Full frontend, Rust, installer, security, and signed-update validation will run on the final clean branch.
 
 ## Permanent boundaries
 
