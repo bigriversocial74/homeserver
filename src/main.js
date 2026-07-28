@@ -1061,6 +1061,15 @@ async function loadAll(clearNotice = true) {
   render();
 }
 
+document.addEventListener("click", (event) => {
+  if (!(event.target instanceof Element)) return;
+  const control = event.target.closest("[data-page]");
+  if (!control) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  navigate(control.dataset.page);
+}, true);
+
 window.addEventListener("hashchange", () => {
   const page = window.location.hash.replace("#", "");
   if (pages.some(([key]) => key === page)) {

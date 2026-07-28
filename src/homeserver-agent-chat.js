@@ -17,6 +17,7 @@ let connectFormOpen = false;
 let historyQuery = "";
 let notice = null;
 let initialized = false;
+let delegatedEventsBound = false;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -292,7 +293,7 @@ function mount(force = false) {
   if (!canvas) return;
   if (!force && canvas.querySelector('[data-homeserver-chat-mounted="true"]')) return;
   canvas.innerHTML = renderPage();
-  bindEvents();
+  ensureDelegatedEvents();
   if (!initialized && !loading) {
     initialized = true;
     void refreshAll();
@@ -512,6 +513,103 @@ async function runProviderAction(event) {
   }
 }
 
+function delegatedAgentClick(event) {
+  if (!isAgentPage() || !(event.target instanceof Element)) return;
+  const control = event.target.closest("button,[data-chat-thread],[data-chat-suggestion],[data-close-provider],[data-close-connect],[data-provider-action]");
+  if (!control || !control.closest('[data-homeserver-chat-mounted="true"]')) return;
+
+  const handled =
+    control.matches("#hs-chat-new,#hs-chat-refresh,#hs-chat-open-connections,#hs-chat-provider-summary,#hs-chat-connection-toggle,#hs-provider-open-connect,#hs-provider-refresh") ||
+    control.matches("[data-chat-thread],[data-chat-suggestion],[data-close-provider],[data-close-connect],[data-provider-action]");
+  if (!handled) return;
+
+  event.preventDefault();
+  event.stopImmediatePropagation();
+
+  if (control.matches("#hs-chat-new")) return startNewChat();
+  if (control.matches("#hs-chat-refresh")) return void refreshAll();
+  if (control.matches("[data-chat-thread]")) {
+    activeThreadId = control.dataset.chatThread || null;
+    notice = null;
+    return mount(true);
+  }
+  if (control.matches("[data-chat-suggestion]")) {
+    const input = document.querySelector("#hs-chat-input");
+    if (input) {
+      input.value = control.dataset.chatSuggestion || "";
+      input.focus();
+      autoSizeComposer();
+    }
+    return;
+  }
+  if (control.matches("#hs-chat-open-connections,#hs-chat-provider-summary,#hs-chat-connection-toggle")) {
+    connectionDrawerOpen = true;
+    notice = null;
+    return mount(true);
+  }
+  if (control.matches("[data-close-provider]")) {
+    if (control.classList.contains("hs-provider-backdrop") && event.target !== control) return;
+    connectionDrawerOpen = false;
+    connectFormOpen = false;
+    return mount(true);
+  }
+  if (control.matches("#hs-provider-open-connect")) {
+    connectFormOpen = true;
+    return mount(true);
+  }
+  if (control.matches("[data-close-connect]")) {
+    connectFormOpen = false;
+    return mount(true);
+  }
+  if (control.matches("#hs-provider-refresh")) return void refreshProvider();
+  if (control.matches("[data-provider-action]")) return void runProviderAction({ currentTarget: control });
+}
+
+function delegatedAgentSubmit(event) {
+  if (!isAgentPage() || !(event.target instanceof HTMLFormElement)) return;
+  if (event.target.id === "homeserver-chat-form") {
+    event.stopImmediatePropagation();
+    return void submitPrompt(event);
+  }
+  if (event.target.id === "hs-provider-connect-form") {
+    event.stopImmediatePropagation();
+    return void connectMicrogifter(event);
+  }
+}
+
+function delegatedAgentInput(event) {
+  if (!isAgentPage() || !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) return;
+  if (event.target.id === "hs-chat-input") return autoSizeComposer();
+  if (event.target.id === "hs-chat-history-search") {
+    historyQuery = event.target.value;
+    mount(true);
+    const input = document.querySelector("#hs-chat-history-search");
+    if (input) {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+  }
+}
+
+function delegatedAgentKeydown(event) {
+  if (!isAgentPage() || !(event.target instanceof HTMLTextAreaElement) || event.target.id !== "hs-chat-input") return;
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    document.querySelector("#homeserver-chat-form")?.requestSubmit();
+  }
+}
+
+function ensureDelegatedEvents() {
+  if (delegatedEventsBound) return;
+  delegatedEventsBound = true;
+  document.addEventListener("click", delegatedAgentClick, true);
+  document.addEventListener("submit", delegatedAgentSubmit, true);
+  document.addEventListener("input", delegatedAgentInput, true);
+  document.addEventListener("keydown", delegatedAgentKeydown, true);
+}
+
+ensureDelegatedEvents();
 const app = document.querySelector("#app");
 if (app) {
   const observer = new MutationObserver(() => mount(false));
