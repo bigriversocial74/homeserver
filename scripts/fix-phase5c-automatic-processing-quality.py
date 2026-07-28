@@ -91,12 +91,17 @@ ui_path.write_text(ui, encoding="utf-8", newline="\n")
 
 validator_path = Path("scripts/validate-review-intelligence.py")
 validator = validator_path.read_text(encoding="utf-8")
-marker = '    "remote_context_allowed",\n'
-replacement = marker + '    "every 15 minutes",\n'
+old_markers = '''    "remote_context_allowed",
+    "Run Deterministic Analysis",
+'''
+new_markers = '''    "remote_context_allowed",
+    "every 15 minutes",
+    "Run Deterministic Analysis",
+'''
 if '"every 15 minutes"' not in validator:
-    if validator.count(marker) != 1:
+    if validator.count(old_markers) != 1:
         raise SystemExit("automatic processing UI validator anchor was not found")
-    validator = validator.replace(marker, replacement, 1)
+    validator = validator.replace(old_markers, new_markers, 1)
 validator_path.write_text(validator, encoding="utf-8", newline="\n")
 
 print("Automatic Review Intelligence cadence and dataset metrics clarified.")
