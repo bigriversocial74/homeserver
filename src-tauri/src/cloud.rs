@@ -158,3 +158,36 @@ pub async fn homeserver_complete_microgifter_device_replacement(
     )
     .await
 }
+
+#[tauri::command]
+pub async fn homeserver_pod_status() -> Result<Value, String> {
+    get_json("/v1/providers/pod/status").await
+}
+
+#[tauri::command]
+pub async fn homeserver_connect_pod(request: Value) -> Result<Value, String> {
+    post_json("/v1/providers/pod/connect", &request).await
+}
+
+#[tauri::command]
+pub async fn homeserver_update_pod_runtime(request: Value) -> Result<Value, String> {
+    post_json("/v1/providers/pod/runtime", &request).await
+}
+
+#[tauri::command]
+pub async fn homeserver_poll_pod(connection_id: String) -> Result<Value, String> {
+    post_json(
+        "/v1/providers/pod/poll",
+        &json!({ "connection_id": connection_id }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn homeserver_disconnect_pod(connection_id: String) -> Result<Value, String> {
+    post_json(
+        "/v1/providers/pod/disconnect",
+        &json!({ "connection_id": connection_id }),
+    )
+    .await
+}
