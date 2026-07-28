@@ -24,6 +24,7 @@ const MAX_RECORD_BYTES: usize = 128 * 1024;
 const MAX_QUERY_LIMIT: u32 = 100;
 const LOCAL_APPROVER: &str = "local_control_center";
 const PERMITTED_AGENT_USES: &[&str] = &["read", "analyze", "goal_match", "report"];
+const UNTRUSTED_PROVIDER_EVIDENCE: &str = "untrusted_provider_evidence";
 
 #[derive(Debug, Clone, Copy)]
 struct BuiltinDataset {
@@ -257,6 +258,15 @@ pub fn health_check(connection: &Connection) -> Result<()> {
     ] {
         let sql = format!("SELECT COUNT(*) FROM {table}");
         let _: i64 = connection.query_row(&sql, [], |row| row.get(0))?;
+    }
+    for table in ["operational_raw_records", "operational_events"] {
+        let sql = format!("SELECT COUNT(*) FROM {table} WHERE trust_state<>?1");
+        let invalid: i64 =
+            connection.query_row(&sql, params![UNTRUSTED_PROVIDER_EVIDENCE], |row| row.get(0))?;
+        ensure!(
+            invalid == 0,
+            "operational provider evidence contains an invalid trust state"
+        );
     }
     Ok(())
 }
