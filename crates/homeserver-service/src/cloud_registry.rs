@@ -31,6 +31,9 @@ const CREDENTIAL_SERVICE: &str = "MicrogifterHomeServer";
 const PAIR_PATH: &str = "/api/homeserver/pair.php";
 const STATUS_PATH: &str = "/api/homeserver/status.php";
 const SYNC_PATH: &str = "/api/homeserver/sync.php";
+const OPERATIONAL_MANIFEST_PATH: &str = "/api/homeserver/operational-manifest.php";
+const OPERATIONAL_EXPORT_PATH: &str = "/api/homeserver/operational-export.php";
+const CAMPAIGN_ACTIONS_PATH: &str = "/api/homeserver/campaign-actions.php";
 const MAX_CONTROL_BODY_BYTES: usize = 64 * 1024;
 const MAX_SYNC_PAYLOAD_BYTES: usize = 48 * 1024;
 const MAX_CLOUD_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -828,6 +831,76 @@ async fn sync_all_connections(
         .await
         .map(Json)
         .map_err(|error| action_error("cloud_connections_sync_failed", error))
+}
+
+pub(crate) async fn provider_post_json(
+    state: &AppState,
+    connection_id: &str,
+    path: &str,
+    body: &Value,
+) -> Result<Value> {
+    validate_connection_id(connection_id)?;
+    let required_scope = match path {
+        OPERATIONAL_EXPORT_PATH | OPERATIONAL_MANIFEST_PATH => "homeserver.operational.read",
+        CAMPAIGN_ACTIONS_PATH => "homeserver.campaigns.execute",
+        _ => bail!("provider path is not installed"),
+    };
+    let record = connection_record(&*state.connection()?, connection_id)?;
+    ensure!(
+        !matches!(
+            record.summary.state,
+            CloudRegistryConnectionState::Revoked | CloudRegistryConnectionState::Disconnected
+        ),
+        "cloud connection is inactive"
+    );
+    ensure!(
+        record
+            .summary
+            .scopes
+            .iter()
+            .any(|scope| scope == required_scope),
+        "paired connection does not contain the required provider scope"
+    );
+    let secrets = load_secrets(&record.credential_key)?;
+    let client = provider_client(&record.summary.provider_key)?;
+    let body = canonical_json_string(body)?;
+    match client
+        .signed_request::<Value>(Method::POST, path, &body, &record, &secrets)
+        .await
+    {
+        Ok(value) => {
+            mark_connection_success(&*state.connection()?, connection_id)?;
+            Ok(value)
+        }
+        Err(error) => {
+            mark_connection_error(
+                &*state.connection()?,
+                connection_id,
+                &public_cloud_error(&error),
+                authentication_failed(&error),
+            )?;
+            Err(error)
+        }
+    }
+}
+
+fn canonical_json_string(value: &Value) -> Result<String> {
+    fn canonicalize(value: &Value) -> Value {
+        match value {
+            Value::Object(object) => {
+                let mut keys = object.keys().collect::<Vec<_>>();
+                keys.sort();
+                let mut result = serde_json::Map::new();
+                for key in keys {
+                    result.insert(key.clone(), canonicalize(&object[key]));
+                }
+                Value::Object(result)
+            }
+            Value::Array(values) => Value::Array(values.iter().map(canonicalize).collect()),
+            _ => value.clone(),
+        }
+    }
+    Ok(serde_json::to_string(&canonicalize(value))?)
 }
 
 fn provider_client(provider_key: &str) -> Result<MicrogifterCloudClient> {

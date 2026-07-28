@@ -9,7 +9,8 @@ mod cloud_connector;
 
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
-    mcp_runtime, model_center, operational_data, semantic_vault, update, update_store, AppState,
+    mcp_runtime, model_center, operational_data, review_intelligence, semantic_vault, update,
+    update_store, AppState,
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -42,6 +43,7 @@ pub async fn run(
     document_extraction::initialize(&connection)?;
     model_center::initialize(&connection)?;
     semantic_vault::initialize(&connection)?;
+    review_intelligence::initialize(&connection)?;
     agent_runtime::initialize(&connection)?;
     mcp_runtime::initialize(&connection)?;
     if let Some(outcome) = restore_outcome {
@@ -98,6 +100,10 @@ pub async fn run(
     let backup_scheduler = tokio::spawn(run_backup_scheduler(state.clone(), shutdown.clone()));
     let update_scheduler = tokio::spawn(run_update_scheduler(state.clone(), shutdown.clone()));
     let cloud_worker = tokio::spawn(cloud_registry::run(state.clone(), shutdown.clone()));
+    let review_intelligence_worker = tokio::spawn(run_review_intelligence_scheduler(
+        state.clone(),
+        shutdown.clone(),
+    ));
     info!(%address, "HomeServer local API ready");
     if let Some(ready) = ready {
         let _ = ready.send(());
@@ -115,6 +121,7 @@ pub async fn run(
             .merge(model_center::router(state.clone()))
             .merge(semantic_vault::router(state.clone()))
             .merge(operational_data::router(state.clone()))
+            .merge(review_intelligence::router(state.clone()))
             .merge(agent_runtime::router(state.clone()))
             .merge(mcp_runtime::router(state)),
     );
@@ -124,6 +131,7 @@ pub async fn run(
     backup_scheduler.abort();
     update_scheduler.abort();
     cloud_worker.abort();
+    review_intelligence_worker.abort();
     result?;
     Ok(())
 }
@@ -147,6 +155,47 @@ async fn run_backup_scheduler(state: Arc<AppState>, mut shutdown: watch::Receive
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => error!(?error, "scheduled HomeServer backup failed"),
                     Err(error) => error!(?error, "scheduled HomeServer backup task failed"),
+                }
+            }
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+async fn run_review_intelligence_scheduler(
+    state: Arc<AppState>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let start = tokio::time::Instant::now() + Duration::from_secs(2 * 60);
+    let mut interval = tokio::time::interval_at(start, Duration::from_secs(15 * 60));
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                match review_intelligence::run_automatic_processing_cycle(state.clone()).await {
+                    Ok(summary) if summary.enabled && summary.failed_operations > 0 => {
+                        warn!(
+                            failures = summary.failed_operations,
+                            connections = summary.connections_considered,
+                            datasets = summary.datasets_synchronized,
+                            "automatic Review Intelligence cycle completed with errors"
+                        );
+                    }
+                    Ok(summary) if summary.enabled => {
+                        info!(
+                            connections = summary.connections_considered,
+                            datasets = summary.datasets_synchronized,
+                            records = summary.records_received,
+                            events = summary.events_received,
+                            analyses = summary.analyses_run,
+                            "automatic Review Intelligence cycle completed"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => warn!(?error, "automatic Review Intelligence cycle failed"),
                 }
             }
             changed = shutdown.changed() => {

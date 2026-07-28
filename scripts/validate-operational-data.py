@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the Phase 5C-A operational data import and evidence boundaries."""
+"""Validate operational evidence, provenance, and supervised action boundaries."""
 from __future__ import annotations
 
 import sys
@@ -30,6 +30,7 @@ def forbid(path: str, marker: str, message: str) -> None:
 MIGRATION = "database/migrations/0012_operational_data_import.sql"
 SERVICE = "crates/homeserver-service/src/operational_data.rs"
 AGENT = "crates/homeserver-service/src/agent_runtime.rs"
+REVIEW = "crates/homeserver-service/src/review_intelligence.rs"
 TAURI = "src-tauri/src/operational.rs"
 UI = "src/operational-data.js"
 STYLE = "src/operational-data.css"
@@ -68,6 +69,7 @@ for marker in (
     "source_revision",
     "payload_hash",
     "query_for_agent",
+    "import_for_provider",
 ):
     require(SERVICE, marker, f"operational data service boundary is missing {marker}")
 
@@ -75,15 +77,41 @@ for dataset in (
     "merchant.profile",
     "merchant.locations",
     "merchant.products",
-    "campaigns.summary",
+    "merchant.inventory",
+    "merchant.staff",
+    "merchant.store_activity",
+    "reviews.customer_reviews",
+    "reviews.resolution_history",
+    "conversations.threads",
+    "conversations.messages",
+    "conversations.follow_ups",
+    "crm.contacts",
+    "crm.activities",
+    "crm.tasks",
+    "crm.notes",
+    "crm.consent",
+    "commerce.orders",
+    "commerce.order_items",
+    "commerce.refunds",
+    "gifts.ownership",
+    "gifts.claims",
+    "gifts.redemptions",
+    "campaigns.definition",
     "campaigns.performance",
-    "rewards.summary",
-    "claims.summary",
-    "redemptions.summary",
-    "crm.lifecycle_summary",
-    "creator.attribution_summary",
+    "campaigns.authorizations",
+    "creator.attribution",
 ):
     require(SERVICE, dataset, f"Microgifter operational manifest is missing {dataset}")
+
+for marker in (
+    "sentiment_analysis",
+    "semantic_clustering",
+    "conversation_continuity",
+    "service_recovery",
+    "campaign_management",
+    "consent_enforcement",
+):
+    require(SERVICE, marker, f"expanded operational agent-use catalog is missing {marker}")
 
 for marker in (
     "homeserver_operational_data",
@@ -100,6 +128,7 @@ for marker in (
     "Untrusted evidence boundary",
     "homeserver_update_operational_dataset_grant",
     "homeserver_query_operational_data",
+    "Reviews, messages, CRM contact details, purchase history, and gift ownership",
 ):
     require(UI, marker, f"Operational Data UI is missing {marker}")
 
@@ -130,24 +159,50 @@ require("package.json", "validate-operational-data.py", "operational data valida
 require(AGENT, "dataset:", "Agent Workspace does not support connection-bound operational datasets")
 require(AGENT, "operational_data::query_for_agent", "Agent Workspace does not query authorized operational evidence")
 
-for path in (SERVICE, AGENT, UI, DOC):
+# Operational evidence cannot execute anything by itself. Campaign actions are
+# allowed only in the supervised Agent Workspace allowlist and must delegate to
+# the Review Intelligence provider adapter after one-use local approval.
+for path in (SERVICE, UI, DOC):
     for forbidden in (
         "campaign.publish",
+        "campaign.send_make_good",
+        "campaign.send_authorized",
         "reward.issue",
         "claim.redeem",
         "payment.execute",
         "shell.execute",
         "world_mission.dispatch",
     ):
-        forbid(path, forbidden, f"{path} contains prohibited operational capability: {forbidden}")
+        forbid(path, forbidden, f"{path} contains a direct operational capability: {forbidden}")
 
-# The product UI may manage grants and query evidence, but must not expose a free-form import editor.
+for marker in (
+    '"campaign.draft"',
+    '"campaign.publish"',
+    '"campaign.pause"',
+    '"campaign.resume"',
+    '"campaign.send_make_good"',
+    '"campaign.send_authorized"',
+    "review_intelligence::execute_campaign_plan",
+):
+    require(AGENT, marker, f"supervised campaign action boundary is missing {marker}")
+
+for marker in (
+    "campaign_execution_enabled",
+    "provider_post_json",
+    '"/api/homeserver/campaign-actions.php"',
+    "provider_campaign_action_receipts",
+):
+    require(REVIEW, marker, f"provider campaign execution boundary is missing {marker}")
+
+# The product UI may manage grants and query evidence, but must not expose a
+# free-form import editor or a direct provider campaign-send call.
 forbid(UI, "homeserver_import_operational_data", "Control Center exposes free-form operational import")
+forbid(UI, "campaign-actions.php", "Operational Data UI calls the provider campaign endpoint directly")
 
 if ERRORS:
-    print("Phase 5C operational data validation failed:", file=sys.stderr)
+    print("Operational data validation failed:", file=sys.stderr)
     for error in ERRORS:
         print(f"- {error}", file=sys.stderr)
     raise SystemExit(1)
 
-print("Phase 5C operational manifests, grants, ingestion, provenance, evidence, and Agent Workspace boundaries validated.")
+print("Operational manifests, sensitive dataset grants, provenance, evidence, and supervised campaign boundaries validated.")

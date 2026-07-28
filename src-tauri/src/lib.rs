@@ -4,6 +4,7 @@ mod mcp;
 mod model;
 mod ollama_install;
 mod operational;
+mod review_intelligence;
 mod vault;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -311,6 +312,11 @@ pub fn run() {
             operational::homeserver_update_operational_dataset_grant,
             operational::homeserver_import_operational_data,
             operational::homeserver_query_operational_data,
+            review_intelligence::homeserver_review_intelligence,
+            review_intelligence::homeserver_update_review_intelligence_settings,
+            review_intelligence::homeserver_sync_review_dataset,
+            review_intelligence::homeserver_run_review_analysis,
+            review_intelligence::homeserver_record_review_recommendation_outcome,
             cloud::homeserver_cloud_status,
             cloud::homeserver_pair_cloud,
             cloud::homeserver_disconnect_cloud,
