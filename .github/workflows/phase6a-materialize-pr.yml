@@ -29,7 +29,10 @@ jobs:
           parts = sorted((root / ".phase6a-materialize").glob("part*.b85"))
           if len(parts) != 3:
               raise SystemExit(f"expected 3 Phase 6A payload parts, found {len(parts)}")
-          encoded = "".join(part.read_text(encoding="utf-8").strip() for part in parts)
+          encoded = "".join(
+              "".join(part.read_text(encoding="utf-8").split())
+              for part in parts
+          )
           files = json.loads(zlib.decompress(base64.b85decode(encoded)).decode("utf-8"))
           expected = {
               "crates/homeserver-service/src/microgifter_connection.rs",
