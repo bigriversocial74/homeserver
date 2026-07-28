@@ -64,6 +64,7 @@ jobs:
           }
           if ($status -eq 0) { python scripts/fix-phase5c-campaign-plan-ui.py *>> focused-integration.log; $status = $LASTEXITCODE }
           if ($status -eq 0) { python scripts/fix-phase5c-automatic-processing.py *>> focused-integration.log; $status = $LASTEXITCODE }
+          if ($status -eq 0) { python scripts/fix-phase5c-automatic-processing-quality.py *>> focused-integration.log; $status = $LASTEXITCODE }
           if ($status -eq 0) { python scripts/patch-phase5c-review-smoke.py *>> focused-integration.log; $status = $LASTEXITCODE }
           Get-Content focused-integration.log
           exit $status
