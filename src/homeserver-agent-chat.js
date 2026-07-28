@@ -17,6 +17,7 @@ let connectFormOpen = false;
 let historyQuery = "";
 let notice = null;
 let initialized = false;
+let shellHealth = { service: "online", models: "unknown" };
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -253,9 +254,12 @@ function renderPage() {
       <div class="hs-chat-history-label"><span>Chats</span><small>${threads().length}</small></div>
       <div class="hs-chat-history">${renderThreadList()}</div>
       <button type="button" class="hs-chat-provider-summary" id="hs-chat-provider-summary"><span class="hs-provider-state ${providerTone(state)}"><i></i>${escapeHtml(humanize(state))}</span><strong>Microgifter</strong><small>${providerConnections().length} connection${providerConnections().length === 1 ? "" : "s"}</small></button>
+      <div class="hs-chat-sidebar-footer">
+        <button type="button" id="hs-chat-control-center"><span>←</span><div><strong>Control Center</strong><small>Return to dashboard</small></div></button>
+      </div>
     </aside>
     <main class="hs-chat-main">
-      <header class="hs-chat-header"><div><strong>${escapeHtml(thread?.title || "New chat")}</strong><span>${thread ? `Updated ${escapeHtml(relativeDate(thread.updated_at_utc))}` : "Private local conversation"}</span></div><div class="hs-chat-header-actions"><span class="hs-runtime-state">${escapeHtml(humanize(workspace?.model_runtime_state || "loading"))}</span><button type="button" id="hs-chat-refresh" ${loading ? "disabled" : ""}>↻</button><button type="button" id="hs-chat-open-connections">Connections</button></div></header>
+      <header class="hs-chat-header"><div><strong>${escapeHtml(thread?.title || "New chat")}</strong><span>${thread ? `Updated ${escapeHtml(relativeDate(thread.updated_at_utc))}` : "Private local conversation"}</span></div><div class="hs-chat-header-actions"><span class="hs-runtime-state ${shellHealth.models === "degraded" ? "warn" : ""}">${escapeHtml(shellHealth.models === "degraded" ? "Model runtime offline" : humanize(workspace?.model_runtime_state || "loading"))}</span><button type="button" id="hs-chat-refresh" title="Refresh Agent Chat" ${loading ? "disabled" : ""}>↻</button><button type="button" id="hs-chat-open-connections">Connections</button></div></header>
       ${notice && !connectionDrawerOpen ? `<div class="hs-chat-notice ${escapeHtml(notice.kind)}">${escapeHtml(notice.message)}</div>` : ""}
       <section class="hs-chat-stream" id="hs-chat-stream">${loading && !workspace ? '<div class="hs-chat-loading">Loading your private HomeServer chats…</div>' : renderMessages()}</section>
       ${renderComposer()}
@@ -283,6 +287,7 @@ function mount(force = false) {
 }
 
 function bindEvents() {
+  document.querySelector("#hs-chat-control-center")?.addEventListener("click", () => { window.location.hash = "#dashboard"; });
   document.querySelector("#hs-chat-new")?.addEventListener("click", startNewChat);
   document.querySelector("#hs-chat-refresh")?.addEventListener("click", refreshAll);
   document.querySelector("#homeserver-chat-form")?.addEventListener("submit", submitPrompt);
@@ -490,6 +495,10 @@ async function runProviderAction(event) {
   }
 }
 
+window.addEventListener("homeserver-shell-health", (event) => {
+  shellHealth = { ...shellHealth, ...(event.detail || {}) };
+  if (isAgentPage()) mount(true);
+});
 window.addEventListener("homeserver-agent-route", () => window.setTimeout(() => mount(true), 0));
 window.addEventListener("hashchange", () => window.setTimeout(() => mount(true), 0));
 window.setTimeout(() => mount(true), 0);

@@ -629,11 +629,14 @@ function render() {
   const restorePending = Boolean(backupCatalog?.restore_pending || statusSnapshot?.restore_pending);
   const prefs = loadPreferences();
   document.documentElement.classList.toggle("compact-ui", Boolean(prefs.compact));
+  document.documentElement.classList.toggle("agent-chat-mode", activePage === "agent");
+  if (activePage === "agent") {
+    app.innerHTML = `<div class="agent-chat-shell"><div class="homeserver-agent-route-host" data-homeserver-agent-host="true"></div></div>`;
+    window.dispatchEvent(new CustomEvent("homeserver-agent-route"));
+    return;
+  }
   app.innerHTML = `<div class="desktop-shell">${renderSidebar()}<main class="app-main">${renderTopbar()}<section class="page-canvas">${notice ? `<div class="notice ${notice.kind}">${escapeHtml(notice.message)}</div>` : ""}${restorePending ? `<div class="notice warning"><strong>Restore staged.</strong> Restart the HomeServer service or Windows to apply the verified database. The current database is preserved for rollback.</div>` : ""}${renderCurrentPage()}<footer class="app-footer"><span>Local API: ${escapeHtml(statusSnapshot?.api_url || "http://127.0.0.1:47831")}</span><span>Updated: ${escapeHtml(formatDate(statusSnapshot?.last_updated_utc))}</span></footer></section></main></div>`;
   bindEvents();
-  if (activePage === "agent") {
-    window.dispatchEvent(new CustomEvent("homeserver-agent-route"));
-  }
 }
 
 function bindEvents() {
@@ -1033,10 +1036,24 @@ async function copyMcpValue(event) {
 }
 
 async function loadAll(clearNotice = true) {
-  if (clearNotice) notice = null;
-  const results = await Promise.allSettled([invoke("homeserver_status"), invoke("homeserver_cloud_status"), invoke("homeserver_backups"), invoke("homeserver_updates"), invoke("homeserver_vault"), invoke("homeserver_semantic_vault"), invoke("homeserver_models"), invoke("homeserver_mcp"), invoke("homeserver_mcp_bridge_path")]);
+  if (clearNotice && activePage !== "agent") notice = null;
+  const results = await Promise.allSettled([
+    invoke("homeserver_status"),
+    invoke("homeserver_cloud_status"),
+    invoke("homeserver_backups"),
+    invoke("homeserver_updates"),
+    invoke("homeserver_vault"),
+    invoke("homeserver_semantic_vault"),
+    invoke("homeserver_models"),
+    invoke("homeserver_mcp"),
+    invoke("homeserver_mcp_bridge_path"),
+  ]);
   if (results[0].status === "rejected") {
     statusSnapshot = null;
+    if (activePage === "agent") {
+      window.dispatchEvent(new CustomEvent("homeserver-shell-health", { detail: { service: "offline", models: "unknown" } }));
+      return;
+    }
     cloudSnapshot = null;
     backupCatalog = null;
     updateStatus = null;
@@ -1050,21 +1067,33 @@ async function loadAll(clearNotice = true) {
     return;
   }
   statusSnapshot = results[0].value;
-  cloudSnapshot = results[1].status === "fulfilled" ? results[1].value : { state: "degraded", scopes: [], pending_sync: 0, last_error: "cloud_status_unavailable" };
-  backupCatalog = results[2].status === "fulfilled" ? results[2].value : null;
-  updateStatus = results[3].status === "fulfilled" ? results[3].value : null;
-  vaultSnapshot = results[4].status === "fulfilled" ? results[4].value : null;
-  semanticSnapshot = results[5].status === "fulfilled" ? results[5].value : null;
-  modelSnapshot = results[6].status === "fulfilled" ? results[6].value : null;
-  mcpSnapshot = results[7].status === "fulfilled" ? results[7].value : null;
-  mcpBridgePath = results[8].status === "fulfilled" ? results[8].value : null;
+  cloudSnapshot = results[1].status === "fulfilled" ? results[1].value : cloudSnapshot || { state: "degraded", scopes: [], pending_sync: 0, last_error: "cloud_status_unavailable" };
+  backupCatalog = results[2].status === "fulfilled" ? results[2].value : backupCatalog;
+  updateStatus = results[3].status === "fulfilled" ? results[3].value : updateStatus;
+  vaultSnapshot = results[4].status === "fulfilled" ? results[4].value : vaultSnapshot;
+  semanticSnapshot = results[5].status === "fulfilled" ? results[5].value : semanticSnapshot;
+  modelSnapshot = results[6].status === "fulfilled" ? results[6].value : modelSnapshot;
+  mcpSnapshot = results[7].status === "fulfilled" ? results[7].value : mcpSnapshot;
+  mcpBridgePath = results[8].status === "fulfilled" ? results[8].value : mcpBridgePath;
+
+  const health = {
+    service: "online",
+    cloud: results[1].status === "fulfilled" ? "online" : "degraded",
+    semantic: results[5].status === "fulfilled" ? "online" : "degraded",
+    models: results[6].status === "fulfilled" ? "online" : "degraded",
+    mcp: results[7].status === "fulfilled" ? "online" : "degraded",
+  };
+  if (activePage === "agent") {
+    window.dispatchEvent(new CustomEvent("homeserver-shell-health", { detail: health }));
+    return;
+  }
+
   if (!notice && results[1].status === "rejected") notice = { kind: "warning", message: `Cloud connector unavailable: ${String(results[1].reason)}` };
-  if (!notice && results[5].status === "rejected") notice = { kind: "warning", message: `Semantic Knowledge Vault unavailable: ${String(results[5].reason)}` };
-  if (!notice && results[6].status === "rejected") notice = { kind: "warning", message: `Model Center unavailable: ${String(results[6].reason)}` };
-  if (!notice && results[7].status === "rejected") notice = { kind: "warning", message: `Local MCP runtime unavailable: ${String(results[7].reason)}` };
+  if (!notice && results[5].status === "rejected" && activePage === "knowledge") notice = { kind: "warning", message: `Semantic Knowledge Vault unavailable: ${String(results[5].reason)}` };
+  if (!notice && results[6].status === "rejected" && activePage === "models") notice = { kind: "warning", message: `Model Center unavailable: ${String(results[6].reason)}` };
+  if (!notice && results[7].status === "rejected" && activePage === "integrations") notice = { kind: "warning", message: `Local MCP runtime unavailable: ${String(results[7].reason)}` };
   render();
 }
-
 
 window.addEventListener("hashchange", () => {
   const page = window.location.hash.replace("#", "");
