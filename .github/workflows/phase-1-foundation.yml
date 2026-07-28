@@ -27,12 +27,13 @@ jobs:
           set -euo pipefail
           python scripts/repair-pod-provider-source.py
           cargo fmt --all
-          if git diff --quiet -- '*.rs'; then
+          path='crates/homeserver-service/src/app/pod_provider_runtime.rs'
+          if git diff --quiet -- "$path"; then
             echo 'POD provider source is already repaired.'
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add crates/homeserver-service/src/app/pod_provider_runtime.rs
+          git add "$path"
           git commit -m 'Repair POD capability-test model serialization'
           git push origin HEAD:feature/pod-provider-voice-adapter-v1-20260728
