@@ -53,24 +53,28 @@ jobs:
                   raise SystemExit("Legacy Agent Workspace import anchor not found")
               legacy_text = legacy_text.replace(legacy_import, legacy_import + '\nconst legacyAgentWorkspaceDisabled = Boolean(window.__HOMESERVER_AGENT_CHAT_V1__);\n', 1)
 
-              legacy_tail = '''const app = document.querySelector("#app");
-if (app) {
-  const observer = new MutationObserver(() => mount(false));
-  observer.observe(app, { childList: true, subtree: true });
-}
-window.addEventListener("hashchange", () => window.setTimeout(() => mount(false), 0));
-window.addEventListener("DOMContentLoaded", () => window.setTimeout(() => mount(false), 0));
-'''
-              guarded_tail = '''if (!legacyAgentWorkspaceDisabled) {
-  const app = document.querySelector("#app");
-  if (app) {
-    const observer = new MutationObserver(() => mount(false));
-    observer.observe(app, { childList: true, subtree: true });
-  }
-  window.addEventListener("hashchange", () => window.setTimeout(() => mount(false), 0));
-  window.addEventListener("DOMContentLoaded", () => window.setTimeout(() => mount(false), 0));
-}
-'''
+              legacy_tail = "\n".join([
+                  'const app = document.querySelector("#app");',
+                  'if (app) {',
+                  '  const observer = new MutationObserver(() => mount(false));',
+                  '  observer.observe(app, { childList: true, subtree: true });',
+                  '}',
+                  'window.addEventListener("hashchange", () => window.setTimeout(() => mount(false), 0));',
+                  'window.addEventListener("DOMContentLoaded", () => window.setTimeout(() => mount(false), 0));',
+                  '',
+              ])
+              guarded_tail = "\n".join([
+                  'if (!legacyAgentWorkspaceDisabled) {',
+                  '  const app = document.querySelector("#app");',
+                  '  if (app) {',
+                  '    const observer = new MutationObserver(() => mount(false));',
+                  '    observer.observe(app, { childList: true, subtree: true });',
+                  '  }',
+                  '  window.addEventListener("hashchange", () => window.setTimeout(() => mount(false), 0));',
+                  '  window.addEventListener("DOMContentLoaded", () => window.setTimeout(() => mount(false), 0));',
+                  '}',
+                  '',
+              ])
               if legacy_tail not in legacy_text:
                   raise SystemExit("Legacy Agent Workspace initialization anchor not found")
               legacy_text = legacy_text.replace(legacy_tail, guarded_tail, 1)
