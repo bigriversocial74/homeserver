@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - hotfix/agent-chat-dead-controls-20260728
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
