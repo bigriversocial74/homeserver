@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - feature/phase-5c-review-intelligence-campaign-actions-20260728
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
