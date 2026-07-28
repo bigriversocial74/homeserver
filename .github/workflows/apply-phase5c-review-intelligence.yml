@@ -54,6 +54,7 @@ jobs:
           if ($LASTEXITCODE -eq 0) { python scripts/fix-phase5c-review-rust.py *>> focused-integration.log }
           if ($LASTEXITCODE -eq 0) { python scripts/fix-phase5c-review-clippy.py *>> focused-integration.log }
           if ($LASTEXITCODE -eq 0) { python scripts/apply-phase5c-review-frontend.py *>> focused-integration.log }
+          if ($LASTEXITCODE -eq 0) { python scripts/patch-phase5c-review-smoke.py *>> focused-integration.log }
           $status = $LASTEXITCODE
           Get-Content focused-integration.log
           exit $status
@@ -84,7 +85,7 @@ jobs:
           }
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add crates/homeserver-service/src/main.rs crates/homeserver-service/src/app.rs crates/homeserver-service/src/operational_data.rs crates/homeserver-service/src/cloud_registry.rs crates/homeserver-service/src/model_center.rs crates/homeserver-service/src/agent_runtime.rs crates/homeserver-service/src/review_intelligence.rs database/migrations/0013_review_intelligence_campaign_actions.sql src-tauri/src/lib.rs src-tauri/src/review_intelligence.rs index.html src/operational-data.js src/review-intelligence.js src/review-intelligence.css
+          git add crates/homeserver-service/src/main.rs crates/homeserver-service/src/app.rs crates/homeserver-service/src/operational_data.rs crates/homeserver-service/src/cloud_registry.rs crates/homeserver-service/src/model_center.rs crates/homeserver-service/src/agent_runtime.rs crates/homeserver-service/src/review_intelligence.rs database/migrations/0013_review_intelligence_campaign_actions.sql src-tauri/src/lib.rs src-tauri/src/review_intelligence.rs index.html src/operational-data.js src/review-intelligence.js src/review-intelligence.css scripts/smoke-test-service.ps1
           git commit -m 'Integrate review intelligence and campaign actions'
           git push origin HEAD:feature/phase-5c-review-intelligence-campaign-actions-20260728
 
