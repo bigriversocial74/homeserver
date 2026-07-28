@@ -1,6 +1,6 @@
 # HomeServer Agent Chat and Connection Interface v1
 
-Status: chat-first frontend committed; dependency lock normalization running
+Status: chat-first frontend and Phase 6A bridge committed; full Production Quality validation running
 
 ## Scope
 
@@ -32,11 +32,18 @@ Status: chat-first frontend committed; dependency lock normalization running
 - Microgifter connection drawer with Sync Code connection, lifecycle state, entitlement, merchant/site counts, capabilities, heartbeat, lease refresh, and credential rotation.
 - Explicit local-first independence messaging.
 
-## Validation
+## Validation checkpoints
 
-- Frontend syntax and production build.
-- Rust formatting and locked Tauri compilation.
-- Existing HomeServer Production Quality workflow.
-- No change to the pairing node, provider contract, database migration, updater trust chain, or cloud authority boundaries.
+- Coordinated Cloud Connector Contract run #245 passed before lock normalization, confirming the existing pairing node and exact cross-repository authority contract remained intact.
+- Agent Chat dependency lock normalization run #2 passed and committed only the Windows-generated lockfile update.
+- Temporary workflow helpers were removed; the permanent Production Quality workflow was restored unchanged.
+- Full frontend, Rust, installer, security, and signed-update validation is running on the clean branch.
+
+## Permanent boundaries
+
+- No new pairing node.
+- No database migration.
+- No change to the provider contract, entitlement trust, updater trust chain, or local-data ownership.
+- HomeServer local operation remains independent of Microgifter connection state.
 
 Do not merge without David Evans's explicit approval.
