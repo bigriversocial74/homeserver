@@ -93,9 +93,7 @@ pub async fn homeserver_refresh_microgifter_entitlement(
 }
 
 #[tauri::command]
-pub async fn homeserver_send_microgifter_heartbeat(
-    connection_id: String,
-) -> Result<Value, String> {
+pub async fn homeserver_send_microgifter_heartbeat(connection_id: String) -> Result<Value, String> {
     post_json(
         "/v1/providers/microgifter/heartbeat",
         &json!({ "connection_id": connection_id }),
