@@ -1,0 +1,58 @@
+name: Repair Agent Chat health badge
+
+on:
+  push:
+    branches:
+      - hotfix/agent-chat-dead-controls-20260728
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-agent-chat-health-badge
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out hotfix branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: hotfix/agent-chat-dead-controls-20260728
+          fetch-depth: 0
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Apply non-destructive health update
+        run: |
+          if [ ! -f scripts/repair-agent-chat-health-badge.py ]; then exit 0; fi
+          python scripts/repair-agent-chat-health-badge.py
+
+      - name: Validate frontend
+        run: |
+          if [ ! -f scripts/repair-agent-chat-health-badge.py ]; then exit 0; fi
+          npm ci
+          npm run check:frontend
+          npm run build
+
+      - name: Commit clean repair
+        run: |
+          if [ ! -f scripts/repair-agent-chat-health-badge.py ]; then exit 0; fi
+          rm .github/workflows/repair-agent-chat-health-badge.yml
+          rm scripts/repair-agent-chat-health-badge.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/homeserver-agent-chat.js scripts/validate-agent-chat-route.py .github/workflows/repair-agent-chat-health-badge.yml scripts/repair-agent-chat-health-badge.py
+          git commit -m "Update Agent Chat health without remounting"
+          git push origin HEAD:hotfix/agent-chat-dead-controls-20260728
