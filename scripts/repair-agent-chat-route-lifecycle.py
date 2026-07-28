@@ -125,7 +125,7 @@ required_main = [
     'window.dispatchEvent(new CustomEvent("homeserver-agent-route"))',
 ]
 required_chat = [
-    'document.querySelector(\'[data-homeserver-agent-host="true"]\')',
+    'data-homeserver-agent-host="true"',
     'host.innerHTML = renderPage()',
     'bindEvents()',
     'window.addEventListener("homeserver-agent-route"',
