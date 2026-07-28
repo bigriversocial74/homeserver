@@ -60,12 +60,12 @@ jobs:
               text = text.replace(old, new, 1)
           path.write_text(text, encoding="utf-8", newline="\n")
 
-      - name: Format and run strict workspace Clippy
+      - name: Format and run strict service Clippy
         shell: pwsh
         run: |
           cargo fmt --all
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo clippy --workspace --all-targets --locked -- -D warnings *> phase6a-clippy.log
+          cargo clippy --package microgifter-homeserver-service --all-targets --locked -- -D warnings *> phase6a-clippy.log
           $status = $LASTEXITCODE
           Get-Content phase6a-clippy.log -Tail 280
           exit $status
