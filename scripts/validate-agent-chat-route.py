@@ -17,6 +17,8 @@ required_chat = [
     'host.innerHTML = renderPage()',
     'id="hs-chat-control-center"',
     'window.addEventListener("homeserver-shell-health"',
+    'function applyShellHealth(detail)',
+    'runtime.classList.toggle("warn"',
     'Model runtime offline',
 ]
 required_css = [
@@ -48,6 +50,8 @@ for forbidden in [
 
 if 'Model Center unavailable:' in main and 'activePage === "models"' not in main:
     raise SystemExit("Model Center failure is still global")
+if 'if (isAgentPage()) mount(true);' in chat:
+    raise SystemExit("Background shell health still remounts Agent Chat")
 if 'event.target.closest("[data-page]")' in main:
     raise SystemExit("Competing delegated Control Center router remains")
 

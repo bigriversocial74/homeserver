@@ -495,10 +495,22 @@ async function runProviderAction(event) {
   }
 }
 
-window.addEventListener("homeserver-shell-health", (event) => {
-  shellHealth = { ...shellHealth, ...(event.detail || {}) };
-  if (isAgentPage()) mount(true);
-});
+function applyShellHealth(detail) {
+  shellHealth = { ...shellHealth, ...(detail || {}) };
+  if (!isAgentPage()) return;
+  const runtime = document.querySelector(".hs-runtime-state");
+  if (!runtime) return;
+  const serviceOffline = shellHealth.service === "offline";
+  const modelsDegraded = shellHealth.models === "degraded";
+  runtime.textContent = serviceOffline
+    ? "HomeServer offline"
+    : modelsDegraded
+      ? "Model runtime offline"
+      : humanize(workspace?.model_runtime_state || "ready");
+  runtime.classList.toggle("warn", serviceOffline || modelsDegraded);
+}
+
+window.addEventListener("homeserver-shell-health", (event) => applyShellHealth(event.detail));
 window.addEventListener("homeserver-agent-route", () => window.setTimeout(() => mount(true), 0));
 window.addEventListener("hashchange", () => window.setTimeout(() => mount(true), 0));
 window.setTimeout(() => mount(true), 0);
