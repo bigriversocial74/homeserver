@@ -2,16 +2,22 @@
 name: POD Provider Format Repair
 
 on:
-  push:
+  pull_request:
     branches:
-      - feature/pod-provider-voice-adapter-v1-20260728
+      - main
+    paths:
+      - crates/homeserver-service/src/app/pod_provider_runtime.rs
+      - crates/homeserver-service/src/app.rs
+      - src-tauri/src/cloud.rs
+      - src-tauri/src/lib.rs
+      - .github/workflows/pod-provider-format-repair.yml
 
 permissions:
   contents: write
 
 jobs:
   format:
-    if: github.actor != 'github-actions[bot]'
+    if: github.event.pull_request.head.ref == 'feature/pod-provider-voice-adapter-v1-20260728'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
