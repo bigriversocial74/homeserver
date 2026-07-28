@@ -79,6 +79,59 @@ elif new_loop not in review:
     raise SystemExit("automatic dataset metric loop anchor was not found")
 review_path.write_text(review, encoding="utf-8", newline="\n")
 
+app_path = Path("crates/homeserver-service/src/app.rs")
+app = app_path.read_text(encoding="utf-8")
+scheduler_anchor = '''async fn run_update_scheduler(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>) {
+'''
+scheduler = r'''async fn run_review_intelligence_scheduler(
+    state: Arc<AppState>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let start = tokio::time::Instant::now() + Duration::from_secs(2 * 60);
+    let mut interval = tokio::time::interval_at(start, Duration::from_secs(15 * 60));
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                match review_intelligence::run_automatic_processing_cycle(state.clone()).await {
+                    Ok(summary) if summary.enabled && summary.failed_operations > 0 => {
+                        warn!(
+                            failures = summary.failed_operations,
+                            connections = summary.connections_considered,
+                            datasets = summary.datasets_synchronized,
+                            "automatic Review Intelligence cycle completed with errors"
+                        );
+                    }
+                    Ok(summary) if summary.enabled => {
+                        info!(
+                            connections = summary.connections_considered,
+                            datasets = summary.datasets_synchronized,
+                            records = summary.records_received,
+                            events = summary.events_received,
+                            analyses = summary.analyses_run,
+                            "automatic Review Intelligence cycle completed"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => warn!(?error, "automatic Review Intelligence cycle failed"),
+                }
+            }
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+async fn run_update_scheduler(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>) {
+'''
+if "async fn run_review_intelligence_scheduler(" not in app:
+    if app.count(scheduler_anchor) != 1:
+        raise SystemExit("review scheduler function anchor was not found")
+    app = app.replace(scheduler_anchor, scheduler, 1)
+app_path.write_text(app, encoding="utf-8", newline="\n")
+
 ui_path = Path("src/review-intelligence.js")
 ui = ui_path.read_text(encoding="utf-8")
 old_label = 'Process new evidence automatically after synchronization'
@@ -104,4 +157,4 @@ if '"every 15 minutes"' not in validator:
     validator = validator.replace(old_markers, new_markers, 1)
 validator_path.write_text(validator, encoding="utf-8", newline="\n")
 
-print("Automatic Review Intelligence cadence and dataset metrics clarified.")
+print("Automatic Review Intelligence scheduler, cadence, and dataset metrics finalized.")
