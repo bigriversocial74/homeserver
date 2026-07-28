@@ -1,9 +1,6 @@
 name: Normalize Phase 5C dependency locks
 
 on:
-  push:
-    branches:
-      - feature/phase-5c-review-intelligence-campaign-actions-20260728
   pull_request:
     branches:
       - main
@@ -11,10 +8,6 @@ on:
 
 permissions:
   contents: read
-
-concurrency:
-  group: normalize-phase5c-locks
-  cancel-in-progress: true
 
 jobs:
   normalize:
