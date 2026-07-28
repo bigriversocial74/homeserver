@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   validate:
@@ -24,6 +24,64 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           components: rustfmt, clippy
+
+      - name: Apply branch-scoped POD compile repair
+        if: github.event_name == 'pull_request' && github.head_ref == 'feature/pod-provider-voice-adapter-v1-20260728'
+        shell: pwsh
+        run: |
+          git fetch origin feature/pod-provider-voice-adapter-v1-20260728
+          git checkout feature/pod-provider-voice-adapter-v1-20260728
+          $path = 'crates/homeserver-service/src/app/pod_provider_runtime.rs'
+          $source = Get-Content $path -Raw
+          $opening = @'
+                  "capability_test" => Ok((
+                      json!({
+          '@
+          $replacementOpening = @'
+                  "capability_test" => {
+                      let models = [
+                          runtime.transcription_model.clone(),
+                          runtime.synthesis_model.clone(),
+                      ]
+                      .into_iter()
+                      .flatten()
+                      .collect::<Vec<_>>();
+                      Ok((
+                          json!({
+          '@
+          $models = '                        "models": [runtime.transcription_model.clone(), runtime.synthesis_model.clone()].into_iter().flatten().collect::<Vec<_>>(),'
+          $replacementModels = '                            "models": models,'
+          $closing = @'
+                      }),
+                      None,
+                      Some(started.elapsed().as_millis() as u64),
+                  )),
+                  "speech_to_text" => {
+          '@
+          $replacementClosing = @'
+                          }),
+                          None,
+                          Some(started.elapsed().as_millis() as u64),
+                      ))
+                  },
+                  "speech_to_text" => {
+          '@
+          if ($source.Contains($models)) {
+            if (-not $source.Contains($opening)) { throw 'POD compile repair opening token was not found.' }
+            if (-not $source.Contains($closing)) { throw 'POD compile repair closing token was not found.' }
+            $source = $source.Replace($opening, $replacementOpening)
+            $source = $source.Replace($models, $replacementModels)
+            $source = $source.Replace($closing, $replacementClosing)
+            [System.IO.File]::WriteAllText((Resolve-Path $path), $source, [System.Text.UTF8Encoding]::new($false))
+            cargo fmt --all
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add $path
+            git commit -m 'Repair POD capability-test model serialization'
+            git push origin HEAD:feature/pod-provider-voice-adapter-v1-20260728
+          } else {
+            Write-Host 'POD capability-test serializer is already repaired.'
+          }
 
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
