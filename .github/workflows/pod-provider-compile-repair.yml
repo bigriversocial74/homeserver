@@ -1,0 +1,75 @@
+name: POD Provider Compile Repair
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/pod-provider-compile-repair.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.event.pull_request.head.ref == 'feature/pod-provider-voice-adapter-v1-20260728'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/pod-provider-voice-adapter-v1-20260728
+          fetch-depth: 0
+      - name: Repair capability-test model list
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('crates/homeserver-service/src/app/pod_provider_runtime.rs')
+          source = path.read_text(encoding='utf-8')
+          old = '''        "capability_test" => Ok((
+              json!({
+                  "runtime": "homeserver-local-command-v1",
+                  "models": [runtime.transcription_model.clone(), runtime.synthesis_model.clone()].into_iter().flatten().collect::<Vec<_>>(),
+                  "transcription_ready": runtime.transcription_enabled && executable_ready(runtime.transcription_executable.as_deref()),
+                  "synthesis_ready": runtime.synthesis_enabled && executable_ready(runtime.synthesis_executable.as_deref()),
+                  "details": runtime.runtime_health_message,
+              }),
+              None,
+              Some(started.elapsed().as_millis() as u64),
+          )),'''
+          new = '''        "capability_test" => {
+              let models = [
+                  runtime.transcription_model.clone(),
+                  runtime.synthesis_model.clone(),
+              ]
+              .into_iter()
+              .flatten()
+              .collect::<Vec<_>>();
+              Ok((
+                  json!({
+                      "runtime": "homeserver-local-command-v1",
+                      "models": models,
+                      "transcription_ready": runtime.transcription_enabled && executable_ready(runtime.transcription_executable.as_deref()),
+                      "synthesis_ready": runtime.synthesis_enabled && executable_ready(runtime.synthesis_executable.as_deref()),
+                      "details": runtime.runtime_health_message,
+                  }),
+                  None,
+                  Some(started.elapsed().as_millis() as u64),
+              ))
+          },'''
+          if old not in source:
+              raise SystemExit('Expected capability-test block was not found exactly.')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+      - name: Format and commit repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/homeserver-service/src/app/pod_provider_runtime.rs
+          git commit -m 'Repair POD capability-test model serialization'
+          git push origin HEAD:feature/pod-provider-voice-adapter-v1-20260728
