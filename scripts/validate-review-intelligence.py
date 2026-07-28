@@ -73,6 +73,10 @@ for marker in (
     '"/api/homeserver/campaign-actions.php"',
     "execute_campaign_plan",
     "campaign_execution_enabled",
+    "run_automatic_processing_cycle",
+    "automatic_processing_targets",
+    "automatic_analysis_due",
+    "AUTOMATIC_MAX_PAGES_PER_DATASET",
     "provider_campaign_action_receipts",
     'object.remove("merchant_approval_token")',
     'object.remove("merchant_approval_hash")',
@@ -131,6 +135,7 @@ for marker in (
     "Deterministic core active",
     "The selected model is optional",
     "remote_context_allowed",
+    "every 15 minutes",
     "Run Deterministic Analysis",
     "Prepare Supervised Campaign Plan",
     "review-plan-campaign-title",
@@ -155,6 +160,8 @@ for marker in (
 require("crates/homeserver-service/src/main.rs", "mod review_intelligence;", "review intelligence service module is not registered")
 require("crates/homeserver-service/src/app.rs", "review_intelligence::initialize(&connection)?", "review intelligence migration is not initialized")
 require("crates/homeserver-service/src/app.rs", ".merge(review_intelligence::router(state.clone()))", "review intelligence router is not secured inside the local API")
+require("crates/homeserver-service/src/app.rs", "run_review_intelligence_scheduler", "automatic Review Intelligence scheduler is not registered")
+require("crates/homeserver-service/src/app.rs", "Duration::from_secs(15 * 60)", "automatic Review Intelligence scheduler is not bounded to a 15-minute cadence")
 require("src-tauri/src/lib.rs", "mod review_intelligence;", "review intelligence Tauri module is not registered")
 require("index.html", "/src/review-intelligence.js", "review intelligence frontend module is not loaded")
 

@@ -30,6 +30,8 @@ const MAX_MODEL_CONTEXT_RECORDS: usize = 60;
 const MAX_MODEL_CONTEXT_CHARS: usize = 28_000;
 const MAX_MODEL_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_MODEL_OUTPUT_CHARS: usize = 40_000;
+const AUTOMATIC_SYNC_PAGE_LIMIT: u32 = 250;
+const AUTOMATIC_MAX_PAGES_PER_DATASET: usize = 4;
 const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 const REVIEW_DATASETS: &[&str] = &[
     "reviews.customer_reviews",
@@ -180,6 +182,17 @@ pub struct RunReviewAnalysisResult {
     pub remote_context_sent: bool,
     pub clusters: Vec<ReviewClusterSummary>,
     pub recommendations: Vec<ReviewRecommendationSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct AutomaticReviewCycleSummary {
+    pub enabled: bool,
+    pub connections_considered: u64,
+    pub datasets_synchronized: u64,
+    pub records_received: u64,
+    pub events_received: u64,
+    pub analyses_run: u64,
+    pub failed_operations: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -686,6 +699,162 @@ async fn sync_provider_dataset_for_state(
         cursor_after: envelope.cursor_after,
         local_import_run_id,
     })
+}
+
+fn automatic_processing_targets(state: &AppState) -> Result<Vec<(String, Vec<String>)>> {
+    let connection = state.connection()?;
+    let mut statement = connection.prepare(
+        "SELECT g.connection_id,g.dataset_key,g.permitted_agent_uses_json FROM operational_dataset_grants g JOIN cloud_connections c ON c.connection_id=g.connection_id WHERE g.state='enabled' AND c.provider_key='microgifter' AND c.state NOT IN ('revoked','disconnected') ORDER BY g.connection_id,g.dataset_key",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for row in rows {
+        let (connection_id, dataset_key, uses_json) = row?;
+        if !REVIEW_DATASETS.contains(&dataset_key.as_str()) {
+            continue;
+        }
+        let uses: Vec<String> = serde_json::from_str(&uses_json).unwrap_or_default();
+        if !uses.iter().any(|value| value == "analyze") {
+            continue;
+        }
+        grouped.entry(connection_id).or_default().push(dataset_key);
+    }
+    Ok(grouped.into_iter().collect())
+}
+
+fn automatic_analysis_due(
+    state: &AppState,
+    connection_id: &str,
+    dataset_keys: &[String],
+) -> Result<bool> {
+    let connection = state.connection()?;
+    let last_completed: Option<String> = connection
+        .query_row(
+            "SELECT MAX(completed_at_utc) FROM review_intelligence_runs WHERE connection_id=?1 AND state IN ('completed','completed_with_errors')",
+            params![connection_id],
+            |row| row.get(0),
+        )?;
+    for dataset_key in dataset_keys {
+        let latest_received: Option<String> = connection.query_row(
+            "SELECT MAX(received_at_utc) FROM operational_entities WHERE connection_id=?1 AND dataset_key=?2 AND state='active'",
+            params![connection_id, dataset_key],
+            |row| row.get(0),
+        )?;
+        if let Some(latest_received) = latest_received {
+            if last_completed
+                .as_deref()
+                .map_or(true, |completed| latest_received.as_str() > completed)
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+pub(crate) async fn run_automatic_processing_cycle(
+    state: Arc<AppState>,
+) -> Result<AutomaticReviewCycleSummary> {
+    let settings = {
+        let connection = state.connection()?;
+        read_settings(&connection)?
+    };
+    let mut summary = AutomaticReviewCycleSummary {
+        enabled: settings.automatic_processing,
+        connections_considered: 0,
+        datasets_synchronized: 0,
+        records_received: 0,
+        events_received: 0,
+        analyses_run: 0,
+        failed_operations: 0,
+    };
+    if !settings.automatic_processing {
+        return Ok(summary);
+    }
+
+    let target_state = state.clone();
+    let targets = tokio::task::spawn_blocking(move || automatic_processing_targets(&target_state))
+        .await
+        .context("automatic review target task failed")??;
+    for (connection_id, dataset_keys) in targets {
+        summary.connections_considered += 1;
+        for dataset_key in &dataset_keys {
+            let mut synchronized = false;
+            for _ in 0..AUTOMATIC_MAX_PAGES_PER_DATASET {
+                let request = ProviderDatasetSyncRequest {
+                    connection_id: connection_id.clone(),
+                    dataset_key: dataset_key.clone(),
+                    import_mode: Some("incremental".to_owned()),
+                    limit: Some(AUTOMATIC_SYNC_PAGE_LIMIT),
+                };
+                match sync_provider_dataset_for_state(state.clone(), request).await {
+                    Ok(result) => {
+                        synchronized = true;
+                        summary.records_received += result.records_received;
+                        summary.events_received += result.events_received;
+                        if result.records_received + result.events_received
+                            < u64::from(AUTOMATIC_SYNC_PAGE_LIMIT)
+                        {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        summary.failed_operations += 1;
+                        tracing::warn!(
+                            ?error,
+                            %connection_id,
+                            %dataset_key,
+                            "automatic Review Intelligence dataset sync failed"
+                        );
+                        break;
+                    }
+                }
+            }
+            if synchronized {
+                summary.datasets_synchronized += 1;
+            }
+        }
+
+        let due_state = state.clone();
+        let due_connection_id = connection_id.clone();
+        let due_dataset_keys = dataset_keys.clone();
+        let analysis_due = tokio::task::spawn_blocking(move || {
+            automatic_analysis_due(&due_state, &due_connection_id, &due_dataset_keys)
+        })
+        .await
+        .context("automatic review due-state task failed")??;
+        if !analysis_due {
+            continue;
+        }
+        match run_analysis_for_state(
+            state.clone(),
+            RunReviewAnalysisRequest {
+                connection_id: connection_id.clone(),
+                dataset_keys: dataset_keys.clone(),
+                use_llm: Some(settings.provider != "disabled"),
+                maximum_records: Some(MAX_ANALYSIS_RECORDS as u32),
+            },
+        )
+        .await
+        {
+            Ok(_) => summary.analyses_run += 1,
+            Err(error) => {
+                summary.failed_operations += 1;
+                tracing::warn!(
+                    ?error,
+                    %connection_id,
+                    "automatic Review Intelligence analysis failed"
+                );
+            }
+        }
+    }
+    Ok(summary)
 }
 
 async fn run_analysis_for_state(

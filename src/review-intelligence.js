@@ -149,7 +149,7 @@ function renderSettings() {
       <label>Negative sentiment threshold<input id="review-negative-threshold" type="number" min="-1" max="1" step="0.05" value="${Number(settings.negative_sentiment_threshold ?? -0.25)}"></label>
     </div>
     <div class="review-policy-checks">
-      <label><input id="review-auto-processing" type="checkbox" ${settings.automatic_processing ? "checked" : ""}>Process new evidence automatically after synchronization</label>
+      <label><input id="review-auto-processing" type="checkbox" ${settings.automatic_processing ? "checked" : ""}>Automatically sync and analyze enabled review and message datasets every 15 minutes</label>
       <label><input id="review-campaign-drafting" type="checkbox" ${settings.campaign_drafting_enabled !== false ? "checked" : ""}>Allow evidence-backed campaign draft recommendations</label>
       <label><input id="review-campaign-execution" type="checkbox" ${settings.campaign_execution_enabled ? "checked" : ""}>Allow locally approved plans to request provider campaign actions</label>
       <label class="review-remote-context ${provider === "openai" ? "visible" : ""}"><input id="review-remote-context" type="checkbox" ${settings.remote_context_allowed ? "checked" : ""}>I authorize selected review/message context to be sent to the configured OpenAI model</label>
