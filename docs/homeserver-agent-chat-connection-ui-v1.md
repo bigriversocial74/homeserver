@@ -1,6 +1,6 @@
 # HomeServer Agent Chat and Connection Interface v1
 
-Status: implementation complete; final Production Quality validation running
+Status: implementation complete; legacy Agent Workspace compatibility repair running
 
 ## Scope
 
@@ -11,7 +11,7 @@ Status: implementation complete; final Production Quality validation running
 - Add a sticky footer composer with mode, model, goal, and bounded context controls.
 - Add a Phase 6A Microgifter connection drawer using the existing local service endpoints.
 - Keep local operation visibly available when Microgifter is offline, suspended, revoked, or unpaired.
-- Preserve the existing supervised Agent Workspace backend and records for future drawer expansion.
+- Preserve the existing supervised Agent Workspace backend and records for rollback and permanent validation compatibility.
 
 ## Files
 
@@ -20,7 +20,7 @@ Status: implementation complete; final Production Quality validation running
 - Extend `src-tauri/src/cloud.rs` with Phase 6A local-service command bridges.
 - Register the new commands in `src-tauri/src/lib.rs`.
 - Update `src/main.js` so background system refreshes do not replace an active Agent Chat canvas.
-- Replace the legacy Agent Workspace script entry in `index.html` while retaining the previous source for rollback.
+- Keep `src/agent-workspace.js` loaded as a disabled compatibility and rollback module while the new chat interface is authoritative.
 
 ## Implemented interface
 
@@ -41,8 +41,9 @@ Status: implementation complete; final Production Quality validation running
 - Agent Chat dependency lock normalization run #2 passed and committed only the Windows-generated lockfile update.
 - Agent Chat initial-load repair run #4 passed frontend syntax, frontend checks, and the production frontend build before committing.
 - Agent Chat route-stability repair passed JavaScript syntax, frontend checks, and the production frontend build before committing as `3b09ee8387713e6a04e23d73b66fbedd65611f5f`.
-- All temporary workflow helpers removed themselves; the permanent Production Quality workflow is restored unchanged.
-- Full frontend, Rust, installer, security, and signed-update validation is running on the final clean branch.
+- Production Quality run #776 passed dependency locks and isolated one permanent validator requirement: the legacy Agent Workspace module must remain loaded.
+- The compatibility repair keeps the legacy module loaded but disables its mounting when Agent Chat v1 is active, preventing duplicate interfaces.
+- Full frontend, Rust, installer, security, and signed-update validation will run on the repaired clean branch.
 
 ## Permanent boundaries
 
