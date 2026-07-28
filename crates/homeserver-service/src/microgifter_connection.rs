@@ -615,7 +615,10 @@ pub fn health_check(connection: &Connection) -> Result<()> {
         [],
         |row| row.get(0),
     )?;
-    ensure!(preferences == 1, "Phase 6A update preferences are unavailable");
+    ensure!(
+        preferences == 1,
+        "Phase 6A update preferences are unavailable"
+    );
     Ok(())
 }
 
@@ -713,7 +716,9 @@ pub async fn run(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>) {
     }
 }
 
-async fn status_handler(State(state): State<Arc<AppState>>) -> ApiResult<MicrogifterStatusSnapshot> {
+async fn status_handler(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<MicrogifterStatusSnapshot> {
     tokio::task::spawn_blocking(move || status_snapshot(&*state.connection()?))
         .await
         .map_err(task_error)?
@@ -775,13 +780,11 @@ async fn update_preferences_update_handler(
     State(state): State<Arc<AppState>>,
     Json(request): Json<UpdatePreferencesRequest>,
 ) -> ApiResult<UpdatePreferencesSnapshot> {
-    tokio::task::spawn_blocking(move || {
-        save_update_preferences(&*state.connection()?, request)
-    })
-    .await
-    .map_err(task_error)?
-    .map(Json)
-    .map_err(|error| action_error("microgifter_update_preferences_rejected", error))
+    tokio::task::spawn_blocking(move || save_update_preferences(&*state.connection()?, request))
+        .await
+        .map_err(task_error)?
+        .map(Json)
+        .map_err(|error| action_error("microgifter_update_preferences_rejected", error))
 }
 
 async fn authorize_update_handler(
@@ -831,7 +834,8 @@ async fn connect_microgifter(
     let cloud_base_url = normalize_cloud_base_url(&request.cloud_base_url)?;
     let merchant_id = sanitize_optional_text(request.merchant_id.as_deref(), 120, "merchant id")?;
     let site_id = sanitize_optional_text(request.site_id.as_deref(), 120, "site id")?;
-    let replacement_id = sanitize_optional_text(request.replacement_id.as_deref(), 120, "replacement id")?;
+    let replacement_id =
+        sanitize_optional_text(request.replacement_id.as_deref(), 120, "replacement id")?;
     let request_id = request
         .request_id
         .as_deref()
@@ -886,12 +890,20 @@ async fn connect_microgifter(
     let exchange = match exchange {
         Ok(exchange) => exchange,
         Err(error) => {
-            mark_pairing_failed(&*state.connection()?, &request_id, &public_provider_error(&error))?;
+            mark_pairing_failed(
+                &*state.connection()?,
+                &request_id,
+                &public_provider_error(&error),
+            )?;
             return Err(error);
         }
     };
 
-    validate_identifier(&exchange.provider_connection_id, 190, "provider connection id")?;
+    validate_identifier(
+        &exchange.provider_connection_id,
+        190,
+        "provider connection id",
+    )?;
     validate_identifier(&exchange.owner_account_id, 190, "owner account id")?;
     ensure!(
         Uuid::parse_str(&exchange.device_id).is_ok(),
@@ -936,7 +948,11 @@ async fn connect_microgifter(
     );
     if let Err(error) = save_result {
         let _ = delete_secrets(&credential_key);
-        mark_pairing_failed(&*state.connection()?, &request_id, "pairing_persistence_failed")?;
+        mark_pairing_failed(
+            &*state.connection()?,
+            &request_id,
+            "pairing_persistence_failed",
+        )?;
         return Err(error);
     }
 
@@ -1011,8 +1027,13 @@ async fn refresh_entitlement(
     .await;
     match result {
         Ok(data) => {
-            accept_entitlement_lease(&*state.connection()?, connection_id, &data.entitlement_lease)?;
-            let device_id = provider_connection_record(&*state.connection()?, connection_id)?.device_id;
+            accept_entitlement_lease(
+                &*state.connection()?,
+                connection_id,
+                &data.entitlement_lease,
+            )?;
+            let device_id =
+                provider_connection_record(&*state.connection()?, connection_id)?.device_id;
             record_receipt(
                 &*state.connection()?,
                 Some(connection_id),
@@ -1027,7 +1048,11 @@ async fn refresh_entitlement(
             )?;
         }
         Err(error) => {
-            mark_connection_offline(&*state.connection()?, connection_id, &public_provider_error(&error))?;
+            mark_connection_offline(
+                &*state.connection()?,
+                connection_id,
+                &public_provider_error(&error),
+            )?;
             return Err(error);
         }
     }
@@ -1039,7 +1064,11 @@ async fn send_heartbeat(
     connection_id: &str,
 ) -> Result<MicrogifterConnectionSnapshot> {
     validate_uuid(connection_id, "connection id")?;
-    let payload = heartbeat_payload(&*state.connection()?, connection_id, &state.config.server_name)?;
+    let payload = heartbeat_payload(
+        &*state.connection()?,
+        connection_id,
+        &state.config.server_name,
+    )?;
     let adapter = MicrogifterProviderAdapter;
     let result = signed_provider_post::<HeartbeatData>(
         &state,
@@ -1081,7 +1110,11 @@ async fn send_heartbeat(
             )?;
         }
         Err(error) => {
-            mark_connection_offline(&*state.connection()?, connection_id, &public_provider_error(&error))?;
+            mark_connection_offline(
+                &*state.connection()?,
+                connection_id,
+                &public_provider_error(&error),
+            )?;
             return Err(error);
         }
     }
@@ -1213,8 +1246,11 @@ async fn start_device_replacement(
     request: StartDeviceReplacementRequest,
 ) -> Result<DeviceReplacementSnapshot> {
     validate_uuid(&request.connection_id, "connection id")?;
-    let new_device_display_name =
-        sanitize_text(&request.new_device_display_name, 120, "new device display name")?;
+    let new_device_display_name = sanitize_text(
+        &request.new_device_display_name,
+        120,
+        "new device display name",
+    )?;
     let record = provider_connection_record(&*state.connection()?, &request.connection_id)?;
     let payload = json!({
         "old_device_id": record.device_id,
@@ -1283,7 +1319,10 @@ async fn complete_device_replacement(
         &payload,
     )
     .await?;
-    ensure!(response.completed, "Microgifter did not complete the device replacement");
+    ensure!(
+        response.completed,
+        "Microgifter did not complete the device replacement"
+    );
 
     let connection = state.connection()?;
     let transaction = connection.unchecked_transaction()?;
@@ -1366,7 +1405,13 @@ async fn signed_provider_post<T: DeserializeOwned>(
         .post(format!("{}{}", record.cloud_base_url, path))
         .bearer_auth(&secrets.device_token)
         .header("X-MG-Homeserver-ID", &record.device_id)
-        .header("X-MG-Provider-Connection-ID", record.provider_connection_id.as_deref().unwrap_or(connection_id))
+        .header(
+            "X-MG-Provider-Connection-ID",
+            record
+                .provider_connection_id
+                .as_deref()
+                .unwrap_or(connection_id),
+        )
         .header("X-MG-Contract-Version", CONTRACT_VERSION)
         .header("X-MG-Request-ID", &request_id)
         .header("X-MG-Timestamp", timestamp)
@@ -1466,8 +1511,13 @@ struct PersistPairing<'a> {
 
 fn persist_pairing(connection: &Connection, value: PersistPairing<'_>) -> Result<()> {
     let connection_count: i64 =
-        connection.query_row("SELECT COUNT(*) FROM cloud_connections", [], |row| row.get(0))?;
-    ensure!(connection_count < MAX_CONNECTIONS, "cloud connection limit reached");
+        connection.query_row("SELECT COUNT(*) FROM cloud_connections", [], |row| {
+            row.get(0)
+        })?;
+    ensure!(
+        connection_count < MAX_CONNECTIONS,
+        "cloud connection limit reached"
+    );
     ensure!(
         connection.query_row(
             "SELECT COUNT(*) FROM cloud_connections WHERE provider_key=?1 AND device_id=?2",
@@ -1639,8 +1689,14 @@ fn validate_entitlement_lease(
     lease: &SignedEntitlementLease,
 ) -> Result<()> {
     let payload = &lease.payload;
-    ensure!(payload.schema_version == 1, "unsupported entitlement lease schema");
-    ensure!(payload.provider_id == PROVIDER_KEY, "entitlement provider is invalid");
+    ensure!(
+        payload.schema_version == 1,
+        "unsupported entitlement lease schema"
+    );
+    ensure!(
+        payload.provider_id == PROVIDER_KEY,
+        "entitlement provider is invalid"
+    );
     ensure!(
         payload.connection_id == local_connection_id
             || provider_connection_id(connection, local_connection_id)?.as_deref()
@@ -1648,18 +1704,33 @@ fn validate_entitlement_lease(
         "entitlement connection identity does not match"
     );
     let record = provider_connection_record(connection, local_connection_id)?;
-    ensure!(payload.device_id == record.device_id, "entitlement device identity does not match");
+    ensure!(
+        payload.device_id == record.device_id,
+        "entitlement device identity does not match"
+    );
     validate_identifier(&payload.account_id, 190, "entitlement account id")?;
     validate_identifier(&payload.lease_id, 190, "entitlement lease id")?;
-    ensure!(payload.signing_key_id.len() <= 120, "entitlement signing key id is invalid");
+    ensure!(
+        payload.signing_key_id.len() <= 120,
+        "entitlement signing key id is invalid"
+    );
     let issued = parse_utc(&payload.issued_at_utc)?;
     let not_before = parse_utc(&payload.not_before_utc)?;
     let expires = parse_utc(&payload.expires_at_utc)?;
     let now = Utc::now();
-    ensure!(issued <= now + chrono::Duration::minutes(10), "entitlement lease issue time is in the future");
-    ensure!(not_before <= now + chrono::Duration::minutes(2), "entitlement lease is not active yet");
+    ensure!(
+        issued <= now + chrono::Duration::minutes(10),
+        "entitlement lease issue time is in the future"
+    );
+    ensure!(
+        not_before <= now + chrono::Duration::minutes(2),
+        "entitlement lease is not active yet"
+    );
     ensure!(expires > now, "entitlement lease is expired");
-    ensure!(expires > not_before, "entitlement lease validity window is invalid");
+    ensure!(
+        expires > not_before,
+        "entitlement lease validity window is invalid"
+    );
     let mut capability_values = std::collections::BTreeSet::new();
     for capability in payload
         .granted_capabilities
@@ -1690,19 +1761,28 @@ fn validate_entitlement_lease(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .context("entitlement signing key is unknown")?;
-    ensure!(key_state == "active", "entitlement signing key is not active");
+    ensure!(
+        key_state == "active",
+        "entitlement signing key is not active"
+    );
     if let Some(value) = key_not_before {
-        ensure!(parse_utc(&value)? <= now, "entitlement signing key is not active yet");
+        ensure!(
+            parse_utc(&value)? <= now,
+            "entitlement signing key is not active yet"
+        );
     }
     if let Some(value) = key_not_after {
-        ensure!(parse_utc(&value)? > now, "entitlement signing key is expired");
+        ensure!(
+            parse_utc(&value)? > now,
+            "entitlement signing key is expired"
+        );
     }
     let public_key_bytes = decode_base64(&public_key_base64)?;
     let public_key_array: [u8; 32] = public_key_bytes
         .try_into()
         .map_err(|_| anyhow!("entitlement public key length is invalid"))?;
-    let verifying_key = VerifyingKey::from_bytes(&public_key_array)
-        .context("entitlement public key is invalid")?;
+    let verifying_key =
+        VerifyingKey::from_bytes(&public_key_array).context("entitlement public key is invalid")?;
     let signature_bytes = decode_base64(&lease.signature)?;
     let signature = Signature::from_slice(&signature_bytes)
         .context("entitlement signature length is invalid")?;
@@ -1713,7 +1793,11 @@ fn validate_entitlement_lease(
     Ok(())
 }
 
-fn heartbeat_payload(connection: &Connection, connection_id: &str, server_name: &str) -> Result<Value> {
+fn heartbeat_payload(
+    connection: &Connection,
+    connection_id: &str,
+    server_name: &str,
+) -> Result<Value> {
     let snapshot = connection_snapshot(connection, connection_id)?;
     let schema_version = connection
         .query_row(
@@ -1881,7 +1965,10 @@ fn store_update_authorization(
     })
 }
 
-pub(crate) fn ensure_update_download_allowed(connection: &Connection, update_id: &str) -> Result<()> {
+pub(crate) fn ensure_update_download_allowed(
+    connection: &Connection,
+    update_id: &str,
+) -> Result<()> {
     let authorization = connection
         .query_row(
             "SELECT decision,expires_at_utc,update_class FROM provider_update_authorizations WHERE update_id=?1 ORDER BY issued_at_utc DESC LIMIT 1",
@@ -1931,12 +2018,15 @@ pub(crate) fn ensure_update_install_window(connection: &Connection) -> Result<()
             let start = preferences.maintenance_start_minute_utc;
             let duration = preferences.maintenance_duration_minutes;
             let end = (start as u32 + duration as u32) % 1440;
-            let allowed = if start as u32 + duration as u32 < 1440 {
+            let allowed = if start as u32 + (duration as u32) < 1440 {
                 minute >= start && minute < start.saturating_add(duration)
             } else {
                 minute >= start || minute < end as u16
             };
-            ensure!(allowed, "HomeServer update is outside the maintenance window");
+            ensure!(
+                allowed,
+                "HomeServer update is outside the maintenance window"
+            );
             Ok(())
         }
         _ => bail!("HomeServer update install mode is invalid"),
@@ -1970,7 +2060,11 @@ pub(crate) fn record_update_result_receipt(
         None,
         None,
         None,
-        if state == "succeeded" { "success" } else { "error" },
+        if state == "succeeded" {
+            "success"
+        } else {
+            "error"
+        },
         failure_code,
         &json!({"update_id": update_id, "version": version, "state": state}),
     )
@@ -1995,7 +2089,8 @@ async fn submit_pending_update_receipts(state: Arc<AppState>) -> Result<()> {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
-    for (authorization_id, connection_id, update_id, version, result_state, failure_code) in pending {
+    for (authorization_id, connection_id, update_id, version, result_state, failure_code) in pending
+    {
         let payload = json!({
             "authorization_id": authorization_id,
             "update_id": update_id,
@@ -2052,7 +2147,10 @@ fn status_snapshot(connection: &Connection) -> Result<MicrogifterStatusSnapshot>
     })
 }
 
-fn connection_snapshot(connection: &Connection, connection_id: &str) -> Result<MicrogifterConnectionSnapshot> {
+fn connection_snapshot(
+    connection: &Connection,
+    connection_id: &str,
+) -> Result<MicrogifterConnectionSnapshot> {
     let mut snapshot = connection.query_row(
         "SELECT p.connection_id,p.provider_connection_id,c.device_id,p.device_display_name,p.owner_account_id,c.cloud_base_url,p.lifecycle_state,p.contract_version,p.subscription_state,p.entitlement_lease_id,p.entitlement_expires_at_utc,p.update_eligible,p.last_heartbeat_at_utc,c.last_success_utc,p.last_entitlement_refresh_at_utc,p.last_credential_rotation_at_utc,p.last_update_check_at_utc,p.last_update_result,p.replacement_state FROM provider_connection_profiles p JOIN cloud_connections c ON c.connection_id=p.connection_id WHERE p.connection_id=?1 AND p.provider_key=?2",
         params![connection_id, PROVIDER_KEY],
@@ -2097,14 +2195,22 @@ fn connection_snapshot(connection: &Connection, connection_id: &str) -> Result<M
     snapshot.assigned_site_count = assignment_count(connection, connection_id, "site")?;
     snapshot.health_category = match snapshot.lifecycle_state {
         ProviderLifecycleState::Active => "healthy",
-        ProviderLifecycleState::Offline | ProviderLifecycleState::Grace | ProviderLifecycleState::Replacing => "attention",
+        ProviderLifecycleState::Offline
+        | ProviderLifecycleState::Grace
+        | ProviderLifecycleState::Replacing => "attention",
         ProviderLifecycleState::Unpaired | ProviderLifecycleState::PairingPending => "setup",
-        ProviderLifecycleState::Suspended | ProviderLifecycleState::Revoked | ProviderLifecycleState::Error => "blocked",
-    }.to_owned();
+        ProviderLifecycleState::Suspended
+        | ProviderLifecycleState::Revoked
+        | ProviderLifecycleState::Error => "blocked",
+    }
+    .to_owned();
     Ok(snapshot)
 }
 
-fn capability_snapshot(connection: &Connection, connection_id: &str) -> Result<Vec<CapabilitySnapshot>> {
+fn capability_snapshot(
+    connection: &Connection,
+    connection_id: &str,
+) -> Result<Vec<CapabilitySnapshot>> {
     let mut statement = connection.prepare(
         "SELECT capability_id,grant_state,source,expires_at_utc FROM provider_connection_capabilities WHERE connection_id=?1 ORDER BY capability_id,source",
     )?;
@@ -2184,10 +2290,15 @@ fn save_update_preferences(
         .map(|value| value.to_rfc3339());
     if request.install_mode == "defer_until" {
         let defer_is_future = match defer_until.as_deref() {
-            Some(value) => parse_utc(value).map(|date| date > Utc::now()).unwrap_or(false),
+            Some(value) => parse_utc(value)
+                .map(|date| date > Utc::now())
+                .unwrap_or(false),
             None => false,
         };
-        ensure!(defer_is_future, "deferred update date must be in the future");
+        ensure!(
+            defer_is_future,
+            "deferred update date must be in the future"
+        );
     }
     connection.execute(
         "UPDATE homeserver_update_preferences SET selected_channel=?1,install_mode=?2,maintenance_start_minute_utc=?3,maintenance_duration_minutes=?4,defer_until_utc=?5,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE singleton_id=1",
@@ -2211,9 +2322,8 @@ fn backfill_existing_microgifter_connections(connection: &Connection) -> Result<
 }
 
 fn seed_client_capabilities(connection: &Connection) -> Result<()> {
-    let mut statement = connection.prepare(
-        "SELECT connection_id FROM provider_connection_profiles WHERE provider_key=?1",
-    )?;
+    let mut statement = connection
+        .prepare("SELECT connection_id FROM provider_connection_profiles WHERE provider_key=?1")?;
     let connection_ids = statement
         .query_map(params![PROVIDER_KEY], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -2241,7 +2351,10 @@ fn record_pairing_pending(
     Ok(())
 }
 
-fn completed_pairing_connection(connection: &Connection, request_id: &str) -> Result<Option<String>> {
+fn completed_pairing_connection(
+    connection: &Connection,
+    request_id: &str,
+) -> Result<Option<String>> {
     connection
         .query_row(
             "SELECT connection_id FROM provider_pairing_attempts WHERE request_id=?1 AND state='completed'",
@@ -2281,7 +2394,10 @@ fn default_phase6a_connection_id(connection: &Connection) -> Result<Option<Strin
         .map_err(Into::into)
 }
 
-fn provider_connection_record(connection: &Connection, connection_id: &str) -> Result<ProviderConnectionRecord> {
+fn provider_connection_record(
+    connection: &Connection,
+    connection_id: &str,
+) -> Result<ProviderConnectionRecord> {
     connection
         .query_row(
             "SELECT c.connection_id,p.provider_connection_id,c.cloud_base_url,c.device_id,c.credential_key,c.state FROM cloud_connections c JOIN provider_connection_profiles p ON p.connection_id=c.connection_id WHERE c.connection_id=?1 AND c.provider_key=?2",
@@ -2323,7 +2439,11 @@ fn entitlement_expiration(connection: &Connection, connection_id: &str) -> Resul
         .map_err(Into::into)
 }
 
-fn assignment_count(connection: &Connection, connection_id: &str, assignment_type: &str) -> Result<u64> {
+fn assignment_count(
+    connection: &Connection,
+    connection_id: &str,
+    assignment_type: &str,
+) -> Result<u64> {
     let count: i64 = connection.query_row(
         "SELECT COUNT(*) FROM provider_connection_assignments WHERE connection_id=?1 AND assignment_type=?2 AND state='active'",
         params![connection_id, assignment_type],
@@ -2344,7 +2464,11 @@ fn set_lifecycle_state(
     Ok(())
 }
 
-fn mark_connection_offline(connection: &Connection, connection_id: &str, error_code: &str) -> Result<()> {
+fn mark_connection_offline(
+    connection: &Connection,
+    connection_id: &str,
+    error_code: &str,
+) -> Result<()> {
     let previous = connection
         .query_row(
             "SELECT lifecycle_state FROM provider_connection_profiles WHERE connection_id=?1",
@@ -2493,7 +2617,10 @@ fn ensure_no_duplicate_device(
 fn validate_entitlement_signing_key(value: &PairingSigningKey) -> Result<()> {
     validate_identifier(&value.key_id, 120, "entitlement signing key id")?;
     let bytes = decode_base64(&value.public_key_base64)?;
-    ensure!(bytes.len() == 32, "entitlement public key length is invalid");
+    ensure!(
+        bytes.len() == 32,
+        "entitlement public key length is invalid"
+    );
     if let Some(not_before) = &value.not_before_utc {
         parse_utc(not_before)?;
     }
@@ -2615,7 +2742,9 @@ fn normalize_cloud_base_url(value: &str) -> Result<String> {
         url.query().is_none() && url.fragment().is_none(),
         "Microgifter cloud URL cannot contain a query or fragment"
     );
-    let host = url.host_str().context("Microgifter cloud URL host is required")?;
+    let host = url
+        .host_str()
+        .context("Microgifter cloud URL host is required")?;
     let loopback = host
         .parse::<IpAddr>()
         .map(|address| address.is_loopback())
@@ -2729,7 +2858,11 @@ fn sanitize_text(value: &str, maximum: usize, label: &str) -> Result<String> {
     Ok(value.to_owned())
 }
 
-fn sanitize_optional_text(value: Option<&str>, maximum: usize, label: &str) -> Result<Option<String>> {
+fn sanitize_optional_text(
+    value: Option<&str>,
+    maximum: usize,
+    label: &str,
+) -> Result<Option<String>> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -2895,7 +3028,10 @@ mod tests {
             ProviderLifecycleState::Replacing,
             ProviderLifecycleState::Error,
         ];
-        let mut names = values.iter().map(|value| value.as_str()).collect::<Vec<_>>();
+        let mut names = values
+            .iter()
+            .map(|value| value.as_str())
+            .collect::<Vec<_>>();
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), values.len());

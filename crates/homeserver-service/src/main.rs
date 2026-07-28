@@ -8,8 +8,8 @@ mod document_extraction;
 mod http;
 mod knowledge_vault;
 mod mcp_runtime;
-mod model_center;
 mod microgifter_connection;
+mod model_center;
 mod operational_data;
 mod recovery_transfer;
 mod review_intelligence;
@@ -82,7 +82,10 @@ impl AppState {
             );
         }
         if let Err(error) = microgifter_connection::health_check(&connection) {
-            error!(?error, "HomeServer Microgifter entitlement database health check failed");
+            error!(
+                ?error,
+                "HomeServer Microgifter entitlement database health check failed"
+            );
             return HealthSnapshot::needs_attention(
                 &self.config.server_name,
                 "microgifter_entitlement_integrity_check_failed",

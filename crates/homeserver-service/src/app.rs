@@ -10,8 +10,7 @@ mod cloud_connector;
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
     mcp_runtime, microgifter_connection, model_center, operational_data, review_intelligence,
-    semantic_vault, update,
-    update_store, AppState,
+    semantic_vault, update, update_store, AppState,
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -109,10 +108,8 @@ pub async fn run(
     let backup_scheduler = tokio::spawn(run_backup_scheduler(state.clone(), shutdown.clone()));
     let update_scheduler = tokio::spawn(run_update_scheduler(state.clone(), shutdown.clone()));
     let cloud_worker = tokio::spawn(cloud_registry::run(state.clone(), shutdown.clone()));
-    let microgifter_connection_worker = tokio::spawn(microgifter_connection::run(
-        state.clone(),
-        shutdown.clone(),
-    ));
+    let microgifter_connection_worker =
+        tokio::spawn(microgifter_connection::run(state.clone(), shutdown.clone()));
     let review_intelligence_worker = tokio::spawn(run_review_intelligence_scheduler(
         state.clone(),
         shutdown.clone(),
