@@ -7,6 +7,9 @@ pub(crate) mod cloud_registry;
 #[path = "cloud_connector.rs"]
 mod cloud_connector;
 
+#[path = "app/pod_provider_runtime.rs"]
+mod pod_provider_runtime;
+
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
     mcp_runtime, microgifter_connection, model_center, operational_data, review_intelligence,
@@ -39,6 +42,7 @@ pub async fn run(
     cloud_connector::initialize(&connection)?;
     cloud_registry::initialize(&connection)?;
     microgifter_connection::initialize(&connection)?;
+    pod_provider_runtime::initialize(&connection)?;
     operational_data::initialize(&connection)?;
     knowledge_vault::initialize(&connection, &config)?;
     document_extraction::initialize(&connection)?;
@@ -110,6 +114,8 @@ pub async fn run(
     let cloud_worker = tokio::spawn(cloud_registry::run(state.clone(), shutdown.clone()));
     let microgifter_connection_worker =
         tokio::spawn(microgifter_connection::run(state.clone(), shutdown.clone()));
+    let pod_provider_worker =
+        tokio::spawn(pod_provider_runtime::run(state.clone(), shutdown.clone()));
     let review_intelligence_worker = tokio::spawn(run_review_intelligence_scheduler(
         state.clone(),
         shutdown.clone(),
@@ -128,6 +134,7 @@ pub async fn run(
             .merge(registry_router)
             .merge(cloud_pairing_v2::router(state.clone()))
             .merge(microgifter_connection::router(state.clone()))
+            .merge(pod_provider_runtime::router(state.clone()))
             .merge(knowledge_vault::router(state.clone()))
             .merge(model_center::router(state.clone()))
             .merge(semantic_vault::router(state.clone()))
@@ -143,6 +150,7 @@ pub async fn run(
     update_scheduler.abort();
     cloud_worker.abort();
     microgifter_connection_worker.abort();
+    pod_provider_worker.abort();
     review_intelligence_worker.abort();
     result?;
     Ok(())
@@ -161,6 +169,11 @@ async fn run_backup_scheduler(state: Arc<AppState>, mut shutdown: watch::Receive
                     }
                     if let Err(error) = scheduled_state.maintain_runtime_history() {
                         warn!(?error, "scheduled HomeServer runtime retention failed");
+                    }
+                    if let Ok(connection) = scheduled_state.connection() {
+                        if let Err(error) = pod_provider_runtime::maintain_history(&connection) {
+                            warn!(?error, "scheduled POD provider retention failed");
+                        }
                     }
                     scheduled_state.create_automatic_backup_if_due()
                 }).await {
