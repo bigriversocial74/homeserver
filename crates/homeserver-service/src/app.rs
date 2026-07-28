@@ -7,6 +7,7 @@ pub(crate) mod cloud_registry;
 #[path = "cloud_connector.rs"]
 mod cloud_connector;
 
+#[allow(dead_code, reason = "POD runtime result schema accepts optional adapter metadata")]
 #[path = "app/pod_provider_runtime.rs"]
 mod pod_provider_runtime;
 
