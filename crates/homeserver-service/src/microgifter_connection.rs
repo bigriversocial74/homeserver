@@ -16,7 +16,7 @@ use futures_util::StreamExt;
 use keyring::Entry;
 use rand::{rngs::OsRng, RngCore};
 use reqwest::Method;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -1186,8 +1186,8 @@ async fn authorize_update(
         return Ok(snapshot);
     }
 
-    let connection_id = match request.connection_id {
-        Some(value) => value,
+    let connection_id = match request.connection_id.as_deref() {
+        Some(value) => value.to_owned(),
         None => default_phase6a_connection_id(&*state.connection()?)?
             .context("paid update authorization requires an active Microgifter connection")?,
     };
@@ -2076,18 +2076,18 @@ async fn submit_pending_update_receipts(state: Arc<AppState>) -> Result<()> {
         let mut statement = connection.prepare(
             "SELECT a.authorization_id,a.connection_id,a.update_id,a.version,r.state,r.failure_code FROM provider_update_authorizations a JOIN update_records r ON r.update_id=a.update_id WHERE a.connection_id IS NOT NULL AND a.receipt_submitted_at_utc IS NULL AND r.state IN ('succeeded','failed','rolled_back') ORDER BY a.issued_at_utc LIMIT 20",
         )?;
-        statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+            ))
+        })?;
+        let pending = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        pending
     };
     for (authorization_id, connection_id, update_id, version, result_state, failure_code) in pending
     {
@@ -2214,35 +2214,35 @@ fn capability_snapshot(
     let mut statement = connection.prepare(
         "SELECT capability_id,grant_state,source,expires_at_utc FROM provider_connection_capabilities WHERE connection_id=?1 ORDER BY capability_id,source",
     )?;
-    Ok(statement
-        .query_map(params![connection_id], |row| {
-            Ok(CapabilitySnapshot {
-                capability_id: row.get(0)?,
-                grant_state: row.get(1)?,
-                source: row.get(2)?,
-                expires_at_utc: row.get(3)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?)
+    let rows = statement.query_map(params![connection_id], |row| {
+        Ok(CapabilitySnapshot {
+            capability_id: row.get(0)?,
+            grant_state: row.get(1)?,
+            source: row.get(2)?,
+            expires_at_utc: row.get(3)?,
+        })
+    })?;
+    let snapshots = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(snapshots)
 }
 
 fn recent_receipts(connection: &Connection, limit: usize) -> Result<Vec<ReceiptSnapshot>> {
     let mut statement = connection.prepare(
         "SELECT receipt_id,event_type,result_category,error_category,previous_state,new_state,created_at_utc FROM provider_connection_receipts ORDER BY created_at_utc DESC,receipt_id DESC LIMIT ?1",
     )?;
-    Ok(statement
-        .query_map(params![limit.max(1).min(100) as i64], |row| {
-            Ok(ReceiptSnapshot {
-                receipt_id: row.get(0)?,
-                event_type: row.get(1)?,
-                result_category: row.get(2)?,
-                error_category: row.get(3)?,
-                previous_state: row.get(4)?,
-                new_state: row.get(5)?,
-                created_at_utc: row.get(6)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?)
+    let rows = statement.query_map(params![limit.max(1).min(100) as i64], |row| {
+        Ok(ReceiptSnapshot {
+            receipt_id: row.get(0)?,
+            event_type: row.get(1)?,
+            result_category: row.get(2)?,
+            error_category: row.get(3)?,
+            previous_state: row.get(4)?,
+            new_state: row.get(5)?,
+            created_at_utc: row.get(6)?,
+        })
+    })?;
+    let receipts = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(receipts)
 }
 
 fn update_preferences(connection: &Connection) -> Result<UpdatePreferencesSnapshot> {
@@ -2378,9 +2378,9 @@ fn phase6a_connection_ids(state: &AppState) -> Result<Vec<String>> {
     let mut statement = connection.prepare(
         "SELECT connection_id FROM provider_connection_profiles WHERE provider_key=?1 AND contract_version='v1' AND lifecycle_state IN ('active','offline','grace') ORDER BY updated_at_utc",
     )?;
-    Ok(statement
-        .query_map(params![PROVIDER_KEY], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?)
+    let rows = statement.query_map(params![PROVIDER_KEY], |row| row.get::<_, String>(0))?;
+    let connection_ids = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(connection_ids)
 }
 
 fn default_phase6a_connection_id(connection: &Connection) -> Result<Option<String>> {
