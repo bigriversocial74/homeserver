@@ -1,0 +1,110 @@
+name: Preserve Agent Workspace compatibility
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phase6a-chat-legacy-compat
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]' && github.event.pull_request.head.ref == 'feature/homeserver-agent-chat-connection-ui-v1-20260728'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/homeserver-agent-chat-connection-ui-v1-20260728
+          fetch-depth: 0
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Preserve legacy module without duplicate mounting
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          chat = Path("src/homeserver-agent-chat.js")
+          chat_text = chat.read_text(encoding="utf-8")
+          chat_anchor = 'import "./homeserver-agent-chat.css";\n'
+          if "__HOMESERVER_AGENT_CHAT_V1__" not in chat_text:
+              if chat_anchor not in chat_text:
+                  raise SystemExit("Agent Chat import anchor not found")
+              chat_text = chat_text.replace(chat_anchor, chat_anchor + '\nwindow.__HOMESERVER_AGENT_CHAT_V1__ = true;\n', 1)
+          chat.write_text(chat_text, encoding="utf-8")
+
+          legacy = Path("src/agent-workspace.js")
+          legacy_text = legacy.read_text(encoding="utf-8")
+          legacy_import = 'import "./agent-workspace.css";\n'
+          if "legacyAgentWorkspaceDisabled" not in legacy_text:
+              if legacy_import not in legacy_text:
+                  raise SystemExit("Legacy Agent Workspace import anchor not found")
+              legacy_text = legacy_text.replace(legacy_import, legacy_import + '\nconst legacyAgentWorkspaceDisabled = Boolean(window.__HOMESERVER_AGENT_CHAT_V1__);\n', 1)
+
+              legacy_tail = '''const app = document.querySelector("#app");
+if (app) {
+  const observer = new MutationObserver(() => mount(false));
+  observer.observe(app, { childList: true, subtree: true });
+}
+window.addEventListener("hashchange", () => window.setTimeout(() => mount(false), 0));
+window.addEventListener("DOMContentLoaded", () => window.setTimeout(() => mount(false), 0));
+'''
+              guarded_tail = '''if (!legacyAgentWorkspaceDisabled) {
+  const app = document.querySelector("#app");
+  if (app) {
+    const observer = new MutationObserver(() => mount(false));
+    observer.observe(app, { childList: true, subtree: true });
+  }
+  window.addEventListener("hashchange", () => window.setTimeout(() => mount(false), 0));
+  window.addEventListener("DOMContentLoaded", () => window.setTimeout(() => mount(false), 0));
+}
+'''
+              if legacy_tail not in legacy_text:
+                  raise SystemExit("Legacy Agent Workspace initialization anchor not found")
+              legacy_text = legacy_text.replace(legacy_tail, guarded_tail, 1)
+          legacy.write_text(legacy_text, encoding="utf-8")
+
+          index = Path("index.html")
+          index_text = index.read_text(encoding="utf-8")
+          chat_script = '    <script type="module" src="/src/homeserver-agent-chat.js"></script>\n'
+          legacy_script = '    <script type="module" src="/src/agent-workspace.js"></script>\n'
+          if legacy_script not in index_text:
+              if chat_script not in index_text:
+                  raise SystemExit("Agent Chat script anchor not found")
+              index_text = index_text.replace(chat_script, chat_script + legacy_script, 1)
+          index.write_text(index_text, encoding="utf-8")
+          '@ | python -
+
+      - name: Validate frontend and legacy contract
+        shell: pwsh
+        run: |
+          node --check src/main.js
+          node --check src/homeserver-agent-chat.js
+          node --check src/agent-workspace.js
+          npm ci
+          npm run check:frontend
+          npm run build
+
+      - name: Commit repair and remove helper
+        shell: pwsh
+        run: |
+          Remove-Item .github/workflows/phase6a-chat-legacy-compat.yml -Force
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html src/homeserver-agent-chat.js src/agent-workspace.js .github/workflows/phase6a-chat-legacy-compat.yml
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "Preserve legacy Agent Workspace compatibility"
+            git push origin HEAD:feature/homeserver-agent-chat-connection-ui-v1-20260728
+          }
