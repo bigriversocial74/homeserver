@@ -18,8 +18,8 @@ addition = '''    $reviewIntelligence = Invoke-RestMethod -Headers $controlHeade
 
 ''' + marker
 if "$apiBase/v1/review-intelligence" not in text:
-    if text.count(marker) != 1:
-        raise SystemExit(f"Agent Workspace smoke anchor count was {text.count(marker)}")
+    if marker not in text:
+        raise SystemExit("Fresh Agent Workspace smoke anchor was not found")
     text = text.replace(marker, addition, 1)
 path.write_text(text, encoding="utf-8", newline="\n")
-print("Review Intelligence service smoke coverage applied.")
+print("Review Intelligence service smoke coverage applied to the fresh workspace check.")
