@@ -4,8 +4,6 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - .github/workflows/pod-provider-compile-repair.yml
 
 permissions:
   contents: write
@@ -26,7 +24,6 @@ jobs:
 
           path = Path('crates/homeserver-service/src/app/pod_provider_runtime.rs')
           source = path.read_text(encoding='utf-8')
-
           opening = '        "capability_test" => Ok((\n            json!({' 
           replacement_opening = '''        "capability_test" => {
             let models = [
@@ -50,11 +47,10 @@ jobs:
             ))
         },
         "speech_to_text" => {'''
-
           for needle in (opening, models, closing):
-              if source.count(needle) != 1:
-                  raise SystemExit(f'Expected one exact compile-repair token, found {source.count(needle)}: {needle!r}')
-
+              count = source.count(needle)
+              if count != 1:
+                  raise SystemExit(f'Expected one exact compile-repair token, found {count}: {needle!r}')
           source = source.replace(opening, replacement_opening, 1)
           source = source.replace(models, '                    "models": models,', 1)
           source = source.replace(closing, replacement_closing, 1)
