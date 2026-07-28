@@ -77,6 +77,21 @@ if old_loop in review:
     review = review.replace(old_loop, new_loop, 1)
 elif new_loop not in review:
     raise SystemExit("automatic dataset metric loop anchor was not found")
+
+msrv_new = '''            if last_completed
+                .as_deref()
+                .is_none_or(|completed| latest_received.as_str() > completed)
+            {
+'''
+msrv_compatible = '''            if last_completed
+                .as_deref()
+                .map_or(true, |completed| latest_received.as_str() > completed)
+            {
+'''
+if msrv_new in review:
+    review = review.replace(msrv_new, msrv_compatible, 1)
+elif msrv_compatible not in review:
+    raise SystemExit("automatic review MSRV compatibility anchor was not found")
 review_path.write_text(review, encoding="utf-8", newline="\n")
 
 app_path = Path("crates/homeserver-service/src/app.rs")
@@ -157,4 +172,4 @@ if '"every 15 minutes"' not in validator:
     validator = validator.replace(old_markers, new_markers, 1)
 validator_path.write_text(validator, encoding="utf-8", newline="\n")
 
-print("Automatic Review Intelligence scheduler, cadence, and dataset metrics finalized.")
+print("Automatic Review Intelligence scheduler, cadence, MSRV compatibility, and dataset metrics finalized.")
