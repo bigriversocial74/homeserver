@@ -7,16 +7,19 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   normalize:
+    if: github.actor != 'github-actions[bot]'
     runs-on: windows-2025
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: feature/phase-5c-review-intelligence-campaign-actions-20260728
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: stable
@@ -25,7 +28,7 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: package-lock.json
-      - name: Generate normalized dependency locks
+      - name: Generate exact production lock state
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
@@ -33,14 +36,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo generate-lockfile
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git diff -- Cargo.lock package-lock.json | Set-Content lock-diff.patch
-          Get-Content lock-diff.patch
-      - name: Upload normalized locks
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: phase5c-normalized-locks
-          path: |
-            Cargo.lock
-            package-lock.json
-            lock-diff.patch
-          retention-days: 2
+          git diff -- Cargo.lock package-lock.json
+      - name: Commit generated lock state
+        shell: pwsh
+        run: |
+          if ((git diff --name-only -- Cargo.lock package-lock.json).Count -eq 0) {
+            Write-Host 'Dependency locks are already normalized.'
+            exit 0
+          }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.lock package-lock.json
+          git commit -m 'Normalize Phase 5C dependency locks'
+          git push origin HEAD:feature/phase-5c-review-intelligence-campaign-actions-20260728
