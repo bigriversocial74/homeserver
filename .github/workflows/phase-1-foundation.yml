@@ -37,33 +37,20 @@ jobs:
           text = path.read_text(encoding="utf-8")
           replacements = [
               (
-                  """pub fn health_check(connection: &Connection) -> Result<()> {
-              for table in [""",
-                  """pub fn health_check(connection: &Connection) -> Result<()> {
-              ensure!(
-                  !APPLICATION_ERROR_CODES.is_empty(),
-                  "Phase 6A application error registry is unavailable"
-              );
-              for table in [""",
+                  "pub fn health_check(connection: &Connection) -> Result<()> {\n    for table in [",
+                  "pub fn health_check(connection: &Connection) -> Result<()> {\n    ensure!(\n        !APPLICATION_ERROR_CODES.is_empty(),\n        \"Phase 6A application error registry is unavailable\"\n    );\n    for table in [",
               ),
               (
-                  """        let pending = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-              pending""",
-                  """        rows.collect::<rusqlite::Result<Vec<_>>>()?""",
+                  "        let pending = rows.collect::<rusqlite::Result<Vec<_>>>()?;\n        pending",
+                  "        rows.collect::<rusqlite::Result<Vec<_>>>()?",
               ),
               (
                   "limit.max(1).min(100) as i64",
                   "limit.clamp(1, 100) as i64",
               ),
               (
-                  """fn record_receipt(
-              connection: &Connection,""",
-                  """#[expect(
-              clippy::too_many_arguments,
-              reason = "durable receipt fields mirror the persisted audit schema"
-          )]
-          fn record_receipt(
-              connection: &Connection,""",
+                  "fn record_receipt(\n    connection: &Connection,",
+                  "#[expect(\n    clippy::too_many_arguments,\n    reason = \"durable receipt fields mirror the persisted audit schema\"\n)]\nfn record_receipt(\n    connection: &Connection,",
               ),
           ]
           for old, new in replacements:
