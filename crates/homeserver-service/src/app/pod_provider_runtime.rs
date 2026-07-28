@@ -883,17 +883,26 @@ async fn execute_job(
     }
     let started = Instant::now();
     match job.job_type.as_str() {
-        "capability_test" => Ok((
-            json!({
-                "runtime": "homeserver-local-command-v1",
-                "models": [runtime.transcription_model.clone(), runtime.synthesis_model.clone()].into_iter().flatten().collect::<Vec<_>>(),
-                "transcription_ready": runtime.transcription_enabled && executable_ready(runtime.transcription_executable.as_deref()),
-                "synthesis_ready": runtime.synthesis_enabled && executable_ready(runtime.synthesis_executable.as_deref()),
-                "details": runtime.runtime_health_message,
-            }),
-            None,
-            Some(started.elapsed().as_millis() as u64),
-        )),
+        "capability_test" => {
+            let models = [
+                runtime.transcription_model.clone(),
+                runtime.synthesis_model.clone(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+            Ok((
+                json!({
+                    "runtime": "homeserver-local-command-v1",
+                    "models": models,
+                    "transcription_ready": runtime.transcription_enabled && executable_ready(runtime.transcription_executable.as_deref()),
+                    "synthesis_ready": runtime.synthesis_enabled && executable_ready(runtime.synthesis_executable.as_deref()),
+                    "details": runtime.runtime_health_message,
+                }),
+                None,
+                Some(started.elapsed().as_millis() as u64),
+            ))
+        }
         "speech_to_text" => {
             ensure!(
                 runtime.transcription_enabled,
