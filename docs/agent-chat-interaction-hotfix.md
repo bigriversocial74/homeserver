@@ -1,6 +1,6 @@
 # Agent Chat Interaction Hotfix
 
-Status: deterministic route lifecycle repair running
+Status: deterministic route lifecycle repair queued on Linux
 
 ## Reported regression
 
