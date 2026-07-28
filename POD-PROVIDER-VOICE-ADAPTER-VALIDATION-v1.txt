@@ -1,0 +1,105 @@
+Native POD Provider Voice Adapter v1 validation
+
+Required permanent validation:
+- npm run check:frontend
+- scripts/validate-pod-provider-voice-adapter.py
+- frontend production build
+- security-boundary regression
+- Cargo dependency audit
+- cargo fmt --all --check
+- clean release build for service, updater, and MCP bridge
+- cargo test --workspace --locked
+- cargo clippy --workspace --all-targets --locked -- -D warnings
+- local service/cloud/update smoke tests
+- NSIS installer build
+- LocalSystem install, restricted-data, backup, uninstall, and preservation tests
+- installed release verification
+- signed update, Authenticode, health, rollback, preservation, and cleanup tests
+- Coordinated Cloud Connector Contract
+
+Migration validation:
+- Apply database/migrations/0015_pod_provider_voice_adapter.sql
+- Apply repeatedly without duplicate tables or migration rows
+- Confirm all POD tables are additive
+- Confirm cloud_connections foreign-key cascades
+- Confirm no Microgifter entitlement/update table is changed
+- Confirm no raw bearer, signing seed, Sync Code, lease token, or audio blob column exists
+
+Pairing validation:
+- Reject malformed Sync Code
+- Reject credentials in POD URL
+- Reject query and fragment in POD URL
+- Require HTTPS outside loopback
+- Generate Ed25519 signing key locally
+- Store bearer and signing seed only in OS credential vault
+- Store provider/device IDs, credential key reference, grants, state, and receipts in SQLite
+- Reject unknown capability returned by POD
+- Existing Microgifter pairing remains operational
+
+Signed-request validation:
+- Send bearer credential
+- Send exact device and provider-connection IDs
+- Sign METHOD/PATH/TIMESTAMP/NONCE/SHA256(body)
+- Disable redirects
+- Use unique nonce
+- Use bounded response body
+- Reject mismatched credential-vault identity
+
+Worker validation:
+- Background worker starts and stops with service
+- Worker heartbeat is bounded and contains no private HomeServer content
+- Worker polls each active POD independently
+- Poll Now processes only selected POD connection
+- One leased job stores lease only in OS credential vault
+- Lease entry is deleted after completion or failure
+- Disconnect deletes connection and active lease credentials
+- One failed POD does not stop other providers or local operation
+
+Speech-to-text validation:
+- Requires granted pod.voice.transcription.v1
+- Requires enabled absolute existing executable
+- Uses argv execution with no command shell
+- Fetches artifact through signed endpoint
+- Validates artifact UUID, MIME, SHA-256, and byte count
+- Enforces maximum input bytes
+- Writes to isolated HomeServer job directory
+- Requires bounded JSON output
+- Requires nonempty bounded transcript
+- Removes work directory
+- Submits bounded result and receipt
+
+Text-to-speech validation:
+- Requires granted pod.voice.synthesis.v1
+- Requires enabled absolute existing executable
+- Uses argv execution with no command shell
+- Limits text and requested format
+- Requires output path beneath assigned job directory
+- Allows only MP3, WAV, OGG, or WebM MIME
+- Enforces maximum output bytes
+- Removes work directory
+- Submits bounded base64 audio result and receipt
+
+Control Center validation:
+- Existing Microgifter cards and commands remain present
+- Provider selector offers Microgifter Cloud and POD Wrapper
+- POD pairing requires name, canonical URL, and Sync Code
+- POD state, runtime state, capabilities, device, heartbeat, poll, and job counts render
+- STT/TTS runtime settings save
+- Runtime arguments are one per line
+- Poll Now works
+- Disconnect requires confirmation
+- UI states browser voice remains fallback
+
+Authority validation:
+- POD runtime contains no Knowledge Vault access
+- POD runtime contains no private conversation or prompt access
+- POD runtime contains no operational or review dataset access
+- POD runtime contains no updater authorization path
+- POD cannot become update trust root
+- Microgifter, MCP, models, backups, updater, and other wrappers remain independent
+
+Certification policy:
+- First full green exact implementation head permits scorecard update to 10/10
+- Scorecard update creates a new head
+- A second full exact-head green Production Quality run is required before merge
+- Coordinated Cloud Connector Contract must also pass on the final head
