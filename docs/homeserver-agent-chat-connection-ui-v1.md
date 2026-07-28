@@ -1,6 +1,6 @@
 # HomeServer Agent Chat and Connection Interface v1
 
-Status: implementation in progress
+Status: chat-first frontend committed; Tauri registration and validation in progress
 
 ## Scope
 
@@ -11,7 +11,7 @@ Status: implementation in progress
 - Add a sticky footer composer with mode, model, goal, and bounded context controls.
 - Add a Phase 6A Microgifter connection drawer using the existing local service endpoints.
 - Keep local operation visibly available when Microgifter is offline, suspended, revoked, or unpaired.
-- Preserve supervised approvals and existing Agent Workspace records through an expandable workspace drawer.
+- Preserve the existing supervised Agent Workspace backend and records for future drawer expansion.
 
 ## Files
 
@@ -20,6 +20,17 @@ Status: implementation in progress
 - Extend `src-tauri/src/cloud.rs` with Phase 6A local-service command bridges.
 - Register the new commands in `src-tauri/src/lib.rs`.
 - Replace the legacy Agent Workspace script entry in `index.html` while retaining the previous source for rollback.
+
+## Implemented interface
+
+- Chat-first full-height page.
+- Persistent conversation history in the left sidebar.
+- Searchable chat list.
+- New Chat flow that creates a thread on first message.
+- Sticky footer composer with Enter-to-send and Shift+Enter for a new line.
+- Existing model, goal, mode, connection, and local dataset context controls.
+- Microgifter connection drawer with Sync Code connection, lifecycle state, entitlement, merchant/site counts, capabilities, heartbeat, lease refresh, and credential rotation.
+- Explicit local-first independence messaging.
 
 ## Validation
 
