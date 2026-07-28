@@ -32,6 +32,7 @@ SERVICE = "crates/homeserver-service/src/review_intelligence.rs"
 AGENT = "crates/homeserver-service/src/agent_runtime.rs"
 OPERATIONAL = "crates/homeserver-service/src/operational_data.rs"
 TAURI = "src-tauri/src/review_intelligence.rs"
+TAURI_AGENT = "src-tauri/src/agent.rs"
 UI = "src/review-intelligence.js"
 STYLE = "src/review-intelligence.css"
 
@@ -73,6 +74,9 @@ for marker in (
     "execute_campaign_plan",
     "campaign_execution_enabled",
     "provider_campaign_action_receipts",
+    'object.remove("merchant_approval_token")',
+    'object.remove("merchant_approval_hash")',
+    'object.remove("value_cents")',
 ):
     require(SERVICE, marker, f"review intelligence service boundary is missing {marker}")
 
@@ -115,30 +119,30 @@ require(AGENT, "approval.plan_hash == plan.plan_hash", "approval is not bound to
 for marker in (
     "homeserver_review_intelligence",
     "homeserver_update_review_intelligence_settings",
-    "homeserver_sync_review_intelligence_dataset",
-    "homeserver_run_review_intelligence",
+    "homeserver_sync_review_dataset",
+    "homeserver_run_review_analysis",
     "homeserver_record_review_recommendation_outcome",
-    "homeserver_create_agent_plan",
 ):
     require(TAURI, marker, f"Review Intelligence Tauri command is missing {marker}")
+require(TAURI_AGENT, "homeserver_create_agent_plan", "supervised campaign plan creation command is missing")
 
 for marker in (
     "Review Intelligence",
-    "Deterministic tracking",
-    "LLM analysis is optional",
-    "remote context",
-    "Analyze Reviews & Messages",
-    "Create Supervised Campaign Plan",
-    "homeserver_run_review_intelligence",
+    "Deterministic core active",
+    "The selected model is optional",
+    "remote_context_allowed",
+    "Run Deterministic Analysis",
+    "Prepare Supervised Campaign Plan",
+    "homeserver_run_review_analysis",
     "homeserver_create_agent_plan",
 ):
     require(UI, marker, f"Review Intelligence UI is missing {marker}")
 
 for marker in (
     ".review-intelligence-page",
-    ".review-intelligence-cluster",
-    ".review-intelligence-recommendation",
-    ".review-intelligence-settings",
+    ".review-cluster-card",
+    ".review-recommendation-card",
+    ".review-settings-form",
 ):
     require(STYLE, marker, f"Review Intelligence style contract is missing {marker}")
 
@@ -161,8 +165,7 @@ for path in (SERVICE, AGENT, UI):
 
 for forbidden in (
     "agent_plan_approve",
-    "merchant_approval_token",
-    "merchant_approval_hash",
+    "agent_plan_execute_without_approval",
 ):
     forbid(SERVICE, forbidden, f"review intelligence may not self-approve through {forbidden}")
 
