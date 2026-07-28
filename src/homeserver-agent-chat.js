@@ -14,6 +14,7 @@ let connectionDrawerOpen = false;
 let connectFormOpen = false;
 let historyQuery = "";
 let notice = null;
+let initialized = false;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -290,6 +291,10 @@ function mount(force = false) {
   if (!force && canvas.querySelector('[data-homeserver-chat-mounted="true"]')) return;
   canvas.innerHTML = renderPage();
   bindEvents();
+  if (!initialized && !loading) {
+    initialized = true;
+    void refreshAll();
+  }
   window.setTimeout(() => {
     const stream = document.querySelector("#hs-chat-stream");
     if (stream) stream.scrollTop = stream.scrollHeight;
