@@ -9,8 +9,8 @@ mod cloud_connector;
 
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
-    mcp_runtime, model_center, operational_data, review_intelligence, semantic_vault, update,
-    update_store, AppState,
+    mcp_runtime, microgifter_connection, model_center, operational_data, review_intelligence,
+    semantic_vault, update, update_store, AppState,
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -38,6 +38,7 @@ pub async fn run(
     update_store::initialize(&connection)?;
     cloud_connector::initialize(&connection)?;
     cloud_registry::initialize(&connection)?;
+    microgifter_connection::initialize(&connection)?;
     operational_data::initialize(&connection)?;
     knowledge_vault::initialize(&connection, &config)?;
     document_extraction::initialize(&connection)?;
@@ -78,6 +79,13 @@ pub async fn run(
     }
     if let Some(result) = update::consume_application_result(&config)? {
         update_store::record_application_result(&connection, &result)?;
+        microgifter_connection::record_update_result_receipt(
+            &connection,
+            &result.update_id,
+            &result.target_version,
+            result.state.as_str(),
+            result.failure_code.as_deref(),
+        )?;
         info!(
             update_id = %result.update_id,
             state = %result.state.as_str(),
@@ -100,6 +108,8 @@ pub async fn run(
     let backup_scheduler = tokio::spawn(run_backup_scheduler(state.clone(), shutdown.clone()));
     let update_scheduler = tokio::spawn(run_update_scheduler(state.clone(), shutdown.clone()));
     let cloud_worker = tokio::spawn(cloud_registry::run(state.clone(), shutdown.clone()));
+    let microgifter_connection_worker =
+        tokio::spawn(microgifter_connection::run(state.clone(), shutdown.clone()));
     let review_intelligence_worker = tokio::spawn(run_review_intelligence_scheduler(
         state.clone(),
         shutdown.clone(),
@@ -117,6 +127,7 @@ pub async fn run(
             .merge(cloud_connector::router(state.clone()))
             .merge(registry_router)
             .merge(cloud_pairing_v2::router(state.clone()))
+            .merge(microgifter_connection::router(state.clone()))
             .merge(knowledge_vault::router(state.clone()))
             .merge(model_center::router(state.clone()))
             .merge(semantic_vault::router(state.clone()))
@@ -131,6 +142,7 @@ pub async fn run(
     backup_scheduler.abort();
     update_scheduler.abort();
     cloud_worker.abort();
+    microgifter_connection_worker.abort();
     review_intelligence_worker.abort();
     result?;
     Ok(())
