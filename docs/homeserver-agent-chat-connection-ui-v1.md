@@ -1,6 +1,6 @@
 # HomeServer Agent Chat and Connection Interface v1
 
-Status: chat-first frontend committed; Tauri registration validation running
+Status: chat-first frontend committed; dependency lock normalization running
 
 ## Scope
 
