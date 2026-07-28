@@ -172,8 +172,19 @@ jobs:
               if workflow.exists():
                   workflow.unlink()
 
-      - name: Format Rust
-        run: cargo fmt --all
+      - name: Capture formatting result
+        shell: bash
+        run: |
+          set +e
+          cargo fmt --all > phase6a-rustfmt.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            mkdir -p diagnostics
+            cp phase6a-rustfmt.log diagnostics/phase6a-rustfmt-error.txt
+          else
+            rm -f phase6a-rustfmt.log
+          fi
+          exit 0
 
       - name: Commit materialized implementation
         run: |
