@@ -20,7 +20,7 @@ jobs:
   integrate:
     if: github.actor != 'github-actions[bot]'
     runs-on: windows-2025
-    timeout-minutes: 45
+    timeout-minutes: 50
     steps:
       - name: Check out review intelligence branch
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -35,25 +35,36 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
 
-      - name: Apply deterministic backend integration
+      - name: Install Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install frontend dependencies
+        shell: pwsh
+        run: npm ci
+
+      - name: Apply deterministic backend and frontend integration
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
           python scripts/fix-phase5c-review-patcher.py *> focused-integration.log
-          if ($LASTEXITCODE -eq 0) {
-            python scripts/apply-phase5c-review-intelligence.py *>> focused-integration.log
-          }
-          if ($LASTEXITCODE -eq 0) {
-            python scripts/fix-phase5c-review-rust.py *>> focused-integration.log
-          }
+          if ($LASTEXITCODE -eq 0) { python scripts/apply-phase5c-review-intelligence.py *>> focused-integration.log }
+          if ($LASTEXITCODE -eq 0) { python scripts/fix-phase5c-review-rust.py *>> focused-integration.log }
+          if ($LASTEXITCODE -eq 0) { python scripts/apply-phase5c-review-frontend.py *>> focused-integration.log }
           $status = $LASTEXITCODE
           Get-Content focused-integration.log
           exit $status
 
-      - name: Format, test, and lint service
+      - name: Validate frontend and service
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
+          npm run check:frontend *> focused-frontend.log
+          if ($LASTEXITCODE -ne 0) { Get-Content focused-frontend.log; exit $LASTEXITCODE }
+          npm run build *>> focused-frontend.log
+          if ($LASTEXITCODE -ne 0) { Get-Content focused-frontend.log; exit $LASTEXITCODE }
           cargo fmt --all *> focused-rust.log
           if ($LASTEXITCODE -ne 0) { Get-Content focused-rust.log; exit $LASTEXITCODE }
           cargo test -p microgifter-homeserver-service *>> focused-rust.log
@@ -63,7 +74,7 @@ jobs:
           Get-Content focused-rust.log
           exit $status
 
-      - name: Commit compiler-verified backend integration
+      - name: Commit compiler-verified integration
         shell: pwsh
         run: |
           if ((git status --porcelain).Length -eq 0) {
@@ -72,7 +83,7 @@ jobs:
           }
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add crates/homeserver-service/src/main.rs crates/homeserver-service/src/app.rs crates/homeserver-service/src/operational_data.rs crates/homeserver-service/src/cloud_registry.rs crates/homeserver-service/src/model_center.rs crates/homeserver-service/src/agent_runtime.rs crates/homeserver-service/src/review_intelligence.rs database/migrations/0013_review_intelligence_campaign_actions.sql
+          git add crates/homeserver-service/src/main.rs crates/homeserver-service/src/app.rs crates/homeserver-service/src/operational_data.rs crates/homeserver-service/src/cloud_registry.rs crates/homeserver-service/src/model_center.rs crates/homeserver-service/src/agent_runtime.rs crates/homeserver-service/src/review_intelligence.rs database/migrations/0013_review_intelligence_campaign_actions.sql src-tauri/src/lib.rs src-tauri/src/review_intelligence.rs index.html src/operational-data.js src/review-intelligence.js src/review-intelligence.css
           git commit -m 'Integrate review intelligence and campaign actions'
           git push origin HEAD:feature/phase-5c-review-intelligence-campaign-actions-20260728
 
@@ -83,6 +94,7 @@ jobs:
           name: phase5c-review-intelligence-focused
           path: |
             focused-integration.log
+            focused-frontend.log
             focused-rust.log
           if-no-files-found: ignore
           retention-days: 7
