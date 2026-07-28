@@ -624,6 +624,7 @@ function renderCurrentPage() {
 }
 
 function render() {
+  if (window.location.hash === "#agent" && app.querySelector('[data-homeserver-chat-mounted="true"]')) return;
   const restorePending = Boolean(backupCatalog?.restore_pending || statusSnapshot?.restore_pending);
   const prefs = loadPreferences();
   document.documentElement.classList.toggle("compact-ui", Boolean(prefs.compact));
