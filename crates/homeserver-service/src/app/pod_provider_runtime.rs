@@ -1213,8 +1213,7 @@ async fn execute_job(
                 .mime_type
                 .unwrap_or_else(|| mime_type(format).to_owned());
             ensure!(
-                ["audio/mpeg", "audio/wav", "audio/ogg", "audio/webm"]
-                    .contains(&mime.as_str()),
+                ["audio/mpeg", "audio/wav", "audio/ogg", "audio/webm"].contains(&mime.as_str()),
                 "local synthesis MIME type is unsupported"
             );
             let processing_ms = result
@@ -1300,7 +1299,10 @@ fn status_snapshot(connection: &Connection) -> Result<StatusSnapshot> {
         contract_version: CONTRACT_VERSION,
         connector_version: env!("CARGO_PKG_VERSION"),
         worker_enabled: enabled,
-        supported_capabilities: CAPABILITIES.iter().map(|value| (*value).to_owned()).collect(),
+        supported_capabilities: CAPABILITIES
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect(),
         connections,
         recent_jobs: recent_jobs(connection, 100)?,
         recent_receipts: recent_receipts(connection, 100)?,
@@ -1497,9 +1499,7 @@ fn disconnect(connection: &Connection, id: &str) -> Result<()> {
         params![id],
     )?;
     let keys = connection
-        .prepare(
-            "SELECT lease_credential_key FROM pod_provider_voice_jobs WHERE connection_id=?1",
-        )?
+        .prepare("SELECT lease_credential_key FROM pod_provider_voice_jobs WHERE connection_id=?1")?
         .query_map(params![id], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for key in keys {
@@ -1763,8 +1763,7 @@ fn validate_job(record: &ConnectionRecord, job: &RemoteJob) -> Result<()> {
         "POD job UUID is invalid"
     );
     ensure!(
-        ["speech_to_text", "text_to_speech", "capability_test"]
-            .contains(&job.job_type.as_str()),
+        ["speech_to_text", "text_to_speech", "capability_test"].contains(&job.job_type.as_str()),
         "POD job type is unsupported"
     );
     ensure!(
@@ -1856,8 +1855,7 @@ fn runtime_health(te: bool, tp: Option<&str>, se: bool, sp: Option<&str>) -> Opt
 
 async fn work_directory(state: &Arc<AppState>, id: &str) -> Result<PathBuf> {
     ensure!(
-        id.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-'),
+        id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
         "invalid local job ID"
     );
     let path = state
