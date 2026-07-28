@@ -104,22 +104,14 @@ chat, delegated_chat_count = re.subn(
 if delegated_chat_count == 0 and "function delegatedAgentClick(event)" in chat:
     raise SystemExit("Unable to remove competing delegated Agent Chat router")
 
-chat, observer_count = re.subn(
-    r'\nconst app = document\.querySelector\("#app"\);\n'
-    r'if \(app\) \{\n'
-    r'  const observer = new MutationObserver\(\(\) => mount\(false\)\);\n'
-    r'  observer\.observe\(app, \{ childList: true, subtree: true \}\);\n'
-    r'\}\n'
-    r'window\.addEventListener\("hashchange", \(\) => window\.setTimeout\(\(\) => mount\(false\), 0\)\);\n?$',
-    '\nwindow.addEventListener("homeserver-agent-route", () => window.setTimeout(() => mount(true), 0));\n'
+observer_anchor = '\nconst app = document.querySelector("#app");\n'
+if observer_anchor not in chat:
+    raise SystemExit("Unable to locate Agent Chat app observer lifecycle")
+chat = chat.split(observer_anchor, 1)[0].rstrip() + (
+    '\n\nwindow.addEventListener("homeserver-agent-route", () => window.setTimeout(() => mount(true), 0));\n'
     'window.addEventListener("hashchange", () => window.setTimeout(() => mount(true), 0));\n'
-    'window.setTimeout(() => mount(true), 0);\n',
-    chat,
-    count=1,
-    flags=re.S,
+    'window.setTimeout(() => mount(true), 0);\n'
 )
-if observer_count != 1:
-    raise SystemExit("Unable to replace Agent Chat app observer lifecycle")
 
 validator = '''from pathlib import Path
 
