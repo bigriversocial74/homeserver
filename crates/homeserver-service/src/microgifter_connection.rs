@@ -594,6 +594,10 @@ pub fn initialize(connection: &Connection) -> Result<()> {
 }
 
 pub fn health_check(connection: &Connection) -> Result<()> {
+    ensure!(
+        !APPLICATION_ERROR_CODES.is_empty(),
+        "Phase 6A application error registry is unavailable"
+    );
     for table in [
         "provider_connection_profiles",
         "provider_entitlement_signing_keys",
@@ -2086,8 +2090,7 @@ async fn submit_pending_update_receipts(state: Arc<AppState>) -> Result<()> {
                 row.get::<_, Option<String>>(5)?,
             ))
         })?;
-        let pending = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-        pending
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
     for (authorization_id, connection_id, update_id, version, result_state, failure_code) in pending
     {
@@ -2230,7 +2233,7 @@ fn recent_receipts(connection: &Connection, limit: usize) -> Result<Vec<ReceiptS
     let mut statement = connection.prepare(
         "SELECT receipt_id,event_type,result_category,error_category,previous_state,new_state,created_at_utc FROM provider_connection_receipts ORDER BY created_at_utc DESC,receipt_id DESC LIMIT ?1",
     )?;
-    let rows = statement.query_map(params![limit.max(1).min(100) as i64], |row| {
+    let rows = statement.query_map(params![limit.clamp(1, 100) as i64], |row| {
         Ok(ReceiptSnapshot {
             receipt_id: row.get(0)?,
             event_type: row.get(1)?,
@@ -2630,6 +2633,10 @@ fn validate_entitlement_signing_key(value: &PairingSigningKey) -> Result<()> {
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "durable receipt fields mirror the persisted audit schema"
+)]
 fn record_receipt(
     connection: &Connection,
     connection_id: Option<&str>,
