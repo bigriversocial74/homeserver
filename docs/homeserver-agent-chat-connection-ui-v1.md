@@ -1,6 +1,6 @@
 # HomeServer Agent Chat and Connection Interface v1
 
-Status: implementation complete; legacy Agent Workspace compatibility repair running
+Status: implementation complete; complete Production Quality validation running
 
 ## Scope
 
@@ -37,13 +37,14 @@ Status: implementation complete; legacy Agent Workspace compatibility repair run
 
 ## Validation checkpoints
 
-- Coordinated Cloud Connector Contract run #255 passed on the clean Agent Chat branch, confirming the existing pairing node and exact cross-repository authority contract remained intact.
+- Coordinated Cloud Connector Contract run #255 passed on the Agent Chat branch, confirming the existing pairing node and exact cross-repository authority contract remained intact.
 - Agent Chat dependency lock normalization run #2 passed and committed only the Windows-generated lockfile update.
 - Agent Chat initial-load repair run #4 passed frontend syntax, frontend checks, and the production frontend build before committing.
 - Agent Chat route-stability repair passed JavaScript syntax, frontend checks, and the production frontend build before committing as `3b09ee8387713e6a04e23d73b66fbedd65611f5f`.
-- Production Quality run #776 passed dependency locks and isolated one permanent validator requirement: the legacy Agent Workspace module must remain loaded.
-- The compatibility repair keeps the legacy module loaded but disables its mounting when Agent Chat v1 is active, preventing duplicate interfaces.
-- Full frontend, Rust, installer, security, and signed-update validation will run on the repaired clean branch.
+- Production Quality run #776 passed dependency locks and isolated the permanent Agent Workspace module-loading requirement.
+- Agent Workspace compatibility run #4 passed the permanent frontend validator and production frontend build, then committed the new chat/legacy coexistence boundary as `6a2fae175e3662563f66f1c29653f65b8f75e67f`.
+- All temporary workflow helpers removed themselves; the permanent Production Quality workflow is restored unchanged.
+- Full frontend, Rust, installer, security, and signed-update validation is running on the final clean branch.
 
 ## Permanent boundaries
 
