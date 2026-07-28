@@ -1,35 +1,41 @@
 # Agent Chat Interaction Hotfix
 
-Status: final single-router validation running
+Status: resilience and full-window redesign validation running
 
-## Reported regression
+## Reported regressions
 
-The installed Agent Chat interface rendered, but visible controls became non-responsive after the first navigation or chat click. The first interaction worked, then sidebar, header, chat-history, and New Chat controls froze.
+1. Agent Chat controls could become non-responsive after page replacement.
+2. A later Model Center availability notification caused Agent Chat and navigation to freeze.
+3. Agent Chat still appeared inside the Control Center shell instead of operating as a dedicated full-width chat workspace.
 
-## Confirmed root cause
+## Confirmed causes
 
-The Control Center and Agent Chat both attempted to own and replace the same `.page-canvas`. Agent Chat also watched the complete application subtree with a `MutationObserver`. After the first route change, the competing render lifecycles could overwrite each other and invalidate the next interaction.
+- The original Control Center and Agent Chat renderers competed for the same page canvas.
+- Even after the single-router correction, the 30-second Control Center background refresh still replaced the entire `#app` while Agent Chat was active.
+- Optional Model Center failure was promoted to a global notification and full shell render instead of remaining a non-blocking module-health condition.
 
-## Completed repair
+## Completed resilience repair
 
-- Registered HomeServer Agent as a normal Control Center route.
-- Gave the Control Center sole ownership of the application shell and page canvas.
-- Gave Agent Chat ownership only of its dedicated route host.
-- Removed the app-wide Agent Chat `MutationObserver`.
-- Removed competing capture-phase delegated routers and `stopImmediatePropagation()` navigation.
-- Restored normal page-specific event binding after each deterministic render.
-- Added a permanent Agent Chat route-lifecycle validator to the frontend checks.
-- Preserved the existing pairing node, local chat persistence, Phase 6A provider endpoints, and local-first boundaries.
+- Agent Chat now renders as a dedicated full-window application surface.
+- The normal Control Center sidebar, top bar, page canvas, and footer are not rendered in Agent mode.
+- Agent Chat owns its own chat-history sidebar and includes a Control Center return action.
+- Background Control Center refreshes do not replace Agent Chat.
+- Optional Model Center, semantic-index, cloud, and MCP health failures are scoped to their relevant pages.
+- Agent Chat receives lightweight shell-health events instead of destructive shell rerenders.
+- Model runtime degradation appears as a non-blocking header status.
+- The message canvas scrolls independently beneath an overlaid sticky footer composer.
+- The composer, context controls, mode, goal, model, and connection controls remain visible at the bottom.
+- The permanent Agent Chat validator now enforces shell isolation, optional-module resilience, full-window layout, independent scrolling, and footer composer positioning.
+- Existing pairing, chat persistence, Phase 6A provider endpoints, updater trust, and local-first authority remain unchanged.
 
-## Scope
-
-Product files changed:
+## Product files
 
 - `src/main.js`
 - `src/homeserver-agent-chat.js`
+- `src/homeserver-agent-chat.css`
 - `package.json`
 - `scripts/validate-agent-chat-route.py`
 
 No database migration is required.
 
-The replacement installer must come from the final HomeServer Production Quality run on this exact source and remain unmerged until repeated hands-on navigation succeeds.
+The replacement installer must come from HomeServer Production Quality on the exact final source and remain unmerged until repeated navigation, Model Center degradation, and Agent Chat layout tests pass on the installed application.
