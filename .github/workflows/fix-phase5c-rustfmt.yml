@@ -1,0 +1,47 @@
+name: Fix Phase 5C Rust formatting
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.head_ref == 'feature/phase-5c-operational-data-import-20260727'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out Phase 5C branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-5c-operational-data-import-20260727
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Format workspace
+        shell: pwsh
+        run: |
+          cargo fmt --all
+          cargo fmt --all --check
+
+      - name: Commit canonical formatting
+        shell: pwsh
+        run: |
+          git config user.name "Microgifter Build Agent"
+          git config user.email "build-agent@microgifter.local"
+          git add crates src-tauri
+          if (git diff --cached --quiet) {
+            Write-Host "No Rust formatting changes were required."
+            exit 0
+          }
+          git commit -m "Apply canonical Phase 5C Rust formatting"
+          git push origin HEAD:feature/phase-5c-operational-data-import-20260727
