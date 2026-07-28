@@ -41,7 +41,7 @@ jobs:
           path: cloud
           fetch-depth: 1
 
-      - uses: shivammathur/setup-php@0c0c27b4cb4cc611a83d6f7372e7f7f945ceb49a
+      - uses: shivammathur/setup-php@a75416c329f4e1de8e8fb8e718460dbb4dcae458
         with:
           php-version: '8.2'
           extensions: json, mbstring, pdo, sodium
