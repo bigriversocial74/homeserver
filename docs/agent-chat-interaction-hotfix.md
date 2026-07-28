@@ -1,6 +1,6 @@
 # Agent Chat Interaction Hotfix
 
-Status: final resilience installer validation running
+Status: validated; installed hands-on test pending
 
 ## Reported regressions
 
@@ -13,7 +13,7 @@ Status: final resilience installer validation running
 - The original Control Center and Agent Chat renderers competed for the same page canvas.
 - Even after the single-router correction, the 30-second Control Center background refresh still replaced the entire `#app` while Agent Chat was active.
 - Optional Model Center failure was promoted to a global notification and full shell render instead of remaining a non-blocking module-health condition.
-- The first lightweight health-event implementation still remounted Agent Chat; that final remount path has now been removed.
+- The first lightweight health-event implementation still remounted Agent Chat; that final remount path was removed.
 
 ## Completed resilience repair
 
@@ -30,6 +30,15 @@ Status: final resilience installer validation running
 - The permanent Agent Chat validator enforces shell isolation, no background remount, optional-module resilience, full-window layout, independent scrolling, and footer composer positioning.
 - Existing pairing, chat persistence, Phase 6A provider endpoints, updater trust, and local-first authority remain unchanged.
 
+## Final validation
+
+Exact head: `fd7dc8cba902e521311be05d0478d9623e475319`
+
+- Coordinated Cloud Connector Contract #331: passed
+- HomeServer Production Quality #855: passed
+- Installer SHA-256: `b1ce46f358a110e7b1542c3cadca2e618d51c3a28a475ee10137daceb12ca8dc`
+- Artifact ZIP SHA-256: `4f96ee1a4fa7287a7859852c8800128211b34ce54212b2968dcf4691c2512461`
+
 ## Product files
 
 - `src/main.js`
@@ -40,4 +49,4 @@ Status: final resilience installer validation running
 
 No database migration is required.
 
-The replacement installer must come from HomeServer Production Quality on the exact final source and remain unmerged until repeated navigation, Model Center degradation, and Agent Chat layout tests pass on the installed application.
+PR #40 remains draft and unmerged until repeated navigation, Model Center degradation, and Agent Chat layout tests pass on the installed application.
