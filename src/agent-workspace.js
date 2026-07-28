@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import "./agent-workspace.css";
 
+const legacyAgentWorkspaceDisabled = Boolean(window.__HOMESERVER_AGENT_CHAT_V1__);
+
 const PAGE_KEY = "agent";
 let snapshot = null;
 let loading = false;
@@ -497,18 +499,20 @@ async function cancelMission(event) {
   });
 }
 
-const app = document.querySelector("#app");
-if (app) {
-  const observer = new MutationObserver(() => {
-    injectNavigation();
-    if (isAgentPage()) mount(false);
-  });
-  observer.observe(app, { childList: true, subtree: true });
-}
+if (!legacyAgentWorkspaceDisabled) {
+  const app = document.querySelector("#app");
+  if (app) {
+    const observer = new MutationObserver(() => {
+      injectNavigation();
+      if (isAgentPage()) mount(false);
+    });
+    observer.observe(app, { childList: true, subtree: true });
+  }
 
-window.addEventListener("hashchange", () => window.setTimeout(() => mount(true), 0));
-window.addEventListener("DOMContentLoaded", () => {
-  if (initialized) return;
-  initialized = true;
-  window.setTimeout(() => mount(true), 0);
-});
+  window.addEventListener("hashchange", () => window.setTimeout(() => mount(true), 0));
+  window.addEventListener("DOMContentLoaded", () => {
+    if (initialized) return;
+    initialized = true;
+    window.setTimeout(() => mount(true), 0);
+  });
+}
