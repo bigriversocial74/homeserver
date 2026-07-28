@@ -9,6 +9,7 @@ mod http;
 mod knowledge_vault;
 mod mcp_runtime;
 mod model_center;
+mod microgifter_connection;
 mod operational_data;
 mod recovery_transfer;
 mod review_intelligence;
@@ -78,6 +79,13 @@ impl AppState {
             return HealthSnapshot::needs_attention(
                 &self.config.server_name,
                 "update_integrity_check_failed",
+            );
+        }
+        if let Err(error) = microgifter_connection::health_check(&connection) {
+            error!(?error, "HomeServer Microgifter entitlement database health check failed");
+            return HealthSnapshot::needs_attention(
+                &self.config.server_name,
+                "microgifter_entitlement_integrity_check_failed",
             );
         }
         if let Err(error) = model_center::health_check(&connection) {
@@ -246,6 +254,7 @@ impl AppState {
             let connection = self.connection()?;
             database::maintain_history(&connection)?;
             update_store::maintain_history(&connection)?;
+            microgifter_connection::maintain_history(&connection)?;
             model_center::maintain_history(&connection)?;
             operational_data::maintain_history(&connection)?;
             review_intelligence::maintain_history(&connection)?;
@@ -294,6 +303,13 @@ impl AppState {
             {
                 let connection = self.connection()?;
                 update_store::record_application_result(&connection, &result)?;
+                microgifter_connection::record_update_result_receipt(
+                    &connection,
+                    &result.update_id,
+                    &result.target_version,
+                    result.state.as_str(),
+                    result.failure_code.as_deref(),
+                )?;
             }
             info!(
                 update_id = %result.update_id,
@@ -360,6 +376,10 @@ impl AppState {
         let stored = {
             let connection = self.connection()?;
             let available = update_store::latest_in_state(&connection, UpdateState::Available)?;
+            microgifter_connection::ensure_update_download_allowed(
+                &connection,
+                &available.record.update_id,
+            )?;
             update_store::mark_downloading(&connection, &available.record.update_id)?
         };
         let path = match update::download_and_verify_installer(
@@ -393,7 +413,16 @@ impl AppState {
 
     fn apply_update(&self, request: ApplyUpdateRequest) -> Result<UpdateActionResult> {
         ensure_update_confirmation(&request.confirmation)?;
-        let stored = update_store::latest_in_state(&*self.connection()?, UpdateState::Staged)?;
+        let stored = {
+            let connection = self.connection()?;
+            let stored = update_store::latest_in_state(&connection, UpdateState::Staged)?;
+            microgifter_connection::ensure_update_download_allowed(
+                &connection,
+                &stored.record.update_id,
+            )?;
+            microgifter_connection::ensure_update_install_window(&connection)?;
+            stored
+        };
         let installer_path = stored
             .installer_path
             .as_deref()

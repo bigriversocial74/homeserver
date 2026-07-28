@@ -4,6 +4,7 @@
 CREATE TABLE IF NOT EXISTS provider_connection_profiles (
   connection_id TEXT PRIMARY KEY,
   provider_key TEXT NOT NULL CHECK (length(provider_key) BETWEEN 2 AND 40),
+  provider_connection_id TEXT,
   contract_version TEXT NOT NULL DEFAULT 'v1',
   lifecycle_state TEXT NOT NULL CHECK (lifecycle_state IN (
     'unpaired','pairing_pending','active','offline','grace','suspended','revoked','replacing','error'
@@ -34,6 +35,10 @@ CREATE TABLE IF NOT EXISTS provider_connection_profiles (
 CREATE INDEX IF NOT EXISTS idx_provider_profiles_provider_state
   ON provider_connection_profiles (provider_key, lifecycle_state, updated_at_utc DESC);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_profiles_remote_connection
+  ON provider_connection_profiles (provider_key, provider_connection_id)
+  WHERE provider_connection_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS provider_entitlement_signing_keys (
   provider_key TEXT NOT NULL,
   key_id TEXT NOT NULL,
@@ -41,7 +46,7 @@ CREATE TABLE IF NOT EXISTS provider_entitlement_signing_keys (
   state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active','retired','revoked')),
   not_before_utc TEXT,
   not_after_utc TEXT,
-  source TEXT NOT NULL CHECK (source IN ('compiled','mock_fixture')),
+  source TEXT NOT NULL CHECK (source IN ('compiled','pairing','mock_fixture')),
   created_at_utc TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   PRIMARY KEY (provider_key, key_id)
 );
