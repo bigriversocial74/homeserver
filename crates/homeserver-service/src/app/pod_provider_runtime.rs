@@ -1,4 +1,4 @@
-use crate::{database, AppState};
+use crate::AppState;
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use axum::{
     extract::{DefaultBodyLimit, State},
@@ -337,6 +337,7 @@ impl Drop for ProviderClient {
 fn default_timeout() -> u64 {
     120
 }
+
 fn default_maximum_bytes() -> usize {
     8 * 1024 * 1024
 }
@@ -478,10 +479,13 @@ async fn disconnect_handler(
 async fn run_cycle(state: Arc<AppState>) -> Result<()> {
     let connection_ids = {
         let connection = state.connection()?;
-        connection.prepare(
-            "SELECT connection_id FROM cloud_connections WHERE provider_key='pod' AND state IN ('connected','degraded') ORDER BY paired_at_utc,connection_id"
-        )?.query_map([], |row| row.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
+        let mut statement = connection.prepare(
+            "SELECT connection_id FROM cloud_connections WHERE provider_key='pod' AND state IN ('connected','degraded') ORDER BY paired_at_utc,connection_id",
+        )?;
+        let ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        ids
     };
     {
         let connection = state.connection()?;
@@ -546,7 +550,12 @@ async fn connect(state: Arc<AppState>, request: PairRequest) -> Result<Connectio
         let connection = state.connection()?;
         connection.execute(
             "INSERT INTO provider_pairing_attempts (attempt_id,provider_key,request_id,cloud_base_url,device_display_name,state,started_at_utc) VALUES (?1,'pod',?2,?3,?4,'pending',strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
-            params![Uuid::new_v4().to_string(), request_id, base_url.as_str(), display_name],
+            params![
+                Uuid::new_v4().to_string(),
+                request_id,
+                base_url.as_str(),
+                display_name
+            ],
         )?;
     }
     let envelope: ProviderEnvelope<PairingData> =
@@ -591,15 +600,41 @@ async fn connect(state: Arc<AppState>, request: PairRequest) -> Result<Connectio
     }
     tx.execute(
         "INSERT INTO cloud_connections (connection_id,provider_key,display_name,cloud_base_url,tenant_id,site_id,device_id,public_key_base64,credential_key,state,scopes_json,is_default,paired_at_utc,last_success_utc,last_error,created_at_utc,updated_at_utc) VALUES (?1,'pod',?2,?3,NULL,NULL,?4,?5,?6,'connected',?7,?8,?9,?9,NULL,?9,?9)",
-        params![connection_id, display_name, base_url.as_str(), paired.device_id, public_key, credential_key, serde_json::to_string(&paired.granted_capabilities)?, if request.make_default {1} else {0}, now],
+        params![
+            connection_id,
+            display_name,
+            base_url.as_str(),
+            paired.device_id,
+            public_key,
+            credential_key,
+            serde_json::to_string(&paired.granted_capabilities)?,
+            if request.make_default { 1 } else { 0 },
+            now
+        ],
     )?;
     tx.execute(
         "INSERT INTO provider_connection_profiles (connection_id,provider_key,provider_connection_id,contract_version,lifecycle_state,owner_account_id,device_display_name,connector_version,capability_registry_version,subscription_state,update_eligible,last_heartbeat_at_utc,created_at_utc,updated_at_utc) VALUES (?1,'pod',?2,?3,'active',?4,?5,?6,'1','unknown',0,?7,?7,?7)",
-        params![connection_id, paired.provider_connection_id, CONTRACT_VERSION, paired.provider_identity_id, display_name, env!("CARGO_PKG_VERSION"), now],
+        params![
+            connection_id,
+            paired.provider_connection_id,
+            CONTRACT_VERSION,
+            paired.provider_identity_id,
+            display_name,
+            env!("CARGO_PKG_VERSION"),
+            now
+        ],
     )?;
     tx.execute(
         "INSERT INTO pod_provider_connections (connection_id,provider_connection_id,provider_identity_id,provider_display_name,contract_version,device_signing_key_name,runtime_state,last_heartbeat_at_utc,created_at_utc,updated_at_utc) VALUES (?1,?2,?3,?4,?5,?6,'unconfigured',?7,?7,?7)",
-        params![connection_id, paired.provider_connection_id, paired.provider_identity_id, paired.provider_display_name, CONTRACT_VERSION, credential_key, now],
+        params![
+            connection_id,
+            paired.provider_connection_id,
+            paired.provider_identity_id,
+            paired.provider_display_name,
+            CONTRACT_VERSION,
+            credential_key,
+            now
+        ],
     )?;
     tx.execute(
         "INSERT INTO pod_provider_runtime_profiles (connection_id) VALUES (?1)",
@@ -622,11 +657,16 @@ async fn connect(state: Arc<AppState>, request: PairRequest) -> Result<Connectio
         "pod.paired",
         "success",
         Some("paired"),
-        &json!({"provider_connection_id": paired.provider_connection_id, "provider_identity_id": paired.provider_identity_id, "device_id": paired.device_id}),
+        &json!({
+            "provider_connection_id": paired.provider_connection_id,
+            "provider_identity_id": paired.provider_identity_id,
+            "device_id": paired.device_id
+        }),
     )?;
     tx.commit()?;
     info!(%connection_id, pod_base_url = %base_url, "paired POD provider connection");
-    connection_summary(&state.connection()?, &connection_id)
+    let connection = state.connection()?;
+    connection_summary(&connection, &connection_id)
 }
 
 fn save_runtime(connection: &Connection, request: RuntimeUpdateRequest) -> Result<RuntimeProfile> {
@@ -680,7 +720,21 @@ fn save_runtime(connection: &Connection, request: RuntimeUpdateRequest) -> Resul
     );
     connection.execute(
         "INSERT INTO pod_provider_runtime_profiles (connection_id,transcription_enabled,transcription_executable,transcription_arguments_json,transcription_model,synthesis_enabled,synthesis_executable,synthesis_arguments_json,synthesis_model,synthesis_voice,execution_timeout_seconds,maximum_input_bytes,maximum_output_bytes,updated_at_utc) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,strftime('%Y-%m-%dT%H:%M:%fZ','now')) ON CONFLICT(connection_id) DO UPDATE SET transcription_enabled=excluded.transcription_enabled,transcription_executable=excluded.transcription_executable,transcription_arguments_json=excluded.transcription_arguments_json,transcription_model=excluded.transcription_model,synthesis_enabled=excluded.synthesis_enabled,synthesis_executable=excluded.synthesis_executable,synthesis_arguments_json=excluded.synthesis_arguments_json,synthesis_model=excluded.synthesis_model,synthesis_voice=excluded.synthesis_voice,execution_timeout_seconds=excluded.execution_timeout_seconds,maximum_input_bytes=excluded.maximum_input_bytes,maximum_output_bytes=excluded.maximum_output_bytes,updated_at_utc=excluded.updated_at_utc",
-        params![connection_id, if request.transcription_enabled {1} else {0}, transcription_executable, serde_json::to_string(&request.transcription_arguments)?, optional(request.transcription_model,190), if request.synthesis_enabled {1} else {0}, synthesis_executable, serde_json::to_string(&request.synthesis_arguments)?, optional(request.synthesis_model,190), optional(request.synthesis_voice,190), request.execution_timeout_seconds as i64, request.maximum_input_bytes as i64, request.maximum_output_bytes as i64],
+        params![
+            connection_id,
+            if request.transcription_enabled { 1 } else { 0 },
+            transcription_executable,
+            serde_json::to_string(&request.transcription_arguments)?,
+            optional(request.transcription_model, 190),
+            if request.synthesis_enabled { 1 } else { 0 },
+            synthesis_executable,
+            serde_json::to_string(&request.synthesis_arguments)?,
+            optional(request.synthesis_model, 190),
+            optional(request.synthesis_voice, 190),
+            request.execution_timeout_seconds as i64,
+            request.maximum_input_bytes as i64,
+            request.maximum_output_bytes as i64
+        ],
     )?;
     connection.execute(
         "UPDATE pod_provider_connections SET runtime_state=?1,runtime_health_message=?2,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?3",
@@ -693,7 +747,10 @@ fn save_runtime(connection: &Connection, request: RuntimeUpdateRequest) -> Resul
         "pod.runtime.updated",
         "success",
         Some(&state),
-        &json!({"transcription_enabled": request.transcription_enabled, "synthesis_enabled": request.synthesis_enabled}),
+        &json!({
+            "transcription_enabled": request.transcription_enabled,
+            "synthesis_enabled": request.synthesis_enabled
+        }),
     )?;
     runtime_profile(connection, &connection_id)
 }
@@ -745,9 +802,18 @@ async fn run_connection(state: Arc<AppState>, connection_id: &str) -> Result<u64
             envelope.message
         );
         let connection = state.connection()?;
-        connection.execute("UPDATE cloud_connections SET state='connected',last_success_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),last_error=NULL,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1", params![connection_id])?;
-        connection.execute("UPDATE provider_connection_profiles SET lifecycle_state='active',last_heartbeat_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1", params![connection_id])?;
-        connection.execute("UPDATE pod_provider_connections SET last_heartbeat_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),last_error_code=NULL,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1", params![connection_id])?;
+        connection.execute(
+            "UPDATE cloud_connections SET state='connected',last_success_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),last_error=NULL,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1",
+            params![connection_id],
+        )?;
+        connection.execute(
+            "UPDATE provider_connection_profiles SET lifecycle_state='active',last_heartbeat_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1",
+            params![connection_id],
+        )?;
+        connection.execute(
+            "UPDATE pod_provider_connections SET last_heartbeat_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),last_error_code=NULL,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1",
+            params![connection_id],
+        )?;
         receipt(
             &connection,
             connection_id,
@@ -755,7 +821,10 @@ async fn run_connection(state: Arc<AppState>, connection_id: &str) -> Result<u64
             "pod.heartbeat",
             "success",
             Some(&envelope.data.connection_state),
-            &json!({"receipt_id": envelope.data.receipt_id, "queued_voice_jobs": envelope.data.queued_voice_jobs}),
+            &json!({
+                "receipt_id": envelope.data.receipt_id,
+                "queued_voice_jobs": envelope.data.queued_voice_jobs
+            }),
         )?;
     }
     let envelope: ProviderEnvelope<PollData> =
@@ -767,7 +836,10 @@ async fn run_connection(state: Arc<AppState>, connection_id: &str) -> Result<u64
     );
     {
         let connection = state.connection()?;
-        connection.execute("UPDATE pod_provider_connections SET last_poll_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1", params![connection_id])?;
+        connection.execute(
+            "UPDATE pod_provider_connections SET last_poll_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1",
+            params![connection_id],
+        )?;
     }
     let Some(job) = envelope.data.job else {
         return Ok(0);
@@ -785,7 +857,19 @@ async fn process_job(state: Arc<AppState>, client: &ProviderClient, job: RemoteJ
         let connection = state.connection()?;
         connection.execute(
             "INSERT INTO pod_provider_voice_jobs (local_job_id,connection_id,remote_job_uuid,job_type,state,lease_credential_key,lease_token_hint,payload_hash,attempt_count,maximum_attempts,lease_expires_at_utc,remote_expires_at_utc,leased_at_utc,created_at_utc,updated_at_utc) VALUES (?1,?2,?3,?4,'leased',?5,?6,?7,?8,?9,?10,?11,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now')) ON CONFLICT(connection_id,remote_job_uuid) DO UPDATE SET state='leased',lease_credential_key=excluded.lease_credential_key,lease_token_hint=excluded.lease_token_hint,payload_hash=excluded.payload_hash,attempt_count=excluded.attempt_count,maximum_attempts=excluded.maximum_attempts,lease_expires_at_utc=excluded.lease_expires_at_utc,remote_expires_at_utc=excluded.remote_expires_at_utc,updated_at_utc=excluded.updated_at_utc",
-            params![local_job_id, client.record.connection_id, job.job_uuid, job.job_type, lease_key, hint(&job.lease_token), job.payload_hash, job.attempt_count as i64, job.max_attempts as i64, job.lease_expires_at, job.expires_at],
+            params![
+                local_job_id,
+                client.record.connection_id,
+                job.job_uuid,
+                job.job_type,
+                lease_key,
+                hint(&job.lease_token),
+                job.payload_hash,
+                job.attempt_count as i64,
+                job.max_attempts as i64,
+                job.lease_expires_at,
+                job.expires_at
+            ],
         )?;
         receipt(
             &connection,
@@ -794,13 +878,20 @@ async fn process_job(state: Arc<AppState>, client: &ProviderClient, job: RemoteJ
             "pod.voice.job.leased",
             "success",
             Some(&job.job_type),
-            &json!({"priority": job.priority, "attempt_count": job.attempt_count}),
+            &json!({
+                "priority": job.priority,
+                "attempt_count": job.attempt_count
+            }),
         )?;
     }
     let result = execute_job(&state, client, &local_job_id, &job).await;
     match result {
         Ok((provider_result, model, processing_ms)) => {
-            let payload = json!({"job_uuid": job.job_uuid, "lease_token": load_lease(&lease_key)?, "result": provider_result});
+            let payload = json!({
+                "job_uuid": job.job_uuid,
+                "lease_token": load_lease(&lease_key)?,
+                "result": provider_result
+            });
             let envelope: ProviderEnvelope<Value> =
                 client.signed(Method::POST, COMPLETE_PATH, &payload).await?;
             ensure!(
@@ -814,8 +905,19 @@ async fn process_job(state: Arc<AppState>, client: &ProviderClient, job: RemoteJ
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned);
             let connection = state.connection()?;
-            connection.execute("UPDATE pod_provider_voice_jobs SET state='completed',result_hash=?1,model_name=?2,processing_ms=?3,completed_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),failure_code=NULL,failure_message=NULL WHERE local_job_id=?4", params![result_hash, model, processing_ms.map(|value| value as i64), local_job_id])?;
-            connection.execute("UPDATE pod_provider_connections SET last_job_completed_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),last_error_code=NULL,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1", params![client.record.connection_id])?;
+            connection.execute(
+                "UPDATE pod_provider_voice_jobs SET state='completed',result_hash=?1,model_name=?2,processing_ms=?3,completed_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),failure_code=NULL,failure_message=NULL WHERE local_job_id=?4",
+                params![
+                    result_hash,
+                    model,
+                    processing_ms.map(|value| value as i64),
+                    local_job_id
+                ],
+            )?;
+            connection.execute(
+                "UPDATE pod_provider_connections SET last_job_completed_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),last_error_code=NULL,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1",
+                params![client.record.connection_id],
+            )?;
             receipt(
                 &connection,
                 &client.record.connection_id,
@@ -823,7 +925,10 @@ async fn process_job(state: Arc<AppState>, client: &ProviderClient, job: RemoteJ
                 "pod.voice.job.completed",
                 "success",
                 Some(&job.job_type),
-                &json!({"result_hash": result_hash, "processing_ms": processing_ms}),
+                &json!({
+                    "result_hash": result_hash,
+                    "processing_ms": processing_ms
+                }),
             )?;
             delete_lease(&lease_key);
         }
@@ -832,7 +937,13 @@ async fn process_job(state: Arc<AppState>, client: &ProviderClient, job: RemoteJ
             let code = error_code(&message);
             let retryable = matches!(code.as_str(), "pod_runtime_timeout" | "pod_runtime_failed")
                 && job.attempt_count < job.max_attempts;
-            let payload = json!({"job_uuid": job.job_uuid, "lease_token": load_lease(&lease_key)?, "failure_code": code, "failure_message": message, "retryable": retryable});
+            let payload = json!({
+                "job_uuid": job.job_uuid,
+                "lease_token": load_lease(&lease_key)?,
+                "failure_code": code,
+                "failure_message": message,
+                "retryable": retryable
+            });
             let envelope: ProviderEnvelope<Value> =
                 client.signed(Method::POST, FAIL_PATH, &payload).await?;
             ensure!(
@@ -851,7 +962,10 @@ async fn process_job(state: Arc<AppState>, client: &ProviderClient, job: RemoteJ
                 "failed"
             };
             let connection = state.connection()?;
-            connection.execute("UPDATE pod_provider_voice_jobs SET state=?1,failure_code=?2,failure_message=?3,completed_at_utc=CASE WHEN ?1='failed' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE completed_at_utc END,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE local_job_id=?4", params![local_state, code, message, local_job_id])?;
+            connection.execute(
+                "UPDATE pod_provider_voice_jobs SET state=?1,failure_code=?2,failure_message=?3,completed_at_utc=CASE WHEN ?1='failed' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE completed_at_utc END,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE local_job_id=?4",
+                params![local_state, code, message, local_job_id],
+            )?;
             receipt(
                 &connection,
                 &client.record.connection_id,
@@ -879,7 +993,10 @@ async fn execute_job(
     };
     {
         let connection = state.connection()?;
-        connection.execute("UPDATE pod_provider_voice_jobs SET state='processing',started_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE local_job_id=?1", params![local_job_id])?;
+        connection.execute(
+            "UPDATE pod_provider_voice_jobs SET state='processing',started_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE local_job_id=?1",
+            params![local_job_id],
+        )?;
     }
     let started = Instant::now();
     match job.job_type.as_str() {
@@ -895,8 +1012,10 @@ async fn execute_job(
                 json!({
                     "runtime": "homeserver-local-command-v1",
                     "models": models,
-                    "transcription_ready": runtime.transcription_enabled && executable_ready(runtime.transcription_executable.as_deref()),
-                    "synthesis_ready": runtime.synthesis_enabled && executable_ready(runtime.synthesis_executable.as_deref()),
+                    "transcription_ready": runtime.transcription_enabled
+                        && executable_ready(runtime.transcription_executable.as_deref()),
+                    "synthesis_ready": runtime.synthesis_enabled
+                        && executable_ready(runtime.synthesis_executable.as_deref()),
                     "details": runtime.runtime_health_message,
                 }),
                 None,
@@ -920,7 +1039,11 @@ async fn execute_job(
                 artifact.plaintext_bytes <= runtime.maximum_input_bytes,
                 "POD transcription input exceeds the local runtime limit"
             );
-            let payload = json!({"job_uuid": job.job_uuid, "lease_token": load_lease_for_job(state, local_job_id)?, "artifact_uuid": artifact.artifact_uuid});
+            let payload = json!({
+                "job_uuid": job.job_uuid,
+                "lease_token": load_lease_for_job(state, local_job_id)?,
+                "artifact_uuid": artifact.artifact_uuid
+            });
             let envelope: ProviderEnvelope<ArtifactData> =
                 client.signed(Method::POST, ARTIFACT_PATH, &payload).await?;
             ensure!(
@@ -989,7 +1112,13 @@ async fn execute_job(
             let model = result.model.clone().or(runtime.transcription_model);
             cleanup(&work).await;
             Ok((
-                json!({"transcript": transcript, "language": result.language.unwrap_or_else(|| "en-US".to_owned()), "confidence": result.confidence.unwrap_or(0.0).clamp(0.0,1.0), "model": model.clone().unwrap_or_else(|| "local-runtime".to_owned()), "processing_ms": processing_ms}),
+                json!({
+                    "transcript": transcript,
+                    "language": result.language.unwrap_or_else(|| "en-US".to_owned()),
+                    "confidence": result.confidence.unwrap_or(0.0).clamp(0.0, 1.0),
+                    "model": model.clone().unwrap_or_else(|| "local-runtime".to_owned()),
+                    "processing_ms": processing_ms
+                }),
                 model,
                 Some(processing_ms),
             ))
@@ -1026,7 +1155,27 @@ async fn execute_job(
             let input = work.join("request.json");
             let audio = work.join(format!("output.{format}"));
             let output = work.join("result.json");
-            fs::write(&input, serde_json::to_vec(&json!({"text": text, "language": job.payload.get("language").and_then(Value::as_str).unwrap_or("en-US"), "voice": job.payload.get("voice").and_then(Value::as_str).filter(|value| !value.is_empty()).or(runtime.synthesis_voice.as_deref()), "model": runtime.synthesis_model, "audio_format": format, "job_uuid": job.job_uuid}))?).await?;
+            fs::write(
+                &input,
+                serde_json::to_vec(&json!({
+                    "text": text,
+                    "language": job
+                        .payload
+                        .get("language")
+                        .and_then(Value::as_str)
+                        .unwrap_or("en-US"),
+                    "voice": job
+                        .payload
+                        .get("voice")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty())
+                        .or(runtime.synthesis_voice.as_deref()),
+                    "model": runtime.synthesis_model,
+                    "audio_format": format,
+                    "job_uuid": job.job_uuid
+                }))?,
+            )
+            .await?;
             let mut args = runtime.synthesis_arguments.clone();
             args.extend([
                 "--input-json".to_owned(),
@@ -1064,7 +1213,8 @@ async fn execute_job(
                 .mime_type
                 .unwrap_or_else(|| mime_type(format).to_owned());
             ensure!(
-                ["audio/mpeg", "audio/wav", "audio/ogg", "audio/webm"].contains(&mime.as_str()),
+                ["audio/mpeg", "audio/wav", "audio/ogg", "audio/webm"]
+                    .contains(&mime.as_str()),
                 "local synthesis MIME type is unsupported"
             );
             let processing_ms = result
@@ -1074,7 +1224,12 @@ async fn execute_job(
             let encoded = STANDARD.encode(bytes);
             cleanup(&work).await;
             Ok((
-                json!({"audio_base64": encoded, "mime_type": mime, "model": model.clone().unwrap_or_else(|| "local-runtime".to_owned()), "processing_ms": processing_ms}),
+                json!({
+                    "audio_base64": encoded,
+                    "mime_type": mime,
+                    "model": model.clone().unwrap_or_else(|| "local-runtime".to_owned()),
+                    "processing_ms": processing_ms
+                }),
                 model,
                 Some(processing_ms),
             ))
@@ -1129,7 +1284,12 @@ fn status_snapshot(connection: &Connection) -> Result<StatusSnapshot> {
         [],
         |row| row.get::<_, i64>(0),
     )? != 0;
-    let ids = connection.prepare("SELECT connection_id FROM cloud_connections WHERE provider_key='pod' ORDER BY is_default DESC,paired_at_utc DESC")?.query_map([], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut statement = connection.prepare(
+        "SELECT connection_id FROM cloud_connections WHERE provider_key='pod' ORDER BY is_default DESC,paired_at_utc DESC",
+    )?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     let connections = ids
         .iter()
         .map(|id| connection_summary(connection, id))
@@ -1142,13 +1302,15 @@ fn status_snapshot(connection: &Connection) -> Result<StatusSnapshot> {
         worker_enabled: enabled,
         supported_capabilities: CAPABILITIES.iter().map(|value| (*value).to_owned()).collect(),
         connections,
-        recent_jobs: recent_jobs(connection,100)?,
-        recent_receipts: recent_receipts(connection,100)?,
+        recent_jobs: recent_jobs(connection, 100)?,
+        recent_receipts: recent_receipts(connection, 100)?,
         privacy_boundary: vec![
             "No Knowledge Vault contents are sent to the POD provider".to_owned(),
             "No unrelated wrapper or provider data is exposed".to_owned(),
-            "POD bearer, signing seed, and job leases stay in the operating-system credential vault".to_owned(),
-            "Local runtime commands execute without a shell and only from absolute configured paths".to_owned(),
+            "POD bearer, signing seed, and job leases stay in the operating-system credential vault"
+                .to_owned(),
+            "Local runtime commands execute without a shell and only from absolute configured paths"
+                .to_owned(),
         ],
     })
 }
@@ -1166,23 +1328,62 @@ fn connection_summary(connection: &Connection, id: &str) -> Result<ConnectionSum
         state: record.state,
         lifecycle_state: record.lifecycle_state,
         granted_capabilities: record.capabilities,
-        runtime: runtime_profile(connection,id)?,
+        runtime: runtime_profile(connection, id)?,
         last_heartbeat_at_utc: record.last_heartbeat_at_utc,
-        last_poll_at_utc: connection.query_row("SELECT last_poll_at_utc FROM pod_provider_connections WHERE connection_id=?1", params![id], |row| row.get(0)).optional()?.flatten(),
-        last_job_completed_at_utc: connection.query_row("SELECT last_job_completed_at_utc FROM pod_provider_connections WHERE connection_id=?1", params![id], |row| row.get(0)).optional()?.flatten(),
-        last_error: connection.query_row("SELECT last_error FROM cloud_connections WHERE connection_id=?1", params![id], |row| row.get(0)).optional()?.flatten(),
-        queued_jobs: count_jobs(connection,id,&["retrying"] )?,
-        active_jobs: count_jobs(connection,id,&["leased","processing"] )?,
-        failed_jobs: count_jobs(connection,id,&["failed"] )?,
+        last_poll_at_utc: connection
+            .query_row(
+                "SELECT last_poll_at_utc FROM pod_provider_connections WHERE connection_id=?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten(),
+        last_job_completed_at_utc: connection
+            .query_row(
+                "SELECT last_job_completed_at_utc FROM pod_provider_connections WHERE connection_id=?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten(),
+        last_error: connection
+            .query_row(
+                "SELECT last_error FROM cloud_connections WHERE connection_id=?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten(),
+        queued_jobs: count_jobs(connection, id, &["retrying"])?,
+        active_jobs: count_jobs(connection, id, &["leased", "processing"])?,
+        failed_jobs: count_jobs(connection, id, &["failed"])?,
     })
 }
 
 fn connection_record(connection: &Connection, id: &str) -> Result<ConnectionRecord> {
-    let row = connection.query_row(
-        "SELECT c.connection_id,c.display_name,c.cloud_base_url,p.provider_connection_id,p.provider_identity_id,p.provider_display_name,c.device_id,c.credential_key,c.state,pp.lifecycle_state,c.scopes_json,p.last_heartbeat_at_utc FROM cloud_connections c JOIN provider_connection_profiles pp ON pp.connection_id=c.connection_id JOIN pod_provider_connections p ON p.connection_id=c.connection_id WHERE c.connection_id=?1 AND c.provider_key='pod'",
-        params![id],
-        |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?,row.get::<_,String>(6)?,row.get::<_,String>(7)?,row.get::<_,String>(8)?,row.get::<_,String>(9)?,row.get::<_,String>(10)?,row.get::<_,Option<String>>(11)?)),
-    ).optional()?.ok_or_else(|| anyhow!("POD connection was not found"))?;
+    let row = connection
+        .query_row(
+            "SELECT c.connection_id,c.display_name,c.cloud_base_url,p.provider_connection_id,p.provider_identity_id,p.provider_display_name,c.device_id,c.credential_key,c.state,pp.lifecycle_state,c.scopes_json,p.last_heartbeat_at_utc FROM cloud_connections c JOIN provider_connection_profiles pp ON pp.connection_id=c.connection_id JOIN pod_provider_connections p ON p.connection_id=c.connection_id WHERE c.connection_id=?1 AND c.provider_key='pod'",
+            params![id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, String>(10)?,
+                    row.get::<_, Option<String>>(11)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| anyhow!("POD connection was not found"))?;
     Ok(ConnectionRecord {
         connection_id: row.0,
         display_name: row.1,
@@ -1200,19 +1401,41 @@ fn connection_record(connection: &Connection, id: &str) -> Result<ConnectionReco
 }
 
 fn runtime_profile(connection: &Connection, id: &str) -> Result<RuntimeProfile> {
-    connection.query_row(
-        "SELECT r.connection_id,r.transcription_enabled,r.transcription_executable,r.transcription_arguments_json,r.transcription_model,r.synthesis_enabled,r.synthesis_executable,r.synthesis_arguments_json,r.synthesis_model,r.synthesis_voice,r.execution_timeout_seconds,r.maximum_input_bytes,r.maximum_output_bytes,p.runtime_state,p.runtime_health_message FROM pod_provider_runtime_profiles r JOIN pod_provider_connections p ON p.connection_id=r.connection_id WHERE r.connection_id=?1",
-        params![id],
-        |row| {
-            let trans_args: String = row.get(3)?; let synth_args: String = row.get(7)?;
-            Ok(RuntimeProfile { connection_id: row.get(0)?, transcription_enabled: row.get::<_,i64>(1)? != 0, transcription_executable: row.get(2)?, transcription_arguments: serde_json::from_str(&trans_args).unwrap_or_default(), transcription_model: row.get(4)?, synthesis_enabled: row.get::<_,i64>(5)? != 0, synthesis_executable: row.get(6)?, synthesis_arguments: serde_json::from_str(&synth_args).unwrap_or_default(), synthesis_model: row.get(8)?, synthesis_voice: row.get(9)?, execution_timeout_seconds: row.get::<_,i64>(10)?.max(5) as u64, maximum_input_bytes: row.get::<_,i64>(11)?.max(262_144) as usize, maximum_output_bytes: row.get::<_,i64>(12)?.max(262_144) as usize, runtime_state: row.get(13)?, runtime_health_message: row.get(14)? })
-        }
-    ).map_err(Into::into)
+    connection
+        .query_row(
+            "SELECT r.connection_id,r.transcription_enabled,r.transcription_executable,r.transcription_arguments_json,r.transcription_model,r.synthesis_enabled,r.synthesis_executable,r.synthesis_arguments_json,r.synthesis_model,r.synthesis_voice,r.execution_timeout_seconds,r.maximum_input_bytes,r.maximum_output_bytes,p.runtime_state,p.runtime_health_message FROM pod_provider_runtime_profiles r JOIN pod_provider_connections p ON p.connection_id=r.connection_id WHERE r.connection_id=?1",
+            params![id],
+            |row| {
+                let trans_args: String = row.get(3)?;
+                let synth_args: String = row.get(7)?;
+                Ok(RuntimeProfile {
+                    connection_id: row.get(0)?,
+                    transcription_enabled: row.get::<_, i64>(1)? != 0,
+                    transcription_executable: row.get(2)?,
+                    transcription_arguments: serde_json::from_str(&trans_args)
+                        .unwrap_or_default(),
+                    transcription_model: row.get(4)?,
+                    synthesis_enabled: row.get::<_, i64>(5)? != 0,
+                    synthesis_executable: row.get(6)?,
+                    synthesis_arguments: serde_json::from_str(&synth_args).unwrap_or_default(),
+                    synthesis_model: row.get(8)?,
+                    synthesis_voice: row.get(9)?,
+                    execution_timeout_seconds: row.get::<_, i64>(10)?.max(5) as u64,
+                    maximum_input_bytes: row.get::<_, i64>(11)?.max(262_144) as usize,
+                    maximum_output_bytes: row.get::<_, i64>(12)?.max(262_144) as usize,
+                    runtime_state: row.get(13)?,
+                    runtime_health_message: row.get(14)?,
+                })
+            },
+        )
+        .map_err(Into::into)
 }
 
 fn recent_jobs(connection: &Connection, limit: usize) -> Result<Vec<JobSummary>> {
-    let mut statement = connection.prepare("SELECT local_job_id,connection_id,remote_job_uuid,job_type,state,attempt_count,maximum_attempts,model_name,processing_ms,failure_code,failure_message,leased_at_utc,completed_at_utc FROM pod_provider_voice_jobs ORDER BY updated_at_utc DESC,local_job_id DESC LIMIT ?1")?;
-    Ok(statement
+    let mut statement = connection.prepare(
+        "SELECT local_job_id,connection_id,remote_job_uuid,job_type,state,attempt_count,maximum_attempts,model_name,processing_ms,failure_code,failure_message,leased_at_utc,completed_at_utc FROM pod_provider_voice_jobs ORDER BY updated_at_utc DESC,local_job_id DESC LIMIT ?1",
+    )?;
+    let rows = statement
         .query_map(params![limit.clamp(1, 250) as i64], |row| {
             Ok(JobSummary {
                 local_job_id: row.get(0)?,
@@ -1232,12 +1455,15 @@ fn recent_jobs(connection: &Connection, limit: usize) -> Result<Vec<JobSummary>>
                 completed_at_utc: row.get(12)?,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()?)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 fn recent_receipts(connection: &Connection, limit: usize) -> Result<Vec<ReceiptSummary>> {
-    let mut statement = connection.prepare("SELECT receipt_id,connection_id,local_job_id,event_type,outcome,detail_code,metadata_json,created_at_utc FROM pod_provider_runtime_receipts ORDER BY created_at_utc DESC,receipt_id DESC LIMIT ?1")?;
-    Ok(statement
+    let mut statement = connection.prepare(
+        "SELECT receipt_id,connection_id,local_job_id,event_type,outcome,detail_code,metadata_json,created_at_utc FROM pod_provider_runtime_receipts ORDER BY created_at_utc DESC,receipt_id DESC LIMIT ?1",
+    )?;
+    let rows = statement
         .query_map(params![limit.clamp(1, 250) as i64], |row| {
             let metadata: String = row.get(6)?;
             Ok(ReceiptSummary {
@@ -1251,17 +1477,29 @@ fn recent_receipts(connection: &Connection, limit: usize) -> Result<Vec<ReceiptS
                 created_at_utc: row.get(7)?,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()?)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 fn disconnect(connection: &Connection, id: &str) -> Result<()> {
     let id = required(id, 64, "connection ID")?;
     let record = connection_record(connection, &id)?;
-    connection.execute("UPDATE cloud_connections SET state='disconnected',is_default=0,last_error='Disconnected by the owner',updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1", params![id])?;
-    connection.execute("UPDATE provider_connection_profiles SET lifecycle_state='revoked',updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1", params![id])?;
-    connection.execute("UPDATE pod_provider_voice_jobs SET state='cancelled',failure_code='connection_disconnected',failure_message='POD provider connection was disconnected',updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1 AND state IN ('leased','processing','retrying')", params![id])?;
+    connection.execute(
+        "UPDATE cloud_connections SET state='disconnected',is_default=0,last_error='Disconnected by the owner',updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1",
+        params![id],
+    )?;
+    connection.execute(
+        "UPDATE provider_connection_profiles SET lifecycle_state='revoked',updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1",
+        params![id],
+    )?;
+    connection.execute(
+        "UPDATE pod_provider_voice_jobs SET state='cancelled',failure_code='connection_disconnected',failure_message='POD provider connection was disconnected',updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1 AND state IN ('leased','processing','retrying')",
+        params![id],
+    )?;
     let keys = connection
-        .prepare("SELECT lease_credential_key FROM pod_provider_voice_jobs WHERE connection_id=?1")?
+        .prepare(
+            "SELECT lease_credential_key FROM pod_provider_voice_jobs WHERE connection_id=?1",
+        )?
         .query_map(params![id], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for key in keys {
@@ -1292,7 +1530,7 @@ impl ProviderClient {
             .map_err(|_| anyhow!("POD signing seed has an invalid length"))?;
         Ok(Self {
             record,
-            bearer_token: secrets.bearer_token,
+            bearer_token: secrets.bearer_token.clone(),
             signing_key: SigningKey::from_bytes(&seed),
             client: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
@@ -1301,6 +1539,7 @@ impl ProviderClient {
                 .build()?,
         })
     }
+
     async fn signed<T: Serialize + ?Sized, R: DeserializeOwned>(
         &self,
         method: Method,
@@ -1404,6 +1643,7 @@ fn endpoint(base: &str, path: &str) -> Result<Url> {
     url.set_path(path);
     Ok(url)
 }
+
 fn canonical(method: &Method, path: &str, timestamp: &str, nonce: &str, body: &[u8]) -> String {
     format!(
         "{}\n{}\n{}\n{}\n{}",
@@ -1414,17 +1654,21 @@ fn canonical(method: &Method, path: &str, timestamp: &str, nonce: &str, body: &[
         sha256(body)
     )
 }
+
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
+
 fn now() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
+
 fn parse_time(value: &str) -> Option<i64> {
     DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|value| value.timestamp())
 }
+
 fn valid_sync_code(value: &str) -> bool {
     let parts = value.split('-').collect::<Vec<_>>();
     parts.len() == 7
@@ -1433,20 +1677,24 @@ fn valid_sync_code(value: &str) -> bool {
             .iter()
             .all(|part| part.len() == 4 && part.chars().all(|c| c.is_ascii_hexdigit()))
 }
+
 fn required(value: &str, max: usize, label: &str) -> Result<String> {
     let value = value.trim();
     ensure!(!value.is_empty(), "{label} is required");
     ensure!(value.len() <= max, "{label} is too long");
     Ok(value.to_owned())
 }
+
 fn optional(value: Option<String>, max: usize) -> Option<String> {
     value
         .map(|value| value.trim().chars().take(max).collect::<String>())
         .filter(|value| !value.is_empty())
 }
+
 fn bounded(value: &str, max: usize) -> String {
     value.trim().chars().take(max).collect()
 }
+
 fn hint(value: &str) -> String {
     if value.len() < 12 {
         "hidden".to_owned()
@@ -1454,6 +1702,7 @@ fn hint(value: &str) -> String {
         format!("{}…{}", &value[..6], &value[value.len() - 4..])
     }
 }
+
 fn mime_type(format: &str) -> &'static str {
     match format {
         "wav" => "audio/wav",
@@ -1462,6 +1711,7 @@ fn mime_type(format: &str) -> &'static str {
         _ => "audio/mpeg",
     }
 }
+
 fn extension(mime: &str) -> Option<&'static str> {
     match mime {
         "audio/mpeg" => Some("mp3"),
@@ -1472,6 +1722,7 @@ fn extension(mime: &str) -> Option<&'static str> {
         _ => None,
     }
 }
+
 fn error_code(message: &str) -> String {
     let value = message.to_ascii_lowercase();
     if value.contains("not configured") || value.contains("disabled") {
@@ -1486,6 +1737,7 @@ fn error_code(message: &str) -> String {
         "pod_runtime_failed".to_owned()
     }
 }
+
 fn count_jobs(connection: &Connection, id: &str, states: &[&str]) -> Result<u64> {
     if states.is_empty() {
         return Ok(0);
@@ -1494,21 +1746,25 @@ fn count_jobs(connection: &Connection, id: &str, states: &[&str]) -> Result<u64>
         .map(|index| format!("?{}", index + 1))
         .collect::<Vec<_>>()
         .join(",");
-    let sql=format!("SELECT COUNT(*) FROM pod_provider_voice_jobs WHERE connection_id=?1 AND state IN ({placeholders})");
+    let sql = format!(
+        "SELECT COUNT(*) FROM pod_provider_voice_jobs WHERE connection_id=?1 AND state IN ({placeholders})"
+    );
     let mut values: Vec<&dyn rusqlite::ToSql> = vec![&id];
     for state in states {
-        values.push(state)
+        values.push(state);
     }
     let count: i64 = connection.query_row(&sql, values.as_slice(), |row| row.get(0))?;
     Ok(count.max(0) as u64)
 }
+
 fn validate_job(record: &ConnectionRecord, job: &RemoteJob) -> Result<()> {
     ensure!(
         Uuid::parse_str(&job.job_uuid).is_ok(),
         "POD job UUID is invalid"
     );
     ensure!(
-        ["speech_to_text", "text_to_speech", "capability_test"].contains(&job.job_type.as_str()),
+        ["speech_to_text", "text_to_speech", "capability_test"]
+            .contains(&job.job_type.as_str()),
         "POD job type is unsupported"
     );
     ensure!(
@@ -1530,16 +1786,18 @@ fn validate_job(record: &ConnectionRecord, job: &RemoteJob) -> Result<()> {
     );
     Ok(())
 }
+
 fn validate_arguments(values: &[String]) -> Result<()> {
     ensure!(values.len() <= 64, "runtime argument list is too large");
     for value in values {
         ensure!(
             value.len() <= 500 && !value.contains('\0'),
             "runtime argument is invalid"
-        )
+        );
     }
     Ok(())
 }
+
 fn validate_executable(
     enabled: bool,
     value: Option<String>,
@@ -1556,15 +1814,17 @@ fn validate_executable(
         ensure!(
             path.is_absolute() && path.is_file(),
             "{label} executable is unavailable"
-        )
+        );
     }
     Ok(value)
 }
+
 fn executable_ready(value: Option<&str>) -> bool {
     value
         .map(Path::new)
         .is_some_and(|path| path.is_absolute() && path.is_file())
 }
+
 fn runtime_state(te: bool, tp: Option<&str>, se: bool, sp: Option<&str>) -> String {
     if !te && !se {
         "unconfigured".to_owned()
@@ -1574,13 +1834,14 @@ fn runtime_state(te: bool, tp: Option<&str>, se: bool, sp: Option<&str>) -> Stri
         "degraded".to_owned()
     }
 }
+
 fn runtime_health(te: bool, tp: Option<&str>, se: bool, sp: Option<&str>) -> Option<String> {
     let mut issues = Vec::new();
     if te && !executable_ready(tp) {
-        issues.push("transcription executable unavailable")
+        issues.push("transcription executable unavailable");
     }
     if se && !executable_ready(sp) {
-        issues.push("synthesis executable unavailable")
+        issues.push("synthesis executable unavailable");
     }
     Some(if issues.is_empty() {
         if te || se {
@@ -1595,7 +1856,8 @@ fn runtime_health(te: bool, tp: Option<&str>, se: bool, sp: Option<&str>) -> Opt
 
 async fn work_directory(state: &Arc<AppState>, id: &str) -> Result<PathBuf> {
     ensure!(
-        id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
+        id.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-'),
         "invalid local job ID"
     );
     let path = state
@@ -1607,9 +1869,10 @@ async fn work_directory(state: &Arc<AppState>, id: &str) -> Result<PathBuf> {
     fs::create_dir_all(&path).await?;
     Ok(path)
 }
+
 async fn cleanup(path: &Path) {
     if let Err(error) = fs::remove_dir_all(path).await {
-        warn!(?error,path=%path.display(),"unable to remove POD job directory")
+        warn!(?error, path = %path.display(), "unable to remove POD job directory");
     }
 }
 
@@ -1624,36 +1887,45 @@ fn installation_id() -> Result<String> {
         }
     }
 }
+
 fn secret_entry(key: &str) -> Result<Entry> {
     Entry::new(CREDENTIAL_SERVICE, key).map_err(Into::into)
 }
+
 fn save_secrets(key: &str, value: &StoredSecrets) -> Result<()> {
     secret_entry(key)?.set_password(&serde_json::to_string(value)?)?;
     Ok(())
 }
+
 fn load_secrets(key: &str) -> Result<StoredSecrets> {
     serde_json::from_str(&secret_entry(key)?.get_password()?).map_err(Into::into)
 }
+
 fn delete_secrets(key: &str) {
     if let Ok(entry) = secret_entry(key) {
         let _ = entry.delete_credential();
     }
 }
+
 fn lease_entry(key: &str) -> Result<Entry> {
     Entry::new(LEASE_SERVICE, key).map_err(Into::into)
 }
+
 fn save_lease(key: &str, value: &str) -> Result<()> {
     lease_entry(key)?.set_password(value)?;
     Ok(())
 }
+
 fn load_lease(key: &str) -> Result<String> {
     lease_entry(key)?.get_password().map_err(Into::into)
 }
+
 fn delete_lease(key: &str) {
     if let Ok(entry) = lease_entry(key) {
         let _ = entry.delete_credential();
     }
 }
+
 fn load_lease_for_job(state: &Arc<AppState>, id: &str) -> Result<String> {
     let connection = state.connection()?;
     let key: String = connection.query_row(
@@ -1673,9 +1945,21 @@ fn receipt(
     code: Option<&str>,
     metadata: &Value,
 ) -> Result<()> {
-    connection.execute("INSERT INTO pod_provider_runtime_receipts (receipt_id,connection_id,local_job_id,event_type,outcome,detail_code,metadata_json,created_at_utc) VALUES (?1,?2,?3,?4,?5,?6,?7,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",params![Uuid::new_v4().to_string(),connection_id,job_id,event,outcome,code.map(|value|bounded(value,100)),serde_json::to_string(metadata)?])?;
+    connection.execute(
+        "INSERT INTO pod_provider_runtime_receipts (receipt_id,connection_id,local_job_id,event_type,outcome,detail_code,metadata_json,created_at_utc) VALUES (?1,?2,?3,?4,?5,?6,?7,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+        params![
+            Uuid::new_v4().to_string(),
+            connection_id,
+            job_id,
+            event,
+            outcome,
+            code.map(|value| bounded(value, 100)),
+            serde_json::to_string(metadata)?
+        ],
+    )?;
     Ok(())
 }
+
 fn receipt_tx(
     tx: &rusqlite::Transaction<'_>,
     connection_id: &str,
@@ -1685,18 +1969,39 @@ fn receipt_tx(
     code: Option<&str>,
     metadata: &Value,
 ) -> Result<()> {
-    tx.execute("INSERT INTO pod_provider_runtime_receipts (receipt_id,connection_id,local_job_id,event_type,outcome,detail_code,metadata_json,created_at_utc) VALUES (?1,?2,?3,?4,?5,?6,?7,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",params![Uuid::new_v4().to_string(),connection_id,job_id,event,outcome,code.map(|value|bounded(value,100)),serde_json::to_string(metadata)?])?;
+    tx.execute(
+        "INSERT INTO pod_provider_runtime_receipts (receipt_id,connection_id,local_job_id,event_type,outcome,detail_code,metadata_json,created_at_utc) VALUES (?1,?2,?3,?4,?5,?6,?7,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+        params![
+            Uuid::new_v4().to_string(),
+            connection_id,
+            job_id,
+            event,
+            outcome,
+            code.map(|value| bounded(value, 100)),
+            serde_json::to_string(metadata)?
+        ],
+    )?;
     Ok(())
 }
+
 fn mark_connection_error(
     connection: &Connection,
     id: &str,
     code: &str,
     message: &str,
 ) -> Result<()> {
-    connection.execute("UPDATE cloud_connections SET state='degraded',last_error=?1,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?2 AND state!='disconnected'",params![bounded(message,500),id])?;
-    connection.execute("UPDATE provider_connection_profiles SET lifecycle_state='error',updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1",params![id])?;
-    connection.execute("UPDATE pod_provider_connections SET last_error_code=?1,last_error_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?2",params![bounded(code,100),id])?;
+    connection.execute(
+        "UPDATE cloud_connections SET state='degraded',last_error=?1,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?2 AND state!='disconnected'",
+        params![bounded(message, 500), id],
+    )?;
+    connection.execute(
+        "UPDATE provider_connection_profiles SET lifecycle_state='error',updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?1",
+        params![id],
+    )?;
+    connection.execute(
+        "UPDATE pod_provider_connections SET last_error_code=?1,last_error_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=?2",
+        params![bounded(code, 100), id],
+    )?;
     receipt(
         connection,
         id,
@@ -1704,7 +2009,7 @@ fn mark_connection_error(
         "pod.worker.error",
         "warning",
         Some(code),
-        &json!({"message":bounded(message,500)}),
+        &json!({"message": bounded(message, 500)}),
     )
 }
 
@@ -1718,6 +2023,7 @@ fn internal_error(code: &'static str, error: anyhow::Error) -> (StatusCode, Json
         }),
     )
 }
+
 fn action_error(code: &'static str, error: anyhow::Error) -> (StatusCode, Json<ApiError>) {
     (
         StatusCode::UNPROCESSABLE_ENTITY,
@@ -1728,6 +2034,7 @@ fn action_error(code: &'static str, error: anyhow::Error) -> (StatusCode, Json<A
         }),
     )
 }
+
 fn task_error(error: tokio::task::JoinError) -> (StatusCode, Json<ApiError>) {
     internal_error("pod_task_failed", anyhow!(error))
 }
@@ -1735,6 +2042,7 @@ fn task_error(error: tokio::task::JoinError) -> (StatusCode, Json<ApiError>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn signature_contract_matches_pod_server() {
         let body = br#"{"voice_runtime_health":"healthy"}"#;
@@ -1753,11 +2061,13 @@ mod tests {
             )
         );
     }
+
     #[test]
     fn sync_code_is_strict() {
         assert!(valid_sync_code("POD-1111-2222-3333-4444-5555-6666"));
         assert!(!valid_sync_code("POD-1111-2222"));
     }
+
     #[test]
     fn provider_url_requires_https() {
         assert!(normalize_url("https://pod.example/path").is_ok());
