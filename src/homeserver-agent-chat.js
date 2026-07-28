@@ -413,6 +413,16 @@ function selectedContext() {
   return [...document.querySelectorAll('input[name="hs-chat-context"]:checked')].map((input) => input.value);
 }
 
+function selectedDatasetKeys(context) {
+  const keys = new Set(context.filter((value) => !["connections", "operational_data"].includes(value)));
+  if (context.includes("operational_data")) {
+    (workspace?.data_sources || [])
+      .filter((source) => String(source.key || "").startsWith("dataset:") && !["planned_phase_5c", "paused", "not_granted"].includes(source.state))
+      .forEach((source) => keys.add(source.key));
+  }
+  return [...keys];
+}
+
 async function submitPrompt(event) {
   event.preventDefault();
   const input = document.querySelector("#hs-chat-input");
@@ -425,7 +435,7 @@ async function submitPrompt(event) {
     mode: document.querySelector("#hs-chat-mode")?.value || "ask",
     prompt,
     connection_ids: context.includes("connections") ? (workspace?.connections || []).map((connection) => connection.connection_id) : [],
-    dataset_keys: context,
+    dataset_keys: selectedDatasetKeys(context),
     goal_ids: goalId ? [goalId] : [],
     knowledge_query: context.includes("knowledge") ? prompt : null,
     model: document.querySelector("#hs-chat-model")?.value || null,
