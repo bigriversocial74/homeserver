@@ -2,87 +2,278 @@ name: HomeServer Production Quality
 
 on:
   pull_request:
-
-permissions:
-  contents: write
+  push:
+    branches:
+      - main
 
 concurrency:
-  group: phase6a-agent-chat-register-${{ github.ref }}
-  cancel-in-progress: false
+  group: homeserver-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   validate:
-    if: github.event.pull_request.head.ref == 'feature/homeserver-agent-chat-connection-ui-v1-20260728'
     runs-on: windows-latest
-    timeout-minutes: 35
+    timeout-minutes: 90
+
     steps:
-      - name: Check out Agent Chat branch
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: feature/homeserver-agent-chat-connection-ui-v1-20260728
-          fetch-depth: 0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
-      - name: Install Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/cargo-audit.exe
+            target
+          key: windows-cargo-${{ hashFiles('Cargo.toml', '**/Cargo.toml', 'Cargo.lock') }}
+          restore-keys: windows-cargo-
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Register Phase 6A Agent Chat commands
+      - name: Resolve and verify release version
+        id: release
         shell: pwsh
         run: |
-          @'
-          from pathlib import Path
+          $cargo = Get-Content Cargo.toml -Raw
+          $match = [regex]::Match($cargo, '(?ms)\[workspace\.package\].*?^version\s*=\s*"([^"]+)"')
+          if (-not $match.Success) { throw "Unable to resolve workspace release version" }
+          $version = $match.Groups[1].Value
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Release version must use strict semantic versioning" }
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $tauri = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          if ($package.version -ne $version) { throw "package.json version does not match $version" }
+          if ($tauri.version -ne $version) { throw "tauri.conf.json version does not match $version" }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-          path = Path("src-tauri/src/lib.rs")
-          text = path.read_text(encoding="utf-8")
-          anchor = "            cloud::homeserver_sync_all_cloud_connections,\n"
-          commands = """            cloud::homeserver_microgifter_status,
-            cloud::homeserver_connect_microgifter,
-            cloud::homeserver_refresh_microgifter_entitlement,
-            cloud::homeserver_send_microgifter_heartbeat,
-            cloud::homeserver_rotate_microgifter_credentials,
-            cloud::homeserver_microgifter_update_preferences,
-            cloud::homeserver_save_microgifter_update_preferences,
-            cloud::homeserver_authorize_microgifter_update,
-            cloud::homeserver_start_microgifter_device_replacement,
-            cloud::homeserver_complete_microgifter_device_replacement,
-"""
-          if "cloud::homeserver_microgifter_status," not in text:
-              if anchor not in text:
-                  raise SystemExit("Tauri cloud command anchor not found")
-              text = text.replace(anchor, anchor + commands, 1)
-          path.write_text(text, encoding="utf-8")
-          '@ | python -
-
-      - name: Validate Agent Chat frontend
+      - name: Verify dependency lock stability
         shell: pwsh
         run: |
-          node --check src/homeserver-agent-chat.js
-          npm ci
+          $PSNativeCommandUseErrorActionPreference = $false
+          npm install --package-lock-only --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo generate-lockfile
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --exit-code -- Cargo.lock package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend and PowerShell syntax
+        shell: pwsh
+        run: |
           npm run check:frontend
-          npm run build
-          cargo fmt --all
-          cargo fmt --all --check
-
-      - name: Restore permanent workflow and commit clean source
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          git fetch origin main
-          git checkout origin/main -- .github/workflows/phase-1-foundation.yml
-          Remove-Item .github/workflows/phase6a-agent-chat-register.yml -Force -ErrorAction SilentlyContinue
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src-tauri/src/lib.rs src-tauri/src/cloud.rs .github/workflows/phase-1-foundation.yml .github/workflows/phase6a-agent-chat-register.yml
-          if (-not (git diff --cached --quiet)) {
-            git commit -m "Register HomeServer Agent Chat Tauri commands"
-            git push origin HEAD:feature/homeserver-agent-chat-connection-ui-v1-20260728
+          foreach ($script in Get-ChildItem scripts -Filter "*.ps1") {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              throw "PowerShell syntax validation failed for $($script.Name)"
+            }
           }
+
+      - name: Security boundary regression checks
+        run: python scripts/validate-security-boundaries.py
+
+      - name: Frontend build and dependency audit
+        shell: pwsh
+        run: |
+          npm run build
+          npm audit --audit-level=high
+
+      - name: Rust dependency audit
+        shell: pwsh
+        run: |
+          if (-not (Get-Command cargo-audit -ErrorAction SilentlyContinue)) {
+            cargo install cargo-audit --version 0.22.2 --locked
+          }
+          cargo audit
+
+      - name: Prepare generated Windows resources
+        run: npm run prepare:icons
+
+      - name: Rust formatting
+        run: cargo fmt --all --check
+
+      - name: Build native service, updater, and MCP bridge from clean output
+        shell: pwsh
+        run: |
+          cargo clean --package microgifter-homeserver-service --package microgifter-homeserver-updater --package microgifter-homeserver-mcp
+          Remove-Item target/release/microgifter-homeserver-service.exe -Force -ErrorAction SilentlyContinue
+          Remove-Item target/release/microgifter-homeserver-updater.exe -Force -ErrorAction SilentlyContinue
+          Remove-Item target/release/microgifter-homeserver-mcp.exe -Force -ErrorAction SilentlyContinue
+          Remove-Item src-tauri/resources/microgifter-homeserver-service.exe -Force -ErrorAction SilentlyContinue
+          Remove-Item src-tauri/resources/microgifter-homeserver-updater.exe -Force -ErrorAction SilentlyContinue
+          Remove-Item src-tauri/resources/microgifter-homeserver-mcp.exe -Force -ErrorAction SilentlyContinue
+          cargo build --release --package microgifter-homeserver-service --locked *> service-build.log
+          if ($LASTEXITCODE -ne 0) { Get-Content service-build.log -Tail 200; exit $LASTEXITCODE }
+          cargo build --release --package microgifter-homeserver-updater --locked *> updater-build.log
+          if ($LASTEXITCODE -ne 0) { Get-Content updater-build.log -Tail 200; exit $LASTEXITCODE }
+          cargo build --release --package microgifter-homeserver-mcp --locked *> mcp-build.log
+          if ($LASTEXITCODE -ne 0) { Get-Content mcp-build.log -Tail 200; exit $LASTEXITCODE }
+          $expectedService = "MicrogifterHomeServer ${{ steps.release.outputs.version }}"
+          $expectedUpdater = "MicrogifterHomeServerUpdater ${{ steps.release.outputs.version }}"
+          $expectedMcp = "MicrogifterHomeServerMCP ${{ steps.release.outputs.version }}"
+          if ((& target/release/microgifter-homeserver-service.exe --version | Out-String).Trim() -ne $expectedService) { throw "Service version mismatch" }
+          if ((& target/release/microgifter-homeserver-updater.exe --version | Out-String).Trim() -ne $expectedUpdater) { throw "Updater version mismatch" }
+          if ((& target/release/microgifter-homeserver-mcp.exe --version | Out-String).Trim() -ne $expectedMcp) { throw "MCP bridge version mismatch" }
+          Copy-Item target/release/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe -Force
+          Copy-Item target/release/microgifter-homeserver-updater.exe src-tauri/resources/microgifter-homeserver-updater.exe -Force
+          Copy-Item target/release/microgifter-homeserver-mcp.exe src-tauri/resources/microgifter-homeserver-mcp.exe -Force
+
+      - name: Upload native compiler logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-build-logs
+          path: |
+            service-build.log
+            updater-build.log
+            mcp-build.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Full workspace tests
+        shell: pwsh
+        run: |
+          cargo test --workspace --locked *> cargo-test.log
+          if ($LASTEXITCODE -ne 0) { Get-Content cargo-test.log -Tail 240; exit $LASTEXITCODE }
+
+      - name: Full workspace lint
+        shell: pwsh
+        run: |
+          cargo clippy --workspace --all-targets --locked -- -D warnings *> cargo-clippy.log
+          if ($LASTEXITCODE -ne 0) { Get-Content cargo-clippy.log -Tail 240; exit $LASTEXITCODE }
+
+      - name: Upload workspace logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: workspace-quality-logs
+          path: |
+            cargo-test.log
+            cargo-clippy.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Service, cloud, backup, and update API smoke tests
+        shell: pwsh
+        run: |
+          & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-service.ps1 *> service-smoke.log
+          if ($LASTEXITCODE -ne 0) { Get-Content service-smoke.log -Tail 240; exit $LASTEXITCODE }
+          & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-cloud-connector.ps1 *> cloud-smoke.log
+          if ($LASTEXITCODE -ne 0) { Get-Content cloud-smoke.log -Tail 240; exit $LASTEXITCODE }
+          & pwsh -NoLogo -NoProfile -NonInteractive -File ./scripts/smoke-test-update-api.ps1 *> update-api-smoke.log
+          if ($LASTEXITCODE -ne 0) { Get-Content update-api-smoke.log -Tail 240; exit $LASTEXITCODE }
+
+      - name: Upload service smoke logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: service-smoke-logs
+          path: |
+            service-smoke.log
+            cloud-smoke.log
+            update-api-smoke.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          npm run tauri:build *> tauri-build.log
+          if ($LASTEXITCODE -ne 0) { Get-Content tauri-build.log -Tail 240; exit $LASTEXITCODE }
+          $bundle = "target/release/bundle/nsis"
+          $installer = Get-ChildItem $bundle -Filter "*-setup.exe" | Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer was not produced" }
+          Copy-Item $installer.FullName "$bundle/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe" -Force
+
+      - name: Installed LocalSystem security, backup, and uninstall smoke test
+        shell: pwsh
+        run: ./scripts/smoke-test-installer.ps1 -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe
+
+      - name: Verify installed release and Windows registration
+        shell: pwsh
+        run: |
+          & pwsh -NoLogo -NoProfile -NonInteractive `
+            -File ./scripts/verify-installer-release.ps1 `
+            -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe `
+            -ExpectedVersion "${{ steps.release.outputs.version }}" *> installer-verification.log
+          if ($LASTEXITCODE -ne 0) { Get-Content installer-verification.log -Tail 260; exit $LASTEXITCODE }
+
+      - name: Create trusted CI Authenticode update package
+        id: sign_update
+        shell: pwsh
+        run: |
+          $bundle = "target/release/bundle/nsis"
+          $source = "$bundle/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe"
+          $signed = "$bundle/Microgifter-HomeServer-Update-Test.exe"
+          Copy-Item $source $signed -Force
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Microgifter CI Update Test" -CertStoreLocation "Cert:\CurrentUser\My" -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 -KeyExportPolicy Exportable -NotAfter (Get-Date).AddDays(2)
+          Export-Certificate -Cert $cert -FilePath "$bundle/Microgifter-CI-Update-Test.cer" | Out-Null
+          Import-Certificate -FilePath "$bundle/Microgifter-CI-Update-Test.cer" -CertStoreLocation "Cert:\LocalMachine\Root" | Out-Null
+          Import-Certificate -FilePath "$bundle/Microgifter-CI-Update-Test.cer" -CertStoreLocation "Cert:\LocalMachine\TrustedPublisher" | Out-Null
+          $signature = Set-AuthenticodeSignature -FilePath $signed -Certificate $cert -HashAlgorithm SHA256
+          if ($signature.Status -ne "Valid") { throw "Unable to create trusted CI update installer: $($signature.StatusMessage)" }
+          $cert.Thumbprint | Set-Content update-test-thumbprint.txt -NoNewline
+          "thumbprint=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Installed signed update and rollback smoke test
+        shell: pwsh
+        run: |
+          Import-Module Microsoft.PowerShell.Security -Force
+          $env:PSModulePath = @(
+            (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\Modules")
+            (Join-Path $env:ProgramFiles "WindowsPowerShell\Modules")
+          ) -join [System.IO.Path]::PathSeparator
+          ./scripts/smoke-test-updater.ps1 `
+            -InstallerPath target/release/bundle/nsis/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe `
+            -UpdateInstallerPath target/release/bundle/nsis/Microgifter-HomeServer-Update-Test.exe `
+            -SignerThumbprint "${{ steps.sign_update.outputs.thumbprint }}" `
+            -ExpectedVersion "${{ steps.release.outputs.version }}" *> updater-smoke.log
+          $log = Get-Content updater-smoke.log -Raw
+          Get-Content updater-smoke.log -Tail 280
+          $marker = "HomeServer signed update, Authenticode verification, health confirmation, automatic rollback, installer preservation, and cleanup smoke tests passed."
+          if ($log -match "HomeServer updater smoke failure:" -or -not $log.Contains($marker)) { exit 1 }
+
+      - name: Remove CI Authenticode trust material
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path update-test-thumbprint.txt) {
+            $thumbprint = (Get-Content update-test-thumbprint.txt -Raw).Trim()
+            Remove-Item "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
+            Remove-Item "Cert:\LocalMachine\Root\$thumbprint" -Force -ErrorAction SilentlyContinue
+            Remove-Item "Cert:\LocalMachine\TrustedPublisher\$thumbprint" -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload release verification artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-verification-logs
+          path: |
+            tauri-build.log
+            installer-verification.log
+            updater-smoke.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload verified versioned installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Verified
+          path: target/release/bundle/nsis/Microgifter-HomeServer-v${{ steps.release.outputs.version }}-Setup.exe
+          if-no-files-found: error
+          retention-days: 14
