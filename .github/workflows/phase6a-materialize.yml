@@ -1,0 +1,172 @@
+name: Phase 6A Materialize Service
+
+on:
+  push:
+    branches:
+      - feature/microgifter-entitlement-update-client-v1-20260728
+    paths:
+      - '.github/workflows/phase6a-materialize.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/microgifter-entitlement-update-client-v1-20260728
+          fetch-depth: 0
+
+      - name: Materialize Phase 6A backend
+        shell: python
+        run: |
+          from pathlib import Path
+          import base64
+          import json
+          import zlib
+
+          root = Path.cwd()
+          encoded = "".join(
+              part.read_text(encoding="utf-8").strip()
+              for part in sorted((root / ".phase6a-materialize").glob("part*.b85"))
+          )
+          files = json.loads(zlib.decompress(base64.b85decode(encoded)).decode("utf-8"))
+          for relative, content in files.items():
+              target = root / relative
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_text(content, encoding="utf-8")
+
+          def replace_once(path, old, new):
+              target = root / path
+              text = target.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"expected integration anchor missing in {path}: {old[:80]!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "crates/homeserver-service/src/main.rs",
+              "mod model_center;\nmod operational_data;",
+              "mod model_center;\nmod microgifter_connection;\nmod operational_data;",
+          )
+          replace_once(
+              "crates/homeserver-service/src/main.rs",
+              "        if let Err(error) = model_center::health_check(&connection) {",
+              "        if let Err(error) = microgifter_connection::health_check(&connection) {\n"
+              "            error!(?error, \"HomeServer Microgifter entitlement database health check failed\");\n"
+              "            return HealthSnapshot::needs_attention(\n"
+              "                &self.config.server_name,\n"
+              "                \"microgifter_entitlement_integrity_check_failed\",\n"
+              "            );\n"
+              "        }\n"
+              "        if let Err(error) = model_center::health_check(&connection) {",
+          )
+          replace_once(
+              "crates/homeserver-service/src/main.rs",
+              "            update_store::maintain_history(&connection)?;\n            model_center::maintain_history(&connection)?;",
+              "            update_store::maintain_history(&connection)?;\n"
+              "            microgifter_connection::maintain_history(&connection)?;\n"
+              "            model_center::maintain_history(&connection)?;",
+          )
+          replace_once(
+              "crates/homeserver-service/src/main.rs",
+              "                update_store::record_application_result(&connection, &result)?;",
+              "                update_store::record_application_result(&connection, &result)?;\n"
+              "                microgifter_connection::record_update_result_receipt(\n"
+              "                    &connection,\n"
+              "                    &result.update_id,\n"
+              "                    &result.target_version,\n"
+              "                    result.state.as_str(),\n"
+              "                    result.failure_code.as_deref(),\n"
+              "                )?;",
+          )
+          replace_once(
+              "crates/homeserver-service/src/main.rs",
+              "            let available = update_store::latest_in_state(&connection, UpdateState::Available)?;\n            update_store::mark_downloading(&connection, &available.record.update_id)?",
+              "            let available = update_store::latest_in_state(&connection, UpdateState::Available)?;\n"
+              "            microgifter_connection::ensure_update_download_allowed(\n"
+              "                &connection,\n"
+              "                &available.record.update_id,\n"
+              "            )?;\n"
+              "            update_store::mark_downloading(&connection, &available.record.update_id)?",
+          )
+          replace_once(
+              "crates/homeserver-service/src/main.rs",
+              "        let stored = update_store::latest_in_state(&*self.connection()?, UpdateState::Staged)?;",
+              "        let stored = {\n"
+              "            let connection = self.connection()?;\n"
+              "            let stored = update_store::latest_in_state(&connection, UpdateState::Staged)?;\n"
+              "            microgifter_connection::ensure_update_download_allowed(\n"
+              "                &connection,\n"
+              "                &stored.record.update_id,\n"
+              "            )?;\n"
+              "            microgifter_connection::ensure_update_install_window(&connection)?;\n"
+              "            stored\n"
+              "        };",
+          )
+
+          replace_once(
+              "crates/homeserver-service/src/app.rs",
+              "    mcp_runtime, model_center, operational_data, review_intelligence, semantic_vault, update,",
+              "    mcp_runtime, microgifter_connection, model_center, operational_data, review_intelligence,\n"
+              "    semantic_vault, update,",
+          )
+          replace_once(
+              "crates/homeserver-service/src/app.rs",
+              "    cloud_registry::initialize(&connection)?;\n    operational_data::initialize(&connection)?;",
+              "    cloud_registry::initialize(&connection)?;\n"
+              "    microgifter_connection::initialize(&connection)?;\n"
+              "    operational_data::initialize(&connection)?;",
+          )
+          replace_once(
+              "crates/homeserver-service/src/app.rs",
+              "        update_store::record_application_result(&connection, &result)?;",
+              "        update_store::record_application_result(&connection, &result)?;\n"
+              "        microgifter_connection::record_update_result_receipt(\n"
+              "            &connection,\n"
+              "            &result.update_id,\n"
+              "            &result.target_version,\n"
+              "            result.state.as_str(),\n"
+              "            result.failure_code.as_deref(),\n"
+              "        )?;",
+          )
+          replace_once(
+              "crates/homeserver-service/src/app.rs",
+              "    let cloud_worker = tokio::spawn(cloud_registry::run(state.clone(), shutdown.clone()));",
+              "    let cloud_worker = tokio::spawn(cloud_registry::run(state.clone(), shutdown.clone()));\n"
+              "    let microgifter_connection_worker = tokio::spawn(microgifter_connection::run(\n"
+              "        state.clone(),\n"
+              "        shutdown.clone(),\n"
+              "    ));",
+          )
+          replace_once(
+              "crates/homeserver-service/src/app.rs",
+              "            .merge(cloud_pairing_v2::router(state.clone()))\n            .merge(knowledge_vault::router(state.clone()))",
+              "            .merge(cloud_pairing_v2::router(state.clone()))\n"
+              "            .merge(microgifter_connection::router(state.clone()))\n"
+              "            .merge(knowledge_vault::router(state.clone()))",
+          )
+          replace_once(
+              "crates/homeserver-service/src/app.rs",
+              "    cloud_worker.abort();\n    review_intelligence_worker.abort();",
+              "    cloud_worker.abort();\n"
+              "    microgifter_connection_worker.abort();\n"
+              "    review_intelligence_worker.abort();",
+          )
+
+          for path in (root / ".phase6a-materialize").glob("*"):
+              path.unlink()
+          (root / ".phase6a-materialize").rmdir()
+          (root / ".github/workflows/phase6a-materialize.yml").unlink()
+
+      - name: Format Rust
+        run: cargo fmt --all
+
+      - name: Commit materialized implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Implement Phase 6A entitlement and update client service"
+          git push origin HEAD:feature/microgifter-entitlement-update-client-v1-20260728
