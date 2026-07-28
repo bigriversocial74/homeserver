@@ -69,4 +69,27 @@ elif new_arguments not in text:
     raise SystemExit("campaign plan arguments anchor was not found")
 
 path.write_text(text, encoding="utf-8", newline="\n")
-print("Review Intelligence now creates real provider campaign draft plans.")
+
+validator_path = Path("scripts/validate-review-intelligence.py")
+validator = validator_path.read_text(encoding="utf-8")
+old_markers = '''    "Prepare Supervised Campaign Plan",
+    "homeserver_run_review_analysis",
+    "homeserver_create_agent_plan",
+'''
+new_markers = '''    "Prepare Supervised Campaign Plan",
+    "review-plan-campaign-title",
+    "leave blank to create a draft",
+    "review-plan-reward-id",
+    "A title is required to create a real Microgifter campaign draft",
+    "A Microgifter campaign ID is required for publish, pause, resume, and send actions",
+    "reward_template_id: rewardTemplateId || null",
+    "homeserver_run_review_analysis",
+    "homeserver_create_agent_plan",
+'''
+if old_markers in validator:
+    validator = validator.replace(old_markers, new_markers, 1)
+elif new_markers not in validator:
+    raise SystemExit("review intelligence validator campaign marker anchor was not found")
+validator_path.write_text(validator, encoding="utf-8", newline="\n")
+
+print("Review Intelligence now creates and validates real provider campaign draft plans.")
