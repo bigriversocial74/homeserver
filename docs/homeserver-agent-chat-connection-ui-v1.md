@@ -1,6 +1,6 @@
 # HomeServer Agent Chat and Connection Interface v1
 
-Status: chat-first frontend and Phase 6A bridge committed; full Production Quality validation running
+Status: chat-first frontend and Phase 6A bridge committed; initial chat-history load repair running
 
 ## Scope
 
@@ -31,13 +31,14 @@ Status: chat-first frontend and Phase 6A bridge committed; full Production Quali
 - Existing model, goal, mode, connection, and local dataset context controls.
 - Microgifter connection drawer with Sync Code connection, lifecycle state, entitlement, merchant/site counts, capabilities, heartbeat, lease refresh, and credential rotation.
 - Explicit local-first independence messaging.
+- Deterministic initial workspace refresh so existing chat history loads on first open.
 
 ## Validation checkpoints
 
 - Coordinated Cloud Connector Contract run #245 passed before lock normalization, confirming the existing pairing node and exact cross-repository authority contract remained intact.
 - Agent Chat dependency lock normalization run #2 passed and committed only the Windows-generated lockfile update.
-- Temporary workflow helpers were removed; the permanent Production Quality workflow was restored unchanged.
-- Full frontend, Rust, installer, security, and signed-update validation is running on the clean branch.
+- Temporary workflow helpers are self-removing; the permanent Production Quality workflow remains the final validation authority.
+- Full frontend, Rust, installer, security, and signed-update validation will run on the repaired clean branch.
 
 ## Permanent boundaries
 
