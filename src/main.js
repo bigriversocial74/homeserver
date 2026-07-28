@@ -21,6 +21,7 @@ let activePage = window.location.hash.replace("#", "") || "dashboard";
 
 const pages = [
   ["dashboard", "Dashboard", "dashboard"],
+  ["agent", "HomeServer Agent", "integrations"],
   ["home", "Home", "home"],
   ["apps", "Apps", "apps"],
   ["backups", "Backups", "backup"],
@@ -619,17 +620,20 @@ function renderCurrentPage() {
     case "settings": return renderSettings();
     case "sync": return renderSync();
     case "system": return renderSystem();
+    case "agent": return `<div class="homeserver-agent-route-host" data-homeserver-agent-host="true"></div>`;
     default: return renderDashboard();
   }
 }
 
 function render() {
-  if (window.location.hash === "#agent" && app.querySelector('[data-homeserver-chat-mounted="true"]')) return;
   const restorePending = Boolean(backupCatalog?.restore_pending || statusSnapshot?.restore_pending);
   const prefs = loadPreferences();
   document.documentElement.classList.toggle("compact-ui", Boolean(prefs.compact));
   app.innerHTML = `<div class="desktop-shell">${renderSidebar()}<main class="app-main">${renderTopbar()}<section class="page-canvas">${notice ? `<div class="notice ${notice.kind}">${escapeHtml(notice.message)}</div>` : ""}${restorePending ? `<div class="notice warning"><strong>Restore staged.</strong> Restart the HomeServer service or Windows to apply the verified database. The current database is preserved for rollback.</div>` : ""}${renderCurrentPage()}<footer class="app-footer"><span>Local API: ${escapeHtml(statusSnapshot?.api_url || "http://127.0.0.1:47831")}</span><span>Updated: ${escapeHtml(formatDate(statusSnapshot?.last_updated_utc))}</span></footer></section></main></div>`;
   bindEvents();
+  if (activePage === "agent") {
+    window.dispatchEvent(new CustomEvent("homeserver-agent-route"));
+  }
 }
 
 function bindEvents() {
@@ -1061,14 +1065,6 @@ async function loadAll(clearNotice = true) {
   render();
 }
 
-document.addEventListener("click", (event) => {
-  if (!(event.target instanceof Element)) return;
-  const control = event.target.closest("[data-page]");
-  if (!control) return;
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  navigate(control.dataset.page);
-}, true);
 
 window.addEventListener("hashchange", () => {
   const page = window.location.hash.replace("#", "");
