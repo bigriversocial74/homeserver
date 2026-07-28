@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   normalize:
-    runs-on: ubuntu-latest
+    runs-on: windows-2025
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -22,15 +22,19 @@ jobs:
           toolchain: stable
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
-          node-version: '24'
+          node-version: '22'
           cache: npm
+          cache-dependency-path: package-lock.json
       - name: Generate normalized dependency locks
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          cargo metadata --format-version 1 >/dev/null
-          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-          git diff -- Cargo.lock package-lock.json | tee lock-diff.patch
+          $PSNativeCommandUseErrorActionPreference = $false
+          npm install --package-lock-only --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo generate-lockfile
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff -- Cargo.lock package-lock.json | Set-Content lock-diff.patch
+          Get-Content lock-diff.patch
       - name: Upload normalized locks
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
