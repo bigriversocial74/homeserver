@@ -514,7 +514,16 @@ async function runProviderAction(event) {
 }
 
 function delegatedAgentClick(event) {
-  if (!isAgentPage() || !(event.target instanceof Element)) return;
+  if (!(event.target instanceof Element)) return;
+  const navigation = event.target.closest('[data-homeserver-chat-nav="true"]');
+  if (navigation) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    window.location.hash = `#${PAGE_KEY}`;
+    window.setTimeout(() => mount(true), 0);
+    return;
+  }
+  if (!isAgentPage()) return;
   const control = event.target.closest("button,[data-chat-thread],[data-chat-suggestion],[data-close-provider],[data-close-connect],[data-provider-action]");
   if (!control || !control.closest('[data-homeserver-chat-mounted="true"]')) return;
 
