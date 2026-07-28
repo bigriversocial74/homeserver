@@ -39,7 +39,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
-          python scripts/apply-phase5c-review-intelligence.py *> focused-integration.log
+          python scripts/fix-phase5c-review-patcher.py *> focused-integration.log
+          if ($LASTEXITCODE -eq 0) {
+            python scripts/apply-phase5c-review-intelligence.py *>> focused-integration.log
+          }
           $status = $LASTEXITCODE
           Get-Content focused-integration.log
           exit $status
