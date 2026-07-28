@@ -52,6 +52,7 @@ jobs:
           python scripts/fix-phase5c-review-patcher.py *> focused-integration.log
           if ($LASTEXITCODE -eq 0) { python scripts/apply-phase5c-review-intelligence.py *>> focused-integration.log }
           if ($LASTEXITCODE -eq 0) { python scripts/fix-phase5c-review-rust.py *>> focused-integration.log }
+          if ($LASTEXITCODE -eq 0) { python scripts/fix-phase5c-review-clippy.py *>> focused-integration.log }
           if ($LASTEXITCODE -eq 0) { python scripts/apply-phase5c-review-frontend.py *>> focused-integration.log }
           $status = $LASTEXITCODE
           Get-Content focused-integration.log
