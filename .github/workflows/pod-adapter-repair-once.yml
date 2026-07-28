@@ -4,12 +4,15 @@ on:
   push:
     branches:
       - feature/pod-provider-voice-adapter-v1-20260728
+  pull_request:
+    types: [synchronize, reopened, ready_for_review]
 
 permissions:
   contents: write
 
 jobs:
   repair:
+    if: github.event_name == 'push' || github.head_ref == 'feature/pod-provider-voice-adapter-v1-20260728'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,10 +30,7 @@ jobs:
           source = path.read_text(encoding='utf-8')
 
           replacements = [
-              (
-                  'use crate::{database, AppState};',
-                  'use crate::AppState;',
-              ),
+              ('use crate::{database, AppState};', 'use crate::AppState;'),
               (
                   '''    let connection_ids = {
         let connection = state.connection()?;
@@ -135,10 +135,7 @@ jobs:
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)''',
               ),
-              (
-                  '            bearer_token: secrets.bearer_token,',
-                  '            bearer_token: secrets.bearer_token.clone(),',
-              ),
+              ('            bearer_token: secrets.bearer_token,', '            bearer_token: secrets.bearer_token.clone(),'),
           ]
 
           for old, new in replacements:
@@ -151,12 +148,13 @@ jobs:
 
           cargo fmt --all
           rm .github/workflows/pod-adapter-repair-once.yml
+          rm -f .github/pod-adapter-repair-trigger.txt
 
       - name: Commit repaired source and remove helper
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/homeserver-service/src/app/pod_provider_runtime.rs .github/workflows/pod-adapter-repair-once.yml
+          git add crates/homeserver-service/src/app/pod_provider_runtime.rs .github/workflows/pod-adapter-repair-once.yml .github/pod-adapter-repair-trigger.txt
           git commit -m "Repair POD provider native compile defects"
           git push origin HEAD:feature/pod-provider-voice-adapter-v1-20260728
