@@ -38,22 +38,24 @@ jobs:
 
           path = Path("src/homeserver-agent-chat.js")
           text = path.read_text(encoding="utf-8")
-          state_anchor = 'let notice = null;\n'
-          state_replacement = 'let notice = null;\nlet initialized = false;\n'
-          if 'let initialized = false;' not in text:
+          state_anchor = "let notice = null;\n"
+          state_replacement = "let notice = null;\nlet initialized = false;\n"
+          if "let initialized = false;" not in text:
               if state_anchor not in text:
                   raise SystemExit("Agent Chat state anchor not found")
               text = text.replace(state_anchor, state_replacement, 1)
 
-          mount_anchor = '  bindEvents();\n  window.setTimeout(() => {\n'
-          mount_replacement = '''  bindEvents();
-  if (!initialized && !loading) {
-    initialized = true;
-    void refreshAll();
-  }
-  window.setTimeout(() => {
-'''
-          if 'void refreshAll();' not in text:
+          mount_anchor = "  bindEvents();\n  window.setTimeout(() => {\n"
+          mount_replacement = "\n".join([
+              "  bindEvents();",
+              "  if (!initialized && !loading) {",
+              "    initialized = true;",
+              "    void refreshAll();",
+              "  }",
+              "  window.setTimeout(() => {",
+              "",
+          ])
+          if "void refreshAll();" not in text:
               if mount_anchor not in text:
                   raise SystemExit("Agent Chat mount anchor not found")
               text = text.replace(mount_anchor, mount_replacement, 1)
