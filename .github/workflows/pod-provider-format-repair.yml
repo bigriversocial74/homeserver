@@ -1,3 +1,4 @@
+# Branch-scoped helper; remove after the formatter commit lands.
 name: POD Provider Format Repair
 
 on:
