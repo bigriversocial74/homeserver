@@ -1,0 +1,53 @@
+name: Normalize Phase 5C dependency locks
+
+on:
+  push:
+    branches:
+      - feature/phase-5c-review-intelligence-campaign-actions-20260728
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: normalize-phase5c-locks
+  cancel-in-progress: false
+
+jobs:
+  normalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-5c-review-intelligence-campaign-actions-20260728
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Normalize declared dependency locks
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --format-version 1 >/dev/null
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          git diff -- Cargo.lock package-lock.json
+      - name: Commit lock normalization
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- Cargo.lock package-lock.json; then
+            echo 'Dependency locks are already normalized.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.lock package-lock.json
+          git commit -m 'Normalize Phase 5C dependency locks'
+          git push origin HEAD:feature/phase-5c-review-intelligence-campaign-actions-20260728
