@@ -81,7 +81,7 @@ review_path.write_text(review, encoding="utf-8", newline="\n")
 
 ui_path = Path("src/review-intelligence.js")
 ui = ui_path.read_text(encoding="utf-8")
-old_label = 'Automatically process newly imported review and message evidence'
+old_label = 'Process new evidence automatically after synchronization'
 new_label = 'Automatically sync and analyze enabled review and message datasets every 15 minutes'
 if old_label in ui:
     ui = ui.replace(old_label, new_label, 1)
