@@ -1,0 +1,86 @@
+name: Apply Phase 6A compile repair
+
+on:
+  push:
+    branches:
+      - feature/microgifter-entitlement-update-client-v1-20260728
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phase6a-compile-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out Phase 6A branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/microgifter-entitlement-update-client-v1-20260728
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Restore Rust cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-cargo-${{ hashFiles('Cargo.toml', '**/Cargo.toml', 'Cargo.lock') }}
+          restore-keys: windows-cargo-
+
+      - name: Apply deterministic compile repair
+        shell: pwsh
+        run: |
+          python scripts/fix-phase6a-service-compile.py *> phase6a-compile-repair.log
+          $status = $LASTEXITCODE
+          Get-Content phase6a-compile-repair.log
+          exit $status
+
+      - name: Format and compile service
+        shell: pwsh
+        run: |
+          cargo fmt --all *> phase6a-compile-check.log
+          if ($LASTEXITCODE -ne 0) { Get-Content phase6a-compile-check.log; exit $LASTEXITCODE }
+          cargo check --locked --package microgifter-homeserver-service --all-targets *>> phase6a-compile-check.log
+          $status = $LASTEXITCODE
+          Get-Content phase6a-compile-check.log
+          exit $status
+
+      - name: Commit compiler-verified repair
+        shell: pwsh
+        run: |
+          Remove-Item scripts/fix-phase6a-service-compile.py -Force
+          Remove-Item .github/workflows/apply-phase6a-compile-repair.yml -Force
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A crates/homeserver-service/src/microgifter_connection.rs scripts/fix-phase6a-service-compile.py .github/workflows/apply-phase6a-compile-repair.yml
+          git commit -m 'Repair Phase 6A service compilation'
+          git push origin HEAD:feature/microgifter-entitlement-update-client-v1-20260728
+
+      - name: Upload focused diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase6a-compile-repair
+          path: |
+            phase6a-compile-repair.log
+            phase6a-compile-check.log
+          if-no-files-found: ignore
+          retention-days: 7
