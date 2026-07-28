@@ -1,0 +1,88 @@
+name: Register HomeServer Agent Chat commands
+
+on:
+  push:
+    branches:
+      - feature/homeserver-agent-chat-connection-ui-v1-20260728
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phase6a-agent-chat-register
+  cancel-in-progress: false
+
+jobs:
+  register:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/homeserver-agent-chat-connection-ui-v1-20260728
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Register Phase 6A Tauri commands
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          path = Path("src-tauri/src/lib.rs")
+          text = path.read_text(encoding="utf-8")
+          anchor = "            cloud::homeserver_sync_all_cloud_connections,\n"
+          commands = """            cloud::homeserver_microgifter_status,
+            cloud::homeserver_connect_microgifter,
+            cloud::homeserver_refresh_microgifter_entitlement,
+            cloud::homeserver_send_microgifter_heartbeat,
+            cloud::homeserver_rotate_microgifter_credentials,
+            cloud::homeserver_microgifter_update_preferences,
+            cloud::homeserver_save_microgifter_update_preferences,
+            cloud::homeserver_authorize_microgifter_update,
+            cloud::homeserver_start_microgifter_device_replacement,
+            cloud::homeserver_complete_microgifter_device_replacement,
+"""
+          if "cloud::homeserver_microgifter_status," not in text:
+              if anchor not in text:
+                  raise SystemExit("Tauri cloud command anchor not found")
+              text = text.replace(anchor, anchor + commands, 1)
+          path.write_text(text, encoding="utf-8")
+          '@ | python -
+
+      - name: Validate frontend and formatting
+        shell: pwsh
+        run: |
+          node --check src/homeserver-agent-chat.js
+          npm ci
+          npm run check:frontend
+          npm run build
+          cargo fmt --all
+          cargo fmt --all --check
+
+      - name: Commit clean Agent Chat registration
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Remove-Item .github/workflows/phase6a-agent-chat-register.yml -Force
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/src/lib.rs src-tauri/src/cloud.rs .github/workflows/phase6a-agent-chat-register.yml
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "Register HomeServer Agent Chat Tauri commands"
+            git push origin HEAD:feature/homeserver-agent-chat-connection-ui-v1-20260728
+          }
