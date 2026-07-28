@@ -133,6 +133,12 @@ for marker in (
     "remote_context_allowed",
     "Run Deterministic Analysis",
     "Prepare Supervised Campaign Plan",
+    "review-plan-campaign-title",
+    "leave blank to create a draft",
+    "review-plan-reward-id",
+    "A title is required to create a real Microgifter campaign draft",
+    "A Microgifter campaign ID is required for publish, pause, resume, and send actions",
+    "reward_template_id: rewardTemplateId || null",
     "homeserver_run_review_analysis",
     "homeserver_create_agent_plan",
 ):

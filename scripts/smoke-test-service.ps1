@@ -151,6 +151,17 @@ try {
         throw "Expected unknown-connection operational import rejection, received HTTP $($invalidOperationalImport.StatusCode)"
     }
 
+    $reviewIntelligence = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/review-intelligence" -TimeoutSec 15
+    if (-not $reviewIntelligence.deterministic_tracking_available -or -not $reviewIntelligence.llm_optional -or -not $reviewIntelligence.provider_authoritative -or -not $reviewIntelligence.imported_text_is_evidence_not_policy) {
+        throw "Review Intelligence boundaries were not initialized"
+    }
+    if ($reviewIntelligence.settings.provider -ne "disabled" -or $reviewIntelligence.settings.remote_context_allowed -or $reviewIntelligence.settings.campaign_execution_enabled) {
+        throw "Fresh Review Intelligence settings did not default to local disabled execution"
+    }
+    if ([int]$reviewIntelligence.observation_count -ne 0 -or [int]$reviewIntelligence.completed_runs -ne 0 -or @($reviewIntelligence.recent_clusters).Count -ne 0 -or @($reviewIntelligence.recommendations).Count -ne 0) {
+        throw "Fresh Review Intelligence state is not empty"
+    }
+
     $workspace = Invoke-RestMethod -Headers $controlHeaders -Uri "$apiBase/v1/agent/workspace" -TimeoutSec 15
     if (-not $workspace.local_only -or @($workspace.goals).Count -ne 0 -or @($workspace.plans).Count -ne 0 -or @($workspace.approvals).Count -ne 0 -or @($workspace.missions).Count -ne 0) {
         throw "Fresh Agent Workspace did not initialize with an empty local-only control plane"
