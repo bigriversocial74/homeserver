@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import "./homeserver-agent-chat.css";
 
+window.__HOMESERVER_AGENT_CHAT_V1__ = true;
+
 const PAGE_KEY = "agent";
 const DEFAULT_PROVIDER_URL = "https://microgifter.com";
 
