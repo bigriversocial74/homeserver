@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import "./agent-workspace.css";
 
-const legacyAgentWorkspaceDisabled = Boolean(window.__HOMESERVER_AGENT_CHAT_V1__);
+const legacyAgentWorkspaceDisabled = true;
 
 const PAGE_KEY = "agent";
 let snapshot = null;
@@ -499,20 +499,6 @@ async function cancelMission(event) {
   });
 }
 
-if (!legacyAgentWorkspaceDisabled) {
-  const app = document.querySelector("#app");
-  if (app) {
-    const observer = new MutationObserver(() => {
-      injectNavigation();
-      if (isAgentPage()) mount(false);
-    });
-    observer.observe(app, { childList: true, subtree: true });
-  }
-
-  window.addEventListener("hashchange", () => window.setTimeout(() => mount(true), 0));
-  window.addEventListener("DOMContentLoaded", () => {
-    if (initialized) return;
-    initialized = true;
-    window.setTimeout(() => mount(true), 0);
-  });
-}
+// The legacy Agent Workspace remains source-compatible for validation and rollback reference,
+// but the HomeServer Agent Chat module is the only runtime owner of the agent route.
+void legacyAgentWorkspaceDisabled;

@@ -17,6 +17,7 @@ let connectFormOpen = false;
 let historyQuery = "";
 let notice = null;
 let initialized = false;
+let shellHealth = { service: "online", models: "unknown" };
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -109,27 +110,6 @@ function overallProviderState() {
   if (!connections.length) return "unpaired";
   const priority = ["error", "revoked", "suspended", "offline", "grace", "replacing", "pairing_pending", "active"];
   return priority.find((state) => connections.some((connection) => connection.lifecycle_state === state)) || "active";
-}
-
-function injectNavigation() {
-  const nav = document.querySelector(".primary-nav");
-  if (!nav) return;
-  const legacy = nav.querySelector('[data-agent-workspace-nav="true"]');
-  if (legacy) legacy.remove();
-  let button = nav.querySelector('[data-homeserver-chat-nav="true"]');
-  if (!button) {
-    button = document.createElement("button");
-    button.type = "button";
-    button.className = "nav-item homeserver-chat-nav";
-    button.dataset.homeserverChatNav = "true";
-    button.innerHTML = '<span class="homeserver-chat-nav-mark" aria-hidden="true">✦</span><span>HomeServer Agent</span>';
-    button.addEventListener("click", () => {
-      window.location.hash = `#${PAGE_KEY}`;
-      window.setTimeout(() => mount(true), 0);
-    });
-    nav.prepend(button);
-  }
-  button.classList.toggle("active", isAgentPage());
 }
 
 function renderThreadList() {
@@ -268,15 +248,18 @@ function renderPage() {
   const state = overallProviderState();
   return `<div class="hs-chat-page" data-homeserver-chat-mounted="true">
     <aside class="hs-chat-sidebar">
-      <div class="hs-chat-sidebar-brand"><span>✦</span><div><strong>HomeServer</strong><small>Private Agent</small></div></div>
+      <button class="hs-chat-sidebar-brand" id="hs-chat-logo-home" type="button" aria-label="Back to dashboard" title="Back to dashboard"><span>✦</span><div><strong>HomeServer</strong><small>Private Agent</small></div></button>
       <button class="hs-chat-new" id="hs-chat-new" type="button"><span>＋</span>New chat</button>
       <label class="hs-chat-history-search"><span>⌕</span><input id="hs-chat-history-search" type="search" value="${escapeHtml(historyQuery)}" placeholder="Search chats" aria-label="Search chats"></label>
       <div class="hs-chat-history-label"><span>Chats</span><small>${threads().length}</small></div>
       <div class="hs-chat-history">${renderThreadList()}</div>
       <button type="button" class="hs-chat-provider-summary" id="hs-chat-provider-summary"><span class="hs-provider-state ${providerTone(state)}"><i></i>${escapeHtml(humanize(state))}</span><strong>Microgifter</strong><small>${providerConnections().length} connection${providerConnections().length === 1 ? "" : "s"}</small></button>
+      <div class="hs-chat-sidebar-footer">
+        <button type="button" id="hs-chat-control-center"><span>←</span><div><strong>Control Center</strong><small>Return to dashboard</small></div></button>
+      </div>
     </aside>
     <main class="hs-chat-main">
-      <header class="hs-chat-header"><div><strong>${escapeHtml(thread?.title || "New chat")}</strong><span>${thread ? `Updated ${escapeHtml(relativeDate(thread.updated_at_utc))}` : "Private local conversation"}</span></div><div class="hs-chat-header-actions"><span class="hs-runtime-state">${escapeHtml(humanize(workspace?.model_runtime_state || "loading"))}</span><button type="button" id="hs-chat-refresh" ${loading ? "disabled" : ""}>↻</button><button type="button" id="hs-chat-open-connections">Connections</button></div></header>
+      <header class="hs-chat-header"><div><strong>${escapeHtml(thread?.title || "New chat")}</strong><span>${thread ? `Updated ${escapeHtml(relativeDate(thread.updated_at_utc))}` : "Private local conversation"}</span></div><div class="hs-chat-header-actions"><span class="hs-runtime-state ${shellHealth.models === "degraded" ? "warn" : ""}">${escapeHtml(shellHealth.models === "degraded" ? "Model runtime offline" : humanize(workspace?.model_runtime_state || "loading"))}</span><button type="button" id="hs-chat-refresh" title="Refresh Agent Chat" ${loading ? "disabled" : ""}>↻</button><button type="button" id="hs-chat-open-connections">Connections</button></div></header>
       ${notice && !connectionDrawerOpen ? `<div class="hs-chat-notice ${escapeHtml(notice.kind)}">${escapeHtml(notice.message)}</div>` : ""}
       <section class="hs-chat-stream" id="hs-chat-stream">${loading && !workspace ? '<div class="hs-chat-loading">Loading your private HomeServer chats…</div>' : renderMessages()}</section>
       ${renderComposer()}
@@ -286,12 +269,11 @@ function renderPage() {
 }
 
 function mount(force = false) {
-  injectNavigation();
   if (!isAgentPage()) return;
-  const canvas = document.querySelector(".page-canvas");
-  if (!canvas) return;
-  if (!force && canvas.querySelector('[data-homeserver-chat-mounted="true"]')) return;
-  canvas.innerHTML = renderPage();
+  const host = document.querySelector('[data-homeserver-agent-host="true"]');
+  if (!host) return;
+  if (!force && host.querySelector('[data-homeserver-chat-mounted="true"]')) return;
+  host.innerHTML = renderPage();
   bindEvents();
   if (!initialized && !loading) {
     initialized = true;
@@ -305,6 +287,9 @@ function mount(force = false) {
 }
 
 function bindEvents() {
+  document.querySelectorAll("#hs-chat-logo-home,#hs-chat-control-center").forEach((button) => {
+    button.addEventListener("click", () => { window.location.hash = "#dashboard"; });
+  });
   document.querySelector("#hs-chat-new")?.addEventListener("click", startNewChat);
   document.querySelector("#hs-chat-refresh")?.addEventListener("click", refreshAll);
   document.querySelector("#homeserver-chat-form")?.addEventListener("submit", submitPrompt);
@@ -512,10 +497,22 @@ async function runProviderAction(event) {
   }
 }
 
-const app = document.querySelector("#app");
-if (app) {
-  const observer = new MutationObserver(() => mount(false));
-  observer.observe(app, { childList: true, subtree: true });
+function applyShellHealth(detail) {
+  shellHealth = { ...shellHealth, ...(detail || {}) };
+  if (!isAgentPage()) return;
+  const runtime = document.querySelector(".hs-runtime-state");
+  if (!runtime) return;
+  const serviceOffline = shellHealth.service === "offline";
+  const modelsDegraded = shellHealth.models === "degraded";
+  runtime.textContent = serviceOffline
+    ? "HomeServer offline"
+    : modelsDegraded
+      ? "Model runtime offline"
+      : humanize(workspace?.model_runtime_state || "ready");
+  runtime.classList.toggle("warn", serviceOffline || modelsDegraded);
 }
-window.addEventListener("hashchange", () => window.setTimeout(() => mount(false), 0));
-window.addEventListener("DOMContentLoaded", () => window.setTimeout(() => mount(false), 0));
+
+window.addEventListener("homeserver-shell-health", (event) => applyShellHealth(event.detail));
+window.addEventListener("homeserver-agent-route", () => window.setTimeout(() => mount(true), 0));
+window.addEventListener("hashchange", () => window.setTimeout(() => mount(true), 0));
+window.setTimeout(() => mount(true), 0);

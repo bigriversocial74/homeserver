@@ -192,8 +192,8 @@ require(
 )
 require(
     "index.html",
-    "/src/agent-workspace.js",
-    "Agent Workspace frontend module is not loaded",
+    "/src/homeserver-agent-chat.js",
+    "Authoritative HomeServer Agent Chat frontend module is not loaded",
 )
 require(
     "package.json",
