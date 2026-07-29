@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from validation_support import router_component_is_secured
+
 ROOT = Path(__file__).resolve().parents[1]
 ERRORS: list[str] = []
 
@@ -25,6 +27,7 @@ def require(path: str, marker: str, message: str) -> None:
 def forbid(path: str, marker: str, message: str) -> None:
     if marker in read(path):
         ERRORS.append(message)
+
 
 SERVICE = "crates/homeserver-service/src/mcp_runtime.rs"
 BRIDGE = "crates/homeserver-mcp/src/main.rs"
@@ -95,7 +98,10 @@ for marker in (
 
 require('src-tauri/tauri.conf.json', 'resources/microgifter-homeserver-mcp.exe', 'MCP bridge is not packaged as a Tauri resource')
 require('Cargo.toml', 'crates/homeserver-mcp', 'MCP bridge is not a workspace member')
-require('crates/homeserver-service/src/app.rs', '.merge(mcp_runtime::router(state))', 'MCP router is not merged inside the secured local API')
+
+app_source = read('crates/homeserver-service/src/app.rs')
+if not router_component_is_secured(app_source, 'mcp_runtime'):
+    ERRORS.append('MCP router is not merged inside the secured local API')
 
 if ERRORS:
     print('HomeServer MCP MCP validation failed:', file=sys.stderr)
