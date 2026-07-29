@@ -22,6 +22,12 @@ def require(path: str, marker: str, message: str) -> None:
         ERRORS.append(message)
 
 
+def require_any(path: str, markers: tuple[str, ...], message: str) -> None:
+    source = read(path)
+    if not any(marker in source for marker in markers):
+        ERRORS.append(message)
+
+
 MIGRATION = "database/migrations/0010_multi_cloud_connections.sql"
 SERVICE = "crates/homeserver-service/src/cloud_registry.rs"
 PAIRING = "crates/homeserver-service/src/cloud_pairing_v2.rs"
@@ -94,10 +100,26 @@ for marker in (
 
 require(TAURI, "/v1/cloud/connections/pair-v2", "Tauri does not use connection-scoped pairing v2")
 
+require_any(
+    UI,
+    ("Cloud Connection Registry", "Cloud & POD Connection Registry"),
+    "multi-connection Control Center registry heading is missing",
+)
+require_any(
+    UI,
+    ("Pair a Site", "Pair a Connection"),
+    "multi-connection Control Center pairing surface is missing",
+)
+require_any(
+    UI,
+    (
+        "HomeServer remains usable with zero cloud connections",
+        "No Microgifter cloud connection is required",
+        "local-only HomeServer operation preserved",
+    ),
+    "multi-connection local-only boundary is missing",
+)
 for marker in (
-    "Cloud Connection Registry",
-    "Pair a Site",
-    "HomeServer remains usable with zero cloud connections",
     "homeserver_pair_cloud_connection",
     "homeserver_sync_cloud_connection",
     "homeserver_disconnect_cloud_connection",
