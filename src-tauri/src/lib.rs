@@ -16,9 +16,9 @@ use microgifter_homeserver_core::{
 };
 use rfd::AsyncFileDialog;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::time::Duration;
 #[cfg(desktop)]
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 #[cfg(desktop)]
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -32,7 +32,6 @@ use zeroize::Zeroizing;
 const MAX_RECOVERY_PACKAGE_BYTES: u64 = 320 * 1024 * 1024;
 const MAX_LOCAL_JSON_BYTES: usize = 2 * 1024 * 1024;
 const PASSPHRASE_HEADER: &str = "x-mg-recovery-passphrase";
-
 
 #[cfg(desktop)]
 struct DesktopUiState {
@@ -88,7 +87,9 @@ fn control_center_autostart_enabled(app: tauri::AppHandle) -> Result<bool, Strin
     #[cfg(desktop)]
     {
         use tauri_plugin_autostart::ManagerExt;
-        app.autolaunch().is_enabled().map_err(|error| error.to_string())
+        app.autolaunch()
+            .is_enabled()
+            .map_err(|error| error.to_string())
     }
     #[cfg(not(desktop))]
     {
@@ -400,13 +401,31 @@ pub fn run() {
                     quitting: AtomicBool::new(false),
                 });
 
-                let dashboard = MenuItem::with_id(app, "open-dashboard", "Open Dashboard", true, None::<&str>)?;
-                let agent = MenuItem::with_id(app, "open-agent", "Open Agent Chat", true, None::<&str>)?;
-                let status = MenuItem::with_id(app, "open-status", "HomeServer Status", true, None::<&str>)?;
-                let updates = MenuItem::with_id(app, "check-updates", "Check for Updates", true, None::<&str>)?;
+                let dashboard =
+                    MenuItem::with_id(app, "open-dashboard", "Open Dashboard", true, None::<&str>)?;
+                let agent =
+                    MenuItem::with_id(app, "open-agent", "Open Agent Chat", true, None::<&str>)?;
+                let status =
+                    MenuItem::with_id(app, "open-status", "HomeServer Status", true, None::<&str>)?;
+                let updates = MenuItem::with_id(
+                    app,
+                    "check-updates",
+                    "Check for Updates",
+                    true,
+                    None::<&str>,
+                )?;
                 let separator = PredefinedMenuItem::separator(app)?;
-                let quit = MenuItem::with_id(app, "quit-control-center", "Quit Control Center", true, None::<&str>)?;
-                let menu = Menu::with_items(app, &[&dashboard, &agent, &status, &updates, &separator, &quit])?;
+                let quit = MenuItem::with_id(
+                    app,
+                    "quit-control-center",
+                    "Quit Control Center",
+                    true,
+                    None::<&str>,
+                )?;
+                let menu = Menu::with_items(
+                    app,
+                    &[&dashboard, &agent, &status, &updates, &separator, &quit],
+                )?;
                 let tray_icon = app
                     .default_window_icon()
                     .cloned()
@@ -537,4 +556,3 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running Microgifter HomeServer Control Center");
 }
-
