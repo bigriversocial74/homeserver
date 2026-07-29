@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import "./styles.css";
+import "./openrouter-provider.js";
 import { icon, logoMark } from "./icons.js";
 
 const app = document.querySelector("#app");
@@ -518,7 +519,7 @@ function renderModelCenter() {
       </aside>
     </section>
     <section class="two-column-grid model-bottom-grid"><article class="panel"><div class="panel-title"><div><h2>Installed Models</h2></div><span>${installed.length} local</span></div>${renderInstalledModels(installed)}</article><article class="panel"><div class="panel-title"><div><h2>Operation History</h2></div><span>${operations.length} records</span></div>${renderModelOperations(operations)}</article></section>
-    <div class="privacy-banner success">${icon("shield", 20)}<div><strong>Local model boundary enforced</strong><span>No configurable runtime URL, cloud prompt fallback, Knowledge Vault transfer, MCP tools, or autonomous agent execution is enabled in Phase 4B.</span></div><button class="text-button" data-page="knowledge">Open Knowledge Vault ${icon("arrow", 13)}</button></div>`;
+    <div class="privacy-banner success">${icon("shield", 20)}<div><strong>Provider choice remains local</strong><span>Ollama stays local. OpenRouter is optional, fixed to its reviewed HTTPS endpoint, and cannot receive selected Agent Workspace context until you explicitly enable and confirm remote transfer.</span></div><button class="text-button" data-page="knowledge">Open Knowledge Vault ${icon("arrow", 13)}</button></div>`;
 }
 
 function renderCatalogModel(model, runtimeReady, activeOperations) {

@@ -9,7 +9,7 @@ use axum::{
 use futures_util::StreamExt;
 use keyring::Entry;
 use reqwest::redirect::Policy;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::{sync::Arc, time::Duration};
@@ -238,10 +238,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/v1/models/providers/openrouter/configure",
             post(configure_provider),
         )
-        .route(
-            "/v1/models/providers/openrouter/test",
-            post(test_provider),
-        )
+        .route("/v1/models/providers/openrouter/test", post(test_provider))
         .route(
             "/v1/models/providers/openrouter/disconnect",
             post(disconnect_provider),
@@ -282,11 +279,12 @@ async fn test_provider(
     State(state): State<Arc<AppState>>,
     Json(mut request): Json<TestOpenRouterRequest>,
 ) -> ProviderApiResult<OpenRouterCompletionResult> {
-    ensure!(
-        request.confirmation == "TEST REMOTE",
-        "type TEST REMOTE to send this test prompt to OpenRouter"
-    )
-    .map_err(|error| action_error("openrouter_test_confirmation_required", error))?;
+    if request.confirmation != "TEST REMOTE" {
+        return Err(action_error(
+            "openrouter_test_confirmation_required",
+            "type TEST REMOTE to send this test prompt to OpenRouter",
+        ));
+    }
     request.prompt = sanitize_prompt(&request.prompt, MAX_TEST_PROMPT_CHARS)
         .map_err(|error| action_error("openrouter_test_prompt_invalid", error))?;
     complete(
@@ -305,11 +303,12 @@ async fn disconnect_provider(
     State(state): State<Arc<AppState>>,
     Json(request): Json<DisconnectOpenRouterRequest>,
 ) -> ProviderApiResult<OpenRouterSettingsSnapshot> {
-    ensure!(
-        request.confirmation == "DISCONNECT",
-        "type DISCONNECT to remove the locally stored OpenRouter credential"
-    )
-    .map_err(|error| action_error("openrouter_disconnect_confirmation_required", error))?;
+    if request.confirmation != "DISCONNECT" {
+        return Err(action_error(
+            "openrouter_disconnect_confirmation_required",
+            "type DISCONNECT to remove the locally stored OpenRouter credential",
+        ));
+    }
     disconnect(&state)
         .map(Json)
         .map_err(|error| action_error("openrouter_disconnect_failed", error))
@@ -346,7 +345,10 @@ fn snapshot_from_connection(connection: &Connection) -> Result<OpenRouterSetting
     })
 }
 
-fn configure(state: &AppState, mut request: ConfigureOpenRouterRequest) -> Result<OpenRouterSettingsSnapshot> {
+fn configure(
+    state: &AppState,
+    mut request: ConfigureOpenRouterRequest,
+) -> Result<OpenRouterSettingsSnapshot> {
     request.default_model = normalize_optional_model(request.default_model.as_deref())?;
     request.fallback_models = normalize_fallback_models(&request.fallback_models)?;
     ensure!(
@@ -366,7 +368,10 @@ fn configure(state: &AppState, mut request: ConfigureOpenRouterRequest) -> Resul
             request.remote_context_confirmation.as_deref() == Some("SEND REMOTE"),
             "type SEND REMOTE to allow selected HomeServer context to leave this device"
         );
-        ensure!(request.enabled, "remote context requires OpenRouter to be enabled");
+        ensure!(
+            request.enabled,
+            "remote context requires OpenRouter to be enabled"
+        );
         ensure!(
             request.default_model.is_some(),
             "select a default OpenRouter model before enabling remote context"
@@ -444,15 +449,9 @@ pub async fn generate_agent_response(
         return Ok(None);
     }
     let prompt = sanitize_prompt(prompt, MAX_AGENT_PROMPT_CHARS)?;
-    complete(
-        state,
-        explicit_remote_model,
-        &prompt,
-        "agent_prompt",
-        true,
-    )
-    .await
-    .map(Some)
+    complete(state, explicit_remote_model, &prompt, "agent_prompt", true)
+        .await
+        .map(Some)
 }
 
 async fn fetch_catalog(state: &AppState) -> Result<OpenRouterCatalogSnapshot> {
@@ -475,20 +474,22 @@ async fn fetch_catalog(state: &AppState) -> Result<OpenRouterCatalogSnapshot> {
         .into_iter()
         .take(MAX_CATALOG_MODELS)
         .filter_map(|model| {
-            normalize_model_id(&model.id).ok().map(|id| OpenRouterCatalogModel {
-                id,
-                name: bounded(&model.name, 180),
-                description: bounded(&model.description, 500),
-                context_length: model.context_length,
-                prompt_price: pricing_value(model.pricing.as_ref(), "prompt"),
-                completion_price: pricing_value(model.pricing.as_ref(), "completion"),
-                supported_parameters: model
-                    .supported_parameters
-                    .into_iter()
-                    .take(64)
-                    .map(|value| bounded(&value, 80))
-                    .collect(),
-            })
+            normalize_model_id(&model.id)
+                .ok()
+                .map(|id| OpenRouterCatalogModel {
+                    id,
+                    name: bounded(&model.name, 180),
+                    description: bounded(&model.description, 500),
+                    context_length: model.context_length,
+                    prompt_price: pricing_value(model.pricing.as_ref(), "prompt"),
+                    completion_price: pricing_value(model.pricing.as_ref(), "completion"),
+                    supported_parameters: model
+                        .supported_parameters
+                        .into_iter()
+                        .take(64)
+                        .map(|value| bounded(&value, 80))
+                        .collect(),
+                })
         })
         .collect();
     Ok(OpenRouterCatalogSnapshot {
@@ -591,44 +592,40 @@ async fn complete(
         .await;
 
     let result = match response {
-        Ok(response) => decode_json::<ChatEnvelope>(response).await.and_then(|envelope| {
-            let output = envelope
-                .choices
-                .first()
-                .map(|choice| content_text(&choice.message.content))
-                .filter(|value| !value.trim().is_empty())
-                .context("OpenRouter returned an empty completion")?;
-            let usage = envelope.usage.as_ref();
-            let prompt_tokens = usage_number(usage, "prompt_tokens");
-            let completion_tokens = usage_number(usage, "completion_tokens");
-            let total_tokens = usage_number(usage, "total_tokens")
-                .max(prompt_tokens.saturating_add(completion_tokens));
-            let reported_cost_microusd = usage_cost_microusd(usage);
-            Ok(OpenRouterCompletionResult {
-                request_id: envelope.id.unwrap_or_else(|| request_id.clone()),
-                requested_model: primary_model.clone(),
-                resolved_model: envelope.model.unwrap_or_else(|| primary_model.clone()),
-                output: bounded(&output, 30_000),
-                prompt_tokens,
-                completion_tokens,
-                total_tokens,
-                reported_cost_microusd,
-                duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
-            })
-        }),
+        Ok(response) => decode_json::<ChatEnvelope>(response)
+            .await
+            .and_then(|envelope| {
+                let output = envelope
+                    .choices
+                    .first()
+                    .map(|choice| content_text(&choice.message.content))
+                    .filter(|value| !value.trim().is_empty())
+                    .context("OpenRouter returned an empty completion")?;
+                let usage = envelope.usage.as_ref();
+                let prompt_tokens = usage_number(usage, "prompt_tokens");
+                let completion_tokens = usage_number(usage, "completion_tokens");
+                let total_tokens = usage_number(usage, "total_tokens")
+                    .max(prompt_tokens.saturating_add(completion_tokens));
+                let reported_cost_microusd = usage_cost_microusd(usage);
+                Ok(OpenRouterCompletionResult {
+                    request_id: envelope.id.unwrap_or_else(|| request_id.clone()),
+                    requested_model: primary_model.clone(),
+                    resolved_model: envelope.model.unwrap_or_else(|| primary_model.clone()),
+                    output: bounded(&output, 30_000),
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens,
+                    reported_cost_microusd,
+                    duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                })
+            }),
         Err(error) => Err(anyhow!(error).context("OpenRouter chat request failed")),
     };
 
     let connection = state.connection()?;
     match result {
         Ok(result) => {
-            record_receipt(
-                &connection,
-                &result,
-                request_kind,
-                "succeeded",
-                None,
-            )?;
+            record_receipt(&connection, &result, request_kind, "succeeded", None)?;
             connection.execute(
                 "UPDATE model_provider_settings SET last_tested_at_utc=CASE WHEN ?1='manual_test' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE last_tested_at_utc END,last_success_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),last_error_code=NULL,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE provider_key='openrouter'",
                 params![request_kind],
@@ -694,7 +691,9 @@ fn load_settings(connection: &Connection) -> Result<StoredSettings> {
 }
 
 fn monthly_usage(connection: &Connection) -> Result<(u64, u64)> {
-    let start = chrono::Utc::now().format("%Y-%m-01T00:00:00.000Z").to_string();
+    let start = chrono::Utc::now()
+        .format("%Y-%m-01T00:00:00.000Z")
+        .to_string();
     let (count, spend): (i64, i64) = connection.query_row(
         "SELECT COUNT(*),COALESCE(SUM(reported_cost_microusd),0) FROM model_provider_usage_receipts WHERE provider_key='openrouter' AND state='succeeded' AND created_at_utc>=?1",
         params![start],
@@ -773,7 +772,10 @@ fn sanitize_prompt(value: &str, max_chars: usize) -> Result<String> {
     let count = value.chars().count();
     ensure!(count > 0, "prompt is required");
     ensure!(count <= max_chars, "prompt exceeds the HomeServer limit");
-    ensure!(!value.contains('\0'), "prompt contains an invalid character");
+    ensure!(
+        !value.contains('\0'),
+        "prompt contains an invalid character"
+    );
     Ok(value.to_owned())
 }
 

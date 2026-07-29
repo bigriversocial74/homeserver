@@ -3,6 +3,7 @@ mod cloud;
 mod mcp;
 mod model;
 mod ollama_install;
+mod openrouter;
 mod operational;
 mod review_intelligence;
 mod vault;
@@ -546,6 +547,11 @@ pub fn run() {
             model::homeserver_unload_model,
             model::homeserver_test_model,
             model::homeserver_update_model_settings,
+            openrouter::homeserver_openrouter_status,
+            openrouter::homeserver_openrouter_catalog,
+            openrouter::homeserver_configure_openrouter,
+            openrouter::homeserver_test_openrouter,
+            openrouter::homeserver_disconnect_openrouter,
             mcp::homeserver_mcp,
             mcp::homeserver_create_mcp_client,
             mcp::homeserver_revoke_mcp_client,
