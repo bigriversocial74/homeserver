@@ -53,6 +53,7 @@ jobs:
           npm ci
           npm run check:frontend
           npm run build
+          npm run prepare:icons
           cargo fmt --all -- --check
           New-Item -ItemType Directory -Force -Path src-tauri/resources | Out-Null
           $created = @()
