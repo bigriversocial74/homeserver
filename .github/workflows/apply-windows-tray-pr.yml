@@ -54,8 +54,26 @@ jobs:
           npm run check:frontend
           npm run build
           cargo fmt --all -- --check
-          cargo check -p microgifter-homeserver-control-center
-          cargo clippy -p microgifter-homeserver-control-center --all-targets -- -D warnings
+          New-Item -ItemType Directory -Force -Path src-tauri/resources | Out-Null
+          $created = @()
+          foreach ($path in @(
+            "src-tauri/resources/microgifter-homeserver-service.exe",
+            "src-tauri/resources/microgifter-homeserver-updater.exe",
+            "src-tauri/resources/microgifter-homeserver-mcp.exe"
+          )) {
+            if (-not (Test-Path $path)) {
+              New-Item -ItemType File -Path $path | Out-Null
+              $created += $path
+            }
+          }
+          try {
+            cargo check -p microgifter-homeserver-control-center
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            cargo clippy -p microgifter-homeserver-control-center --all-targets -- -D warnings
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            foreach ($path in $created) { Remove-Item $path -Force -ErrorAction SilentlyContinue }
+          }
 
       - name: Commit product files and remove helpers
         shell: pwsh
