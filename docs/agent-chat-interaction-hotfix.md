@@ -1,6 +1,6 @@
 # Agent Chat Interaction Hotfix
 
-Status: observer-free runtime validated; logo dashboard link validation running
+Status: observer-free runtime validated; interactive header notification dropdown validation running
 
 ## Reported regressions
 
@@ -8,6 +8,7 @@ Status: observer-free runtime validated; logo dashboard link validation running
 2. A later Model Center availability notification caused Agent Chat and navigation to freeze.
 3. Agent Chat still appeared inside the Control Center shell instead of operating as a dedicated full-width chat workspace.
 4. The redesigned build worked for several clicks, then froze after roughly 15–20 seconds.
+5. The Control Center notification bell was decorative and did not open a dropdown.
 
 ## Confirmed causes
 
@@ -18,6 +19,7 @@ Status: observer-free runtime validated; logo dashboard link validation running
 - The legacy Agent Workspace remained separately loaded and could activate depending on independent module load order.
 - Operational Data, Review Intelligence, Cloud Connections, and the Ollama installer still used app-wide or document-wide `MutationObserver` lifecycles.
 - The Ollama installer uses a 20-second refresh window, matching the delayed freeze observed during hands-on testing.
+- The notification bell had no state, menu markup, event binding, or dismissal behavior.
 
 ## Final runtime repair
 
@@ -39,9 +41,17 @@ Status: observer-free runtime validated; logo dashboard link validation running
 - The existing Control Center return button remains available.
 - Keyboard focus and hover states make the logo navigation discoverable and accessible.
 
+## Header notifications
+
+- The bell opens a bounded notification dropdown.
+- Alert count is calculated from live HomeServer, pairing, backup, model-runtime, and update state.
+- Each notification routes to the relevant Control Center page.
+- The dropdown closes by its close button, outside click, Escape, or navigation.
+- Healthy systems display a no-active-alerts state instead of a false fixed count.
+
 ## Permanent validation
 
-The frontend validator now enforces:
+The frontend validators now enforce:
 
 - one authoritative Agent Chat runtime
 - no legacy Agent Workspace script loading
@@ -53,11 +63,13 @@ The frontend validator now enforces:
 - independent message scrolling
 - sticky footer composer positioning
 - Agent Chat logo dashboard navigation
+- interactive notification dropdown markup, routing, and keyboard dismissal
 
 ## Product files
 
 - `index.html`
 - `src/main.js`
+- `src/styles.css`
 - `src/homeserver-agent-chat.js`
 - `src/homeserver-agent-chat.css`
 - `src/agent-workspace.js`
@@ -67,6 +79,7 @@ The frontend validator now enforces:
 - `src/ollama-install-assistant.js`
 - `scripts/validate-agent-workspace.py`
 - `scripts/validate-agent-chat-route.py`
+- `scripts/validate-notification-menu.py`
 - `package.json`
 
 No database migration is required.
