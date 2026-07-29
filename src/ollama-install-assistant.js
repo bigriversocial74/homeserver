@@ -228,9 +228,6 @@ function queueMount() {
   window.requestAnimationFrame(mountAssistant);
 }
 
-const app = document.querySelector("#app");
-if (app) {
-  new MutationObserver(queueMount).observe(app, { childList: true, subtree: true });
-}
+window.addEventListener("homeserver:rendered", queueMount);
 window.addEventListener("hashchange", queueMount);
 queueMount();
