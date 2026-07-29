@@ -10,6 +10,7 @@ mod knowledge_vault;
 mod mcp_runtime;
 mod microgifter_connection;
 mod model_center;
+mod openrouter_provider;
 mod operational_data;
 mod recovery_transfer;
 mod review_intelligence;
@@ -99,6 +100,17 @@ impl AppState {
             return HealthSnapshot::needs_attention(
                 &self.config.server_name,
                 "model_center_integrity_check_failed",
+            );
+        }
+
+        if let Err(error) = openrouter_provider::health_check(&connection) {
+            error!(
+                ?error,
+                "HomeServer OpenRouter provider database health check failed"
+            );
+            return HealthSnapshot::needs_attention(
+                &self.config.server_name,
+                "openrouter_provider_integrity_check_failed",
             );
         }
 
