@@ -1,6 +1,6 @@
 # Agent Chat Interaction Hotfix
 
-Status: observer-free runtime validated; interactive header notification dropdown validation running
+Status: observer-free runtime and notification dropdown implemented; final validation running
 
 ## Reported regressions
 
