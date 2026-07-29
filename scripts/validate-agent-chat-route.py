@@ -24,6 +24,7 @@ required_chat = [
     'data-homeserver-agent-host="true"',
     'host.innerHTML = renderPage()',
     'id="hs-chat-control-center"',
+    'id="hs-chat-logo-home"',
     'window.addEventListener("homeserver-shell-health"',
     'function applyShellHealth(detail)',
     'runtime.classList.toggle("warn"',

@@ -248,7 +248,7 @@ function renderPage() {
   const state = overallProviderState();
   return `<div class="hs-chat-page" data-homeserver-chat-mounted="true">
     <aside class="hs-chat-sidebar">
-      <div class="hs-chat-sidebar-brand"><span>✦</span><div><strong>HomeServer</strong><small>Private Agent</small></div></div>
+      <button class="hs-chat-sidebar-brand" id="hs-chat-logo-home" type="button" aria-label="Back to dashboard" title="Back to dashboard"><span>✦</span><div><strong>HomeServer</strong><small>Private Agent</small></div></button>
       <button class="hs-chat-new" id="hs-chat-new" type="button"><span>＋</span>New chat</button>
       <label class="hs-chat-history-search"><span>⌕</span><input id="hs-chat-history-search" type="search" value="${escapeHtml(historyQuery)}" placeholder="Search chats" aria-label="Search chats"></label>
       <div class="hs-chat-history-label"><span>Chats</span><small>${threads().length}</small></div>
@@ -287,7 +287,9 @@ function mount(force = false) {
 }
 
 function bindEvents() {
-  document.querySelector("#hs-chat-control-center")?.addEventListener("click", () => { window.location.hash = "#dashboard"; });
+  document.querySelectorAll("#hs-chat-logo-home,#hs-chat-control-center").forEach((button) => {
+    button.addEventListener("click", () => { window.location.hash = "#dashboard"; });
+  });
   document.querySelector("#hs-chat-new")?.addEventListener("click", startNewChat);
   document.querySelector("#hs-chat-refresh")?.addEventListener("click", refreshAll);
   document.querySelector("#homeserver-chat-form")?.addEventListener("submit", submitPrompt);
