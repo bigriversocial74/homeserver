@@ -1,5 +1,5 @@
 use crate::AppState;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use axum::{
     extract::{DefaultBodyLimit, State},
     http::StatusCode,
@@ -188,7 +188,9 @@ fn mark_active(connection: &Connection) -> Result<()> {
     let should_record = previous
         .as_deref()
         .and_then(parse_utc)
-        .map(|value| now - value >= Duration::minutes(USER_ACTIVITY_RECEIPT_INTERVAL_MINUTES))
+        .map(|value| {
+            now - value >= Duration::minutes(USER_ACTIVITY_RECEIPT_INTERVAL_MINUTES)
+        })
         .unwrap_or(true);
     if should_record {
         connection.execute(
@@ -200,11 +202,14 @@ fn mark_active(connection: &Connection) -> Result<()> {
 }
 
 async fn activity_snapshot(State(state): State<Arc<AppState>>) -> ApiResult<ActivitySnapshot> {
-    tokio::task::spawn_blocking(move || snapshot(&state.connection()?))
-        .await
-        .map_err(task_error)?
-        .map(Json)
-        .map_err(|error| internal_error("activity_snapshot_failed", error))
+    tokio::task::spawn_blocking(move || {
+        let connection = state.connection()?;
+        snapshot(&connection)
+    })
+    .await
+    .map_err(task_error)?
+    .map(Json)
+    .map_err(|error| internal_error("activity_snapshot_failed", error))
 }
 
 async fn mark_user_active(State(state): State<Arc<AppState>>) -> ApiResult<ActivitySnapshot> {
