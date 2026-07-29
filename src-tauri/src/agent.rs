@@ -1,19 +1,39 @@
 use super::{get_json, post_json};
 use serde_json::{json, Value};
+use std::sync::OnceLock;
+
+static SESSION_LAST_ACTIVE_AT_UTC: OnceLock<Option<String>> = OnceLock::new();
 
 #[tauri::command]
 pub(crate) async fn homeserver_agent_workspace() -> Result<Value, String> {
     let mut workspace: Value = get_json("/v1/agent/workspace").await?;
-    let activity = get_json::<Value>("/v1/activity")
+    let mut activity = get_json::<Value>("/v1/activity")
         .await
-        .unwrap_or_else(|_| json!({
-            "last_user_active_at_utc": null,
-            "current_session_started_at_utc": null,
-            "previous_session_started_at_utc": null,
-            "previous_session_stopped_at_utc": null,
-            "previous_session_clean": false,
-            "recent_events": []
-        }));
+        .unwrap_or_else(|_| {
+            json!({
+                "last_user_active_at_utc": null,
+                "current_session_started_at_utc": null,
+                "previous_session_started_at_utc": null,
+                "previous_session_stopped_at_utc": null,
+                "previous_session_clean": false,
+                "recent_events": []
+            })
+        });
+    let baseline = SESSION_LAST_ACTIVE_AT_UTC.get_or_init(|| {
+        activity
+            .get("last_user_active_at_utc")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    });
+    if let Some(object) = activity.as_object_mut() {
+        object.insert(
+            "last_user_active_at_utc".to_owned(),
+            baseline
+                .as_ref()
+                .map(|value| Value::String(value.clone()))
+                .unwrap_or(Value::Null),
+        );
+    }
     if let Some(object) = workspace.as_object_mut() {
         object.insert("activity".to_owned(), activity);
     }
