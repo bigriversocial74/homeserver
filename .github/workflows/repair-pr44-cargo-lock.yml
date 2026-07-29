@@ -14,7 +14,6 @@ concurrency:
 
 jobs:
   regenerate:
-    if: github.actor != 'github-actions[bot]'
     runs-on: windows-2025
     steps:
       - name: Check out PR branch
