@@ -12,3 +12,7 @@
 - Windows autostart launches the Control Center hidden so the tray icon is available without opening the dashboard.
 
 No HomeServer service, pairing, provider, model, backup, MCP, or local-data behavior is changed.
+
+## Validation
+
+The focused Windows implementation passed frontend validation, the production frontend build, Rust formatting, native Control Center compilation, and strict Clippy. Full Production Quality and Cloud Connector validation are running on the clean product source.
