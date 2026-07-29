@@ -12,4 +12,4 @@
 | Retry, receipts, history, and disconnect | 0.4/0.75 | 0.75/0.75 | Attempts, stable failures, retention, lease/credential cleanup |
 | Control Center owner experience | 0.3/0.75 | 0.75/0.75 | Pairing, status, runtime settings, polling, disconnect |
 | Compatibility and authority boundaries | 0.4/0.75 | 0.75/0.75 | Microgifter, updater, MCP, vault, browser voice, and local operation independent |
-| **Total** | **4.7/10** | **10/10** | **Pending exact-head Production Quality certification** |
+| **Total** | **4.7/10** | **10/10** | **Certified by HomeServer Production Quality run 30409994248 and Coordinated Cloud Connector Contract run 30409994226** |
