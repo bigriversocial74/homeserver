@@ -453,12 +453,10 @@ async function createCampaignPlan(event) {
   }
 }
 
-window.addEventListener("hashchange", () => mount(true));
-window.addEventListener("homeserver:rendered", () => mount());
+window.addEventListener("hashchange", () => window.setTimeout(() => mount(true), 0));
+window.addEventListener("homeserver:rendered", () => window.setTimeout(() => mount(false), 0));
 
 if (!initialized) {
   initialized = true;
-  const observer = new MutationObserver(() => mount());
-  observer.observe(document.documentElement, { childList: true, subtree: true });
-  window.setTimeout(() => mount(), 0);
+  window.setTimeout(() => mount(false), 0);
 }

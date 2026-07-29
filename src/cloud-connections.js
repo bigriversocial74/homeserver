@@ -203,10 +203,6 @@ async function syncAll() {
   }
 }
 
-const app = document.querySelector("#app");
-if (app) {
-  const observer = new MutationObserver(() => mount(false));
-  observer.observe(app, { childList: true, subtree: true });
-}
+window.addEventListener("homeserver:rendered", () => window.setTimeout(() => mount(false), 0));
 window.addEventListener("hashchange", () => window.setTimeout(() => mount(false), 0));
 window.addEventListener("DOMContentLoaded", () => window.setTimeout(() => mount(false), 0));

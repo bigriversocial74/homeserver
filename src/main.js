@@ -633,10 +633,12 @@ function render() {
   if (activePage === "agent") {
     app.innerHTML = `<div class="agent-chat-shell"><div class="homeserver-agent-route-host" data-homeserver-agent-host="true"></div></div>`;
     window.dispatchEvent(new CustomEvent("homeserver-agent-route"));
+    window.dispatchEvent(new CustomEvent("homeserver:rendered", { detail: { page: activePage } }));
     return;
   }
   app.innerHTML = `<div class="desktop-shell">${renderSidebar()}<main class="app-main">${renderTopbar()}<section class="page-canvas">${notice ? `<div class="notice ${notice.kind}">${escapeHtml(notice.message)}</div>` : ""}${restorePending ? `<div class="notice warning"><strong>Restore staged.</strong> Restart the HomeServer service or Windows to apply the verified database. The current database is preserved for rollback.</div>` : ""}${renderCurrentPage()}<footer class="app-footer"><span>Local API: ${escapeHtml(statusSnapshot?.api_url || "http://127.0.0.1:47831")}</span><span>Updated: ${escapeHtml(formatDate(statusSnapshot?.last_updated_utc))}</span></footer></section></main></div>`;
   bindEvents();
+  window.dispatchEvent(new CustomEvent("homeserver:rendered", { detail: { page: activePage } }));
 }
 
 function bindEvents() {
