@@ -188,9 +188,7 @@ fn mark_active(connection: &Connection) -> Result<()> {
     let should_record = previous
         .as_deref()
         .and_then(parse_utc)
-        .map(|value| {
-            now - value >= Duration::minutes(USER_ACTIVITY_RECEIPT_INTERVAL_MINUTES)
-        })
+        .map(|value| now - value >= Duration::minutes(USER_ACTIVITY_RECEIPT_INTERVAL_MINUTES))
         .unwrap_or(true);
     if should_record {
         connection.execute(
@@ -248,7 +246,9 @@ mod tests {
     fn lifecycle_events_produce_a_durable_snapshot() {
         let connection = Connection::open_in_memory().expect("open database");
         connection
-            .execute_batch(include_str!("../../../database/migrations/0001_initial.sql"))
+            .execute_batch(include_str!(
+                "../../../database/migrations/0001_initial.sql"
+            ))
             .expect("apply initial migration");
         initialize(&connection).expect("record startup");
         let first = snapshot(&connection).expect("read activity");

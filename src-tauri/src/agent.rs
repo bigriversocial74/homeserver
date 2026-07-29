@@ -7,18 +7,16 @@ static SESSION_LAST_ACTIVE_AT_UTC: OnceLock<Option<String>> = OnceLock::new();
 #[tauri::command]
 pub(crate) async fn homeserver_agent_workspace() -> Result<Value, String> {
     let mut workspace: Value = get_json("/v1/agent/workspace").await?;
-    let mut activity = get_json::<Value>("/v1/activity")
-        .await
-        .unwrap_or_else(|_| {
-            json!({
-                "last_user_active_at_utc": null,
-                "current_session_started_at_utc": null,
-                "previous_session_started_at_utc": null,
-                "previous_session_stopped_at_utc": null,
-                "previous_session_clean": false,
-                "recent_events": []
-            })
-        });
+    let mut activity = get_json::<Value>("/v1/activity").await.unwrap_or_else(|_| {
+        json!({
+            "last_user_active_at_utc": null,
+            "current_session_started_at_utc": null,
+            "previous_session_started_at_utc": null,
+            "previous_session_stopped_at_utc": null,
+            "previous_session_clean": false,
+            "recent_events": []
+        })
+    });
     let baseline = SESSION_LAST_ACTIVE_AT_UTC.get_or_init(|| {
         activity
             .get("last_user_active_at_utc")

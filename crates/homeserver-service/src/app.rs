@@ -157,7 +157,10 @@ pub async fn run(
         .await;
     if result.is_ok() {
         if let Err(error) = activity::record_service_stopped(&state) {
-            warn!(?error, "unable to record graceful HomeServer service shutdown");
+            warn!(
+                ?error,
+                "unable to record graceful HomeServer service shutdown"
+            );
         }
     }
     backup_scheduler.abort();
