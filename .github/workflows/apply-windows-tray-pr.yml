@@ -1,0 +1,71 @@
+name: Apply Windows Tray PR Build
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-windows-tray-pr-build
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/windows-tray-background-ui-20260728
+          fetch-depth: 0
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Apply implementation
+        shell: pwsh
+        run: python scripts/implement_windows_tray.py
+
+      - name: Normalize locks
+        shell: pwsh
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          cargo generate-lockfile
+
+      - name: Validate implementation
+        shell: pwsh
+        run: |
+          npm ci
+          npm run check:frontend
+          npm run build
+          cargo fmt --all -- --check
+          cargo check -p microgifter-homeserver-control-center
+          cargo clippy -p microgifter-homeserver-control-center --all-targets -- -D warnings
+
+      - name: Commit product files and remove helpers
+        shell: pwsh
+        run: |
+          Remove-Item .github/workflows/apply-windows-tray-pr.yml -Force
+          Remove-Item .github/workflows/implement-windows-tray-background-ui.yml -Force
+          Remove-Item scripts/implement_windows_tray.py -Force
+          Remove-Item docs/windows-tray-build-trigger.md -Force
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Build Windows tray and background Control Center"
+          git push origin HEAD:feature/windows-tray-background-ui-20260728
