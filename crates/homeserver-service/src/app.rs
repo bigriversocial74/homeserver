@@ -1,3 +1,6 @@
+#[path = "activity.rs"]
+mod activity;
+
 #[path = "cloud_pairing_v2.rs"]
 mod cloud_pairing_v2;
 
@@ -42,6 +45,7 @@ pub async fn run(
         }
     };
     let connection = database::initialize(&config.database_path)?;
+    activity::initialize(&connection)?;
     update_store::initialize(&connection)?;
     cloud_connector::initialize(&connection)?;
     cloud_registry::initialize(&connection)?;
@@ -134,6 +138,7 @@ pub async fn run(
     ));
     let router = http::secure(
         http::router(state.clone())
+            .merge(activity::router(state.clone()))
             .merge(cloud_connector::router(state.clone()))
             .merge(registry_router)
             .merge(cloud_pairing_v2::router(state.clone()))
@@ -145,11 +150,16 @@ pub async fn run(
             .merge(operational_data::router(state.clone()))
             .merge(review_intelligence::router(state.clone()))
             .merge(agent_runtime::router(state.clone()))
-            .merge(mcp_runtime::router(state)),
+            .merge(mcp_runtime::router(state.clone())),
     );
     let result = axum::serve(listener, router)
         .with_graceful_shutdown(wait_for_shutdown(shutdown))
         .await;
+    if result.is_ok() {
+        if let Err(error) = activity::record_service_stopped(&state) {
+            warn!(?error, "unable to record graceful HomeServer service shutdown");
+        }
+    }
     backup_scheduler.abort();
     update_scheduler.abort();
     cloud_worker.abort();
