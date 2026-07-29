@@ -1,0 +1,66 @@
+name: One-use OpenRouter provider integration
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'feature/openrouter-provider-v1-20260729'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out OpenRouter branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/openrouter-provider-v1-20260729
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Apply OpenRouter provider integration
+        run: python scripts/apply-openrouter-provider-v1.py
+
+      - name: Format and validate changed implementation
+        shell: bash
+        run: |
+          cargo fmt --all
+          node --check src/openrouter-provider.js
+          python scripts/validate-openrouter-provider.py
+          cargo check -p microgifter-homeserver-service
+
+      - name: Remove one-use integration files
+        shell: bash
+        run: |
+          rm scripts/apply-openrouter-provider-v1.py
+          rm .github/workflows/one-use-openrouter-provider-v1.yml
+
+      - name: Commit integrated provider
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Integrate OpenRouter model provider v1"
+            git push origin HEAD:feature/openrouter-provider-v1-20260729
+          fi
