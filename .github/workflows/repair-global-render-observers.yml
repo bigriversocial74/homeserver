@@ -1,0 +1,54 @@
+name: Repair global render observers
+
+on:
+  push:
+    branches:
+      - hotfix/agent-chat-dead-controls-20260728
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-global-render-observers
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out hotfix branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: hotfix/agent-chat-dead-controls-20260728
+          fetch-depth: 0
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Remove observer network and legacy runtime race
+        run: python scripts/repair-global-render-observers.py
+
+      - name: Validate frontend lifecycle and build
+        run: |
+          npm ci
+          npm run check:frontend
+          npm run build
+
+      - name: Commit clean product repair
+        run: |
+          rm .github/workflows/repair-global-render-observers.yml
+          rm scripts/repair-global-render-observers.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html src/main.js src/agent-workspace.js src/operational-data.js src/review-intelligence.js src/cloud-connections.js src/ollama-install-assistant.js scripts/validate-agent-workspace.py scripts/validate-agent-chat-route.py .github/workflows/repair-global-render-observers.yml scripts/repair-global-render-observers.py
+          git commit -m "Remove delayed global render observer network"
+          git push origin HEAD:hotfix/agent-chat-dead-controls-20260728
