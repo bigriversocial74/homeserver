@@ -36,7 +36,9 @@ jobs:
           cache: npm
 
       - name: Apply OpenRouter provider integration
-        run: python scripts/apply-openrouter-provider-v1.py
+        run: |
+          python scripts/apply-openrouter-provider-v1.py
+          python scripts/fix-openrouter-provider-v1.py
 
       - name: Format and validate changed implementation
         shell: bash
@@ -50,6 +52,7 @@ jobs:
         shell: bash
         run: |
           rm scripts/apply-openrouter-provider-v1.py
+          rm scripts/fix-openrouter-provider-v1.py
           rm .github/workflows/one-use-openrouter-provider-v1.yml
 
       - name: Commit integrated provider
