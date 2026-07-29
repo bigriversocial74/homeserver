@@ -90,7 +90,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-async fn status_handler(State(state): State<Arc<AppState>>) -> ApiResult<SoftwareAuthoritySnapshot> {
+async fn status_handler(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<SoftwareAuthoritySnapshot> {
     tokio::task::spawn_blocking(move || status_snapshot(&*state.connection()?))
         .await
         .map_err(|error| internal_error("software_authority_task_failed", error))?
@@ -138,7 +140,10 @@ pub fn ensure_update_download_allowed(connection: &Connection, update_id: &str) 
                 snapshot.cutover_state == "active",
                 "VP3 software authority is not active"
             );
-            ensure!(snapshot.update_eligible, "VP3 license does not permit this update");
+            ensure!(
+                snapshot.update_eligible,
+                "VP3 license does not permit this update"
+            );
             let expires_at = snapshot
                 .vp3_lease_expires_at_utc
                 .as_deref()

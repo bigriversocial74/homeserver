@@ -14,6 +14,7 @@ mod operational_data;
 mod recovery_transfer;
 mod review_intelligence;
 mod semantic_vault;
+mod software_authority;
 mod update;
 mod update_apply;
 mod update_store;
@@ -79,6 +80,16 @@ impl AppState {
             return HealthSnapshot::needs_attention(
                 &self.config.server_name,
                 "update_integrity_check_failed",
+            );
+        }
+        if let Err(error) = software_authority::health_check(&connection) {
+            error!(
+                ?error,
+                "HomeServer software-authority database health check failed"
+            );
+            return HealthSnapshot::needs_attention(
+                &self.config.server_name,
+                "software_authority_integrity_check_failed",
             );
         }
         if let Err(error) = microgifter_connection::health_check(&connection) {
@@ -257,6 +268,7 @@ impl AppState {
             let connection = self.connection()?;
             database::maintain_history(&connection)?;
             update_store::maintain_history(&connection)?;
+            software_authority::maintain_history(&connection)?;
             microgifter_connection::maintain_history(&connection)?;
             model_center::maintain_history(&connection)?;
             operational_data::maintain_history(&connection)?;
@@ -306,7 +318,7 @@ impl AppState {
             {
                 let connection = self.connection()?;
                 update_store::record_application_result(&connection, &result)?;
-                microgifter_connection::record_update_result_receipt(
+                software_authority::record_update_result_receipt(
                     &connection,
                     &result.update_id,
                     &result.target_version,
@@ -354,7 +366,7 @@ impl AppState {
             update_store::record_current(&*self.connection()?)?;
             return Ok(UpdateActionResult {
                 status: self.update_status()?,
-                message: "Microgifter HomeServer is current.".to_owned(),
+                message: "HomeServer is current.".to_owned(),
                 restart_required: false,
             });
         }
@@ -368,7 +380,7 @@ impl AppState {
         Ok(UpdateActionResult {
             status: self.update_status()?,
             message: format!(
-                "Microgifter HomeServer {} is available and its release manifest is valid.",
+                "HomeServer {} is available and its release manifest is valid.",
                 verified.manifest.payload.version
             ),
             restart_required: false,
@@ -379,7 +391,7 @@ impl AppState {
         let stored = {
             let connection = self.connection()?;
             let available = update_store::latest_in_state(&connection, UpdateState::Available)?;
-            microgifter_connection::ensure_update_download_allowed(
+            software_authority::ensure_update_download_allowed(
                 &connection,
                 &available.record.update_id,
             )?;
@@ -419,11 +431,11 @@ impl AppState {
         let stored = {
             let connection = self.connection()?;
             let stored = update_store::latest_in_state(&connection, UpdateState::Staged)?;
-            microgifter_connection::ensure_update_download_allowed(
+            software_authority::ensure_update_download_allowed(
                 &connection,
                 &stored.record.update_id,
             )?;
-            microgifter_connection::ensure_update_install_window(&connection)?;
+            software_authority::ensure_update_install_window(&connection)?;
             stored
         };
         let installer_path = stored
