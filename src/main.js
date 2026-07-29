@@ -18,6 +18,7 @@ let mcpBridgePath = null;
 let notice = null;
 let busy = false;
 let activePage = window.location.hash.replace("#", "") || "dashboard";
+let notificationMenuOpen = false;
 
 const pages = [
   ["dashboard", "Dashboard", "dashboard"],
@@ -160,11 +161,36 @@ function renderSidebar() {
   </aside>`;
 }
 
+
+function notificationItems() {
+  const items = [];
+  if (!isHealthy()) items.push({ tone: "critical", icon: "system", title: "HomeServer needs attention", detail: "The local service is not reporting healthy status.", page: "system" });
+  if (!isConnected()) items.push({ tone: "warning", icon: "key", title: "HomeServer is not paired", detail: "Connect a management provider to enable licensed cloud services.", page: "sync" });
+  if (!lastBackup()) items.push({ tone: "warning", icon: "backup", title: "No protected backup yet", detail: "Create a verified local recovery point.", page: "backups" });
+  if (modelSnapshot?.runtime?.state !== "running") items.push({ tone: "warning", icon: "model", title: "Model runtime is offline", detail: "Open Model Center to install or start Ollama.", page: "models" });
+  if (updateDisplayState() === "not_configured") items.push({ tone: "info", icon: "update", title: "Release channel setup needed", detail: "Configure the signed HomeServer update source.", page: "system" });
+  if (!items.length) items.push({ tone: "success", icon: "shield", title: "HomeServer is healthy", detail: "No active system alerts require attention.", page: "dashboard" });
+  return items;
+}
+
+function renderNotificationMenu() {
+  const items = notificationItems();
+  const alertCount = items.filter((item) => item.tone !== "success").length;
+  return `<div class="notification-center ${notificationMenuOpen ? "open" : ""}">
+    <button type="button" class="icon-button notification-toggle" id="notification-toggle" aria-label="Notifications" aria-haspopup="menu" aria-expanded="${notificationMenuOpen ? "true" : "false"}">${icon("bell", 19)}${alertCount ? `<span class="notification-count">${Math.min(alertCount, 9)}</span>` : ""}</button>
+    ${notificationMenuOpen ? `<section class="notification-dropdown" id="notification-dropdown" role="menu" aria-label="HomeServer notifications">
+      <header><div><strong>Notifications</strong><span>${alertCount ? `${alertCount} item${alertCount === 1 ? "" : "s"} need attention` : "Everything looks good"}</span></div><button type="button" id="notification-close" aria-label="Close notifications">×</button></header>
+      <div class="notification-list">${items.map((item) => `<button type="button" class="notification-item ${item.tone}" data-notification-page="${item.page}" role="menuitem"><span class="notification-item-icon">${icon(item.icon, 17)}</span><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.detail)}</small></span>${icon("arrow", 13)}</button>`).join("")}</div>
+      <footer><button type="button" data-notification-page="system">View system activity</button></footer>
+    </section>` : ""}
+  </div>`;
+}
+
 function renderTopbar() {
   return `<div class="app-topbar">
     <label class="global-search">${icon("search", 17)}<input type="search" placeholder="Search HomeServer" aria-label="Search HomeServer"></label>
     ${badge(isHealthy() ? "Healthy" : "Attention", isHealthy() ? "healthy" : "degraded")}
-    <button type="button" class="icon-button" aria-label="Notifications">${icon("bell", 19)}<span class="notification-count">3</span></button>
+    ${renderNotificationMenu()}
     <button type="button" class="avatar-button" aria-label="Account menu"><span>MG</span>${icon("arrow", 13)}</button>
   </div>`;
 }
@@ -643,6 +669,19 @@ function render() {
 
 function bindEvents() {
   document.querySelectorAll("[data-page]").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.page)));
+  document.querySelector("#notification-toggle")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    notificationMenuOpen = !notificationMenuOpen;
+    render();
+  });
+  document.querySelector("#notification-close")?.addEventListener("click", () => {
+    notificationMenuOpen = false;
+    render();
+  });
+  document.querySelectorAll("[data-notification-page]").forEach((button) => button.addEventListener("click", () => {
+    notificationMenuOpen = false;
+    navigate(button.dataset.notificationPage);
+  }));
   document.querySelectorAll("#refresh-status").forEach((button) => button.addEventListener("click", () => loadAll()));
   document.querySelector("#cloud-pair-form")?.addEventListener("submit", pairCloud);
   document.querySelector("#cloud-sync-now")?.addEventListener("click", syncCloud);
@@ -681,6 +720,7 @@ function bindEvents() {
 
 function navigate(page) {
   if (!pages.some(([key]) => key === page)) page = "dashboard";
+  notificationMenuOpen = false;
   activePage = page;
   history.replaceState(null, "", `#${page}`);
   notice = null;
@@ -1096,6 +1136,21 @@ async function loadAll(clearNotice = true) {
   if (!notice && results[7].status === "rejected" && activePage === "integrations") notice = { kind: "warning", message: `Local MCP runtime unavailable: ${String(results[7].reason)}` };
   render();
 }
+
+
+document.addEventListener("click", (event) => {
+  if (!notificationMenuOpen) return;
+  if (event.target instanceof Element && event.target.closest(".notification-center")) return;
+  notificationMenuOpen = false;
+  render();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !notificationMenuOpen) return;
+  notificationMenuOpen = false;
+  render();
+  document.querySelector("#notification-toggle")?.focus();
+});
 
 window.addEventListener("hashchange", () => {
   const page = window.location.hash.replace("#", "");
