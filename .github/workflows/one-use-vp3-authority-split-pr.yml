@@ -27,9 +27,12 @@ jobs:
         run: |
           from pathlib import Path
 
+          def normalized_source(file_path: Path) -> str:
+              return file_path.read_text(encoding="utf-8").replace("\r\n", "\n")
+
           def replace_once(path: str, old: str, new: str) -> None:
               file_path = Path(path)
-              source = file_path.read_text(encoding="utf-8")
+              source = normalized_source(file_path)
               count = source.count(old)
               if count != 1:
                   raise SystemExit(f"{path}: expected one match, found {count}: {old!r}")
@@ -37,7 +40,7 @@ jobs:
 
           def replace_all(path: str, old: str, new: str, expected: int) -> None:
               file_path = Path(path)
-              source = file_path.read_text(encoding="utf-8")
+              source = normalized_source(file_path)
               count = source.count(old)
               if count != expected:
                   raise SystemExit(f"{path}: expected {expected} matches, found {count}: {old!r}")
