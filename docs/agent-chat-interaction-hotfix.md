@@ -1,6 +1,6 @@
 # Agent Chat Interaction Hotfix
 
-Status: observer-free runtime and notification dropdown implemented; final validation running
+Status: observer-free runtime and notification dropdown implemented; Windows test installer building
 
 ## Reported regressions
 
