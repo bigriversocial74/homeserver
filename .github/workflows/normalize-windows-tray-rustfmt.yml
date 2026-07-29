@@ -1,0 +1,45 @@
+name: Normalize Windows Tray Rustfmt
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: normalize-windows-tray-rustfmt
+  cancel-in-progress: false
+
+jobs:
+  normalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/windows-tray-background-ui-20260728
+          fetch-depth: 0
+
+      - name: Install Rust formatter
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Normalize Rust source
+        shell: pwsh
+        run: cargo fmt --all
+
+      - name: Commit formatted source and remove helper
+        shell: pwsh
+        run: |
+          Remove-Item .github/workflows/normalize-windows-tray-rustfmt.yml -Force
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/src/lib.rs .github/workflows/normalize-windows-tray-rustfmt.yml
+          git commit -m "Normalize Windows tray Rust formatting"
+          git push origin HEAD:feature/windows-tray-background-ui-20260728
