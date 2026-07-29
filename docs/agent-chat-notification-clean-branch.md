@@ -2,4 +2,6 @@
 
 This branch starts from current `main` and applies the validated observer-free Agent Chat, dashboard logo return, and interactive header notification dropdown without altering the newly merged POD provider work.
 
+The Windows-generated Cargo dependency lock is normalized. Final Production Quality validation is running on the complete clean source.
+
 No SQL migration is required.
