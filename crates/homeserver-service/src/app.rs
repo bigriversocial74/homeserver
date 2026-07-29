@@ -20,7 +20,7 @@ mod pod_provider_runtime;
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
     mcp_runtime, microgifter_connection, model_center, openrouter_provider, operational_data,
-    review_intelligence, semantic_vault, update, update_store, AppState,
+    review_intelligence, semantic_vault, software_authority, update, update_store, AppState,
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -47,6 +47,7 @@ pub async fn run(
     let connection = database::initialize(&config.database_path)?;
     activity::initialize(&connection)?;
     update_store::initialize(&connection)?;
+    software_authority::initialize(&connection)?;
     cloud_connector::initialize(&connection)?;
     cloud_registry::initialize(&connection)?;
     microgifter_connection::initialize(&connection)?;
@@ -92,7 +93,7 @@ pub async fn run(
     }
     if let Some(result) = update::consume_application_result(&config)? {
         update_store::record_application_result(&connection, &result)?;
-        microgifter_connection::record_update_result_receipt(
+        software_authority::record_update_result_receipt(
             &connection,
             &result.update_id,
             &result.target_version,
@@ -143,6 +144,7 @@ pub async fn run(
             .merge(cloud_connector::router(state.clone()))
             .merge(registry_router)
             .merge(cloud_pairing_v2::router(state.clone()))
+            .merge(software_authority::router(state.clone()))
             .merge(microgifter_connection::router(state.clone()))
             .merge(pod_provider_runtime::router(state.clone()))
             .merge(knowledge_vault::router(state.clone()))

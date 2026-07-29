@@ -80,6 +80,7 @@ for component in (
     "cloud_connector",
     "cloud_pairing_v2",
     "microgifter_connection",
+    "software_authority",
     "pod_provider_runtime",
     "knowledge_vault",
     "model_center",
