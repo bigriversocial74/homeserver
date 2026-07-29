@@ -2,9 +2,10 @@
 """Validate local MCP read and request-only security and packaging boundaries."""
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
+
+from validation_support import router_component_is_secured
 
 ROOT = Path(__file__).resolve().parents[1]
 ERRORS: list[str] = []
@@ -99,11 +100,7 @@ require('src-tauri/tauri.conf.json', 'resources/microgifter-homeserver-mcp.exe',
 require('Cargo.toml', 'crates/homeserver-mcp', 'MCP bridge is not a workspace member')
 
 app_source = read('crates/homeserver-service/src/app.rs')
-secured_mcp_merge = re.search(
-    r"http::secure\([\s\S]*?\.merge\(\s*mcp_runtime::router\(state(?:\.clone\(\))?\)\s*\)[\s\S]*?\);",
-    app_source,
-)
-if not secured_mcp_merge:
+if not router_component_is_secured(app_source, 'mcp_runtime'):
     ERRORS.append('MCP router is not merged inside the secured local API')
 
 if ERRORS:
