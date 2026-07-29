@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Fail CI when audited HomeServer security boundaries regress."""
-
 from __future__ import annotations
 
 import json
 import re
 import sys
 from pathlib import Path
+
+from validation_support import (
+    base_router_is_secured,
+    merged_value_is_secured,
+    router_component_is_secured,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 ERRORS: list[str] = []
@@ -65,22 +70,33 @@ forbid(
     "backup key non-Windows protection must fail closed",
 )
 
-# Every merged loopback route must be wrapped by the same anti-browser boundary.
-for marker in (
-    "let router = http::secure(",
-    "http::router(state.clone())",
-    ".merge(cloud_connector::router(state.clone()))",
-    ".merge(knowledge_vault::router(state.clone()))",
-    ".merge(model_center::router(state.clone()))",
-    ".merge(semantic_vault::router(state.clone()))",
-    ".merge(agent_runtime::router(state.clone()))",
-    ".merge(mcp_runtime::router(state))",
+# Every merged loopback route must remain inside the same anti-browser boundary.
+app_source = text("crates/homeserver-service/src/app.rs")
+if not base_router_is_secured(app_source):
+    ERRORS.append("the base local API router is not wrapped by http::secure")
+
+for component in (
+    "activity",
+    "cloud_connector",
+    "cloud_pairing_v2",
+    "microgifter_connection",
+    "pod_provider_runtime",
+    "knowledge_vault",
+    "model_center",
+    "semantic_vault",
+    "operational_data",
+    "review_intelligence",
+    "agent_runtime",
+    "mcp_runtime",
 ):
-    require(
-        "crates/homeserver-service/src/app.rs",
-        marker,
-        f"the fully merged local API router is missing secured component: {marker}",
-    )
+    if not router_component_is_secured(app_source, component):
+        ERRORS.append(
+            f"the fully merged local API router is missing secured component: {component}::router"
+        )
+
+if not merged_value_is_secured(app_source, "registry_router"):
+    ERRORS.append("the cloud registry router is not merged inside the secured local API")
+
 for marker in (
     "LOCAL_CLIENT_HEADER",
     "LOCAL_CLIENT_VALUE",
@@ -106,11 +122,7 @@ for marker in (
     "MAX_PULL_STREAM_BYTES",
     "model_operations",
 ):
-    require(
-        "crates/homeserver-service/src/model_center.rs",
-        marker,
-        f"Model Center boundary is missing {marker}",
-    )
+    require("crates/homeserver-service/src/model_center.rs", marker, f"Model Center boundary is missing {marker}")
 for marker in (
     "MAX_EMBED_INPUTS",
     "MAX_EMBED_TOTAL_CHARS",
@@ -138,22 +150,14 @@ for marker in (
         marker,
         f"semantic Knowledge Vault boundary is missing {marker}",
     )
-for forbidden in (
-    "https://",
-    "0.0.0.0",
-    "cloud_connector",
-):
+for forbidden in ("https://", "0.0.0.0", "cloud_connector"):
     forbid(
         "crates/homeserver-service/src/semantic_vault.rs",
         forbidden,
         f"semantic Knowledge Vault contains a disallowed external boundary: {forbidden}",
     )
 
-for forbidden in (
-    "https://ollama.com/api",
-    "0.0.0.0:11434",
-    "OLLAMA_HOST",
-):
+for forbidden in ("https://ollama.com/api", "0.0.0.0:11434", "OLLAMA_HOST"):
     forbid(
         "crates/homeserver-service/src/model_center.rs",
         forbidden,
@@ -165,7 +169,7 @@ forbid(
     "Control Center CSP still permits unsafe inline content",
 )
 
-# MCP must remain fixed-loopback, client-scoped, request-only for state changes, and audited.
+# MCP must remain fixed-loopback, client-scoped, request-only, and audited.
 for marker in (
     'const MCP_ENDPOINT: &str = "http://127.0.0.1:47831/mcp"',
     'const MAX_MCP_BODY_BYTES: usize = 128 * 1024',
@@ -180,11 +184,7 @@ for marker in (
     '"world.request"',
     '"agents.request"',
 ):
-    require(
-        "crates/homeserver-service/src/mcp_runtime.rs",
-        marker,
-        f"local MCP boundary is missing {marker}",
-    )
+    require("crates/homeserver-service/src/mcp_runtime.rs", marker, f"local MCP boundary is missing {marker}")
 for marker in ("0.0.0.0", "https://", "MG_HOMESERVER_MCP_URL"):
     forbid(
         "crates/homeserver-service/src/mcp_runtime.rs",
@@ -210,10 +210,14 @@ for marker in (
     "archive contains too many entries",
 ):
     require("crates/homeserver-service/src/backup.rs", marker, f"recovery extraction is missing guard: {marker}")
-for marker in ("activate_staged_database", "reactivate the previous HomeServer database", "delete_restore_request"):
+for marker in (
+    "activate_staged_database",
+    "reactivate the previous HomeServer database",
+    "delete_restore_request",
+):
     require("crates/homeserver-service/src/backup.rs", marker, f"restore fail-safe is missing {marker}")
 
-# SQLite durability must prefer committed data over throughput for the local authority.
+# SQLite durability must prefer committed data over throughput.
 require(
     "crates/homeserver-service/src/database.rs",
     'pragma_update(None, "synchronous", "FULL")',
@@ -245,7 +249,7 @@ for marker in ("icacls", "S-1-5-18", "S-1-5-32-544", "/inheritance:r"):
 # Production logging and synchronization histories must have retention.
 require("crates/homeserver-service/src/main.rs", "prune_old_service_logs", "service log retention is missing")
 
-# Supply-chain workflows must default to read-only and every external action must be pinned by SHA.
+# Supply-chain workflows must default to read-only and pin external actions.
 workflow_dir = ROOT / ".github" / "workflows"
 obsolete = {
     "audit-source-snapshot.yml",
