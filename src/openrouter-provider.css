@@ -1,0 +1,245 @@
+.openrouter-provider-section {
+  margin: 22px 0;
+}
+
+.openrouter-provider-card {
+  overflow: hidden;
+}
+
+.openrouter-provider-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 20px;
+}
+
+.openrouter-provider-heading h2 {
+  margin: 2px 0 7px;
+  font-size: 1.35rem;
+}
+
+.openrouter-provider-heading span:not(.provider-state) {
+  display: block;
+  max-width: 760px;
+  color: var(--text-muted, #667085);
+  line-height: 1.5;
+}
+
+.provider-kicker {
+  margin: 0;
+  color: #6457d9;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.provider-state {
+  flex: 0 0 auto;
+  border: 1px solid #d7dae3;
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: #f7f8fb;
+  color: #566074;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.provider-state.is-enabled {
+  border-color: #b9e1c8;
+  background: #eefaf2;
+  color: #197443;
+}
+
+.openrouter-provider-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.75fr);
+  gap: 20px;
+}
+
+.openrouter-settings-form,
+.openrouter-test-form {
+  display: grid;
+  gap: 14px;
+}
+
+.openrouter-settings-form > label,
+.openrouter-test-form > label {
+  display: grid;
+  gap: 7px;
+}
+
+.openrouter-settings-form label > span,
+.openrouter-policy-grid label > span,
+.openrouter-limit-grid label > span {
+  color: #566074;
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.openrouter-settings-form input,
+.openrouter-settings-form select,
+.openrouter-settings-form textarea,
+.openrouter-test-form textarea {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid #d7dae3;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fff;
+  color: #1b2433;
+  font: inherit;
+}
+
+.openrouter-settings-form textarea,
+.openrouter-test-form textarea {
+  resize: vertical;
+}
+
+.model-picker-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.openrouter-limit-grid,
+.openrouter-policy-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.openrouter-policy-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.openrouter-policy-grid label,
+.openrouter-limit-grid label {
+  display: grid;
+  gap: 7px;
+}
+
+.openrouter-check {
+  display: flex !important;
+  grid-template-columns: none !important;
+  align-items: flex-start;
+  gap: 10px !important;
+  border: 1px solid #e2e5ec;
+  border-radius: 10px;
+  padding: 11px 12px;
+  background: #fafbfc;
+}
+
+.openrouter-check input {
+  width: auto;
+  min-height: 0;
+  margin-top: 2px;
+}
+
+.openrouter-check.privacy {
+  border-color: #e9d29d;
+  background: #fff9ec;
+}
+
+.openrouter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.openrouter-provider-aside {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.openrouter-usage-card,
+.openrouter-test-form,
+.openrouter-test-result,
+.openrouter-privacy-card {
+  border: 1px solid #e0e3eb;
+  border-radius: 13px;
+  padding: 15px;
+  background: #fafbfc;
+}
+
+.openrouter-usage-card {
+  display: grid;
+  gap: 4px;
+}
+
+.openrouter-usage-card > span,
+.openrouter-usage-card small,
+.openrouter-test-result small {
+  color: #687386;
+  font-size: 0.75rem;
+}
+
+.openrouter-usage-card strong {
+  font-size: 1.45rem;
+}
+
+.openrouter-test-form h3,
+.openrouter-privacy-card strong,
+.openrouter-test-result strong {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.openrouter-test-form p,
+.openrouter-privacy-card p,
+.openrouter-test-result p {
+  margin: 5px 0 0;
+  color: #667085;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.openrouter-test-result {
+  border-color: #bfe2cb;
+  background: #f1faf4;
+}
+
+.openrouter-privacy-card {
+  border-color: #d8d2f4;
+  background: #f7f5ff;
+}
+
+.openrouter-notice {
+  margin-bottom: 16px;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.82rem;
+}
+
+.openrouter-notice.success {
+  border: 1px solid #bfe2cb;
+  background: #eff9f2;
+  color: #176c3f;
+}
+
+.openrouter-notice.warning {
+  border: 1px solid #efd29c;
+  background: #fff8e8;
+  color: #815b13;
+}
+
+@media (max-width: 1000px) {
+  .openrouter-provider-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .openrouter-provider-heading {
+    flex-direction: column;
+  }
+
+  .model-picker-row,
+  .openrouter-limit-grid,
+  .openrouter-policy-grid {
+    grid-template-columns: 1fr;
+  }
+}
