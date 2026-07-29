@@ -39,7 +39,13 @@ jobs:
 
       - name: Apply implementation
         shell: pwsh
-        run: python scripts/implement_windows_tray.py
+        run: |
+          python scripts/implement_windows_tray.py
+          $path = "src-tauri/src/lib.rs"
+          $text = Get-Content $path -Raw
+          $text = $text.Replace('return app.autolaunch().is_enabled().map_err(|error| error.to_string());', 'app.autolaunch().is_enabled().map_err(|error| error.to_string())')
+          $text = $text.Replace('return manager.is_enabled().map_err(|error| error.to_string());', 'manager.is_enabled().map_err(|error| error.to_string())')
+          Set-Content -Path $path -Value $text -Encoding utf8
 
       - name: Normalize locks
         shell: pwsh
