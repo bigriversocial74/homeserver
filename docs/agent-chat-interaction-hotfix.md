@@ -1,6 +1,6 @@
 # Agent Chat Interaction Hotfix
 
-Status: final observer-free runtime validation running
+Status: observer-free runtime validated; logo dashboard link validation running
 
 ## Reported regressions
 
@@ -33,6 +33,12 @@ Status: final observer-free runtime validation running
 - The message canvas scrolls independently beneath the overlaid sticky footer composer.
 - Existing pairing, chat persistence, Phase 6A endpoints, updater trust, and local-first authority remain unchanged.
 
+## Navigation refinement
+
+- The HomeServer logo in the Agent Chat sidebar returns directly to the dashboard.
+- The existing Control Center return button remains available.
+- Keyboard focus and hover states make the logo navigation discoverable and accessible.
+
 ## Permanent validation
 
 The frontend validator now enforces:
@@ -46,6 +52,7 @@ The frontend validator now enforces:
 - full-window Agent Chat layout
 - independent message scrolling
 - sticky footer composer positioning
+- Agent Chat logo dashboard navigation
 
 ## Product files
 
