@@ -3,7 +3,22 @@ use serde_json::{json, Value};
 
 #[tauri::command]
 pub(crate) async fn homeserver_agent_workspace() -> Result<Value, String> {
-    get_json("/v1/agent/workspace").await
+    let mut workspace: Value = get_json("/v1/agent/workspace").await?;
+    let activity = get_json::<Value>("/v1/activity")
+        .await
+        .unwrap_or_else(|_| json!({
+            "last_user_active_at_utc": null,
+            "current_session_started_at_utc": null,
+            "previous_session_started_at_utc": null,
+            "previous_session_stopped_at_utc": null,
+            "previous_session_clean": false,
+            "recent_events": []
+        }));
+    if let Some(object) = workspace.as_object_mut() {
+        object.insert("activity".to_owned(), activity);
+    }
+    let _: Result<Value, String> = post_json("/v1/activity/active", &json!({})).await;
+    Ok(workspace)
 }
 
 #[tauri::command]
