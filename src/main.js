@@ -19,6 +19,7 @@ let notice = null;
 let busy = false;
 let activePage = window.location.hash.replace("#", "") || "dashboard";
 let notificationMenuOpen = false;
+let desktopAutostartEnabled = false;
 
 const pages = [
   ["dashboard", "Dashboard", "dashboard"],
@@ -554,6 +555,7 @@ function renderSettings() {
   return `${pageHeader("Settings", "Manage HomeServer preferences and Control Center configuration.")}
     <section class="settings-layout"><div class="settings-sections">
       ${settingsSection("dashboard", "General", "Basic server display preferences.", `<label><span>Server Name</span><input id="setting-server-name" type="text" value="${escapeHtml(prefs.serverName)}" maxlength="64"></label><label><span>Time Zone</span><select id="setting-time-zone"><option value="local" ${prefs.timeZone === "local" ? "selected" : ""}>Use Windows local time</option><option value="utc" ${prefs.timeZone === "utc" ? "selected" : ""}>UTC</option></select></label><button class="button primary" data-save-setting="general">Save</button>`)}
+      ${settingsSection("system", "Windows Desktop", "Keep the Control Center available without leaving a terminal or taskbar window open.", `<label class="toggle-field"><span>Start Control Center with Windows</span>${toggle("setting-start-with-windows", desktopAutostartEnabled)}</label><p class="settings-note">Closing the window hides the Control Center to the Windows system tray. The HomeServer service continues running independently.</p><button class="button primary" data-save-setting="desktop">Save</button>`)}
       ${settingsSection("shield", "Security", "Manage local interface security preferences.", `<label class="toggle-field"><span>Local UI lock</span>${toggle("setting-local-lock", prefs.localLock)}</label><label><span>Auto lock after inactivity</span><select id="setting-auto-lock"><option value="15" ${prefs.autoLock === "15" ? "selected" : ""}>15 minutes</option><option value="30" ${prefs.autoLock === "30" ? "selected" : ""}>30 minutes</option><option value="60" ${prefs.autoLock === "60" ? "selected" : ""}>1 hour</option></select></label><button class="button primary" data-save-setting="security">Save</button>`)}
       ${settingsSection("key", "Pairing", "View signed pairing state and connection controls.", `<label><span>Pairing Mode</span><select disabled><option>Secure one-time code</option></select></label><label><span>Device Identity</span><input class="mono" type="text" value="${escapeHtml(compactId(cloudSnapshot?.device_id))}" disabled></label><button class="button primary" data-page="sync">${isConnected() ? "Manage" : "Pair"}</button>`)}
       ${settingsSection("bell", "Notifications", "Configure Control Center notification presentation.", `<label class="toggle-field"><span>Desktop notifications</span>${toggle("setting-notifications", prefs.notifications)}</label><label><span>Critical alerts</span><select id="setting-alerts"><option value="immediate" ${prefs.alerts === "immediate" ? "selected" : ""}>Immediately</option><option value="daily" ${prefs.alerts === "daily" ? "selected" : ""}>Daily summary</option></select></label><button class="button primary" data-save-setting="notifications">Save</button>`)}
@@ -561,7 +563,7 @@ function renderSettings() {
       ${settingsSection("backup", "Backup Preferences", "Set the Control Center backup schedule summary.", `<label><span>Automatic schedule</span><input type="text" value="Every ${backupCatalog?.interval_hours ?? 24} hours" disabled></label><label><span>Retention Policy</span><input type="text" value="${backupCatalog?.retention_count ?? 14} automatic backups" disabled></label><button class="button primary" data-page="backups">View</button>`)}
       ${settingsSection("settings", "Advanced", "Interface diagnostics and presentation preferences.", `<label class="toggle-field"><span>Compact interface</span>${toggle("setting-compact", prefs.compact)}</label><label class="toggle-field"><span>Auto refresh status</span>${toggle("setting-auto-refresh", prefs.autoRefresh)}</label><button class="button primary" data-save-setting="advanced">Save</button>`)}
     </div><aside class="settings-aside">
-      <article class="panel"><div class="panel-title"><div><h2>Settings Summary</h2><p>Current Control Center configuration.</p></div></div><dl class="summary-list settings-summary"><div><dt>Server Name</dt><dd>${escapeHtml(prefs.serverName)}</dd></div><div><dt>Time Zone</dt><dd>${prefs.timeZone === "utc" ? "UTC" : "Windows local"}</dd></div><div><dt>Local Lock</dt><dd>${prefs.localLock ? "Enabled" : "Disabled"}</dd></div><div><dt>Auto Lock</dt><dd>${prefs.autoLock} minutes</dd></div><div><dt>Pairing</dt><dd>${isConnected() ? "Connected" : "Not paired"}</dd></div><div><dt>Notifications</dt><dd>${prefs.notifications ? "Enabled" : "Disabled"}</dd></div><div><dt>Backups</dt><dd>${backupCount()} records</dd></div><div><dt>Updates</dt><dd>${updateDisplayState() === "not_configured" ? "Beta channel" : humanize(updateDisplayState())}</dd></div></dl></article>
+      <article class="panel"><div class="panel-title"><div><h2>Settings Summary</h2><p>Current Control Center configuration.</p></div></div><dl class="summary-list settings-summary"><div><dt>Server Name</dt><dd>${escapeHtml(prefs.serverName)}</dd></div><div><dt>Time Zone</dt><dd>${prefs.timeZone === "utc" ? "UTC" : "Windows local"}</dd></div><div><dt>Local Lock</dt><dd>${prefs.localLock ? "Enabled" : "Disabled"}</dd></div><div><dt>Auto Lock</dt><dd>${prefs.autoLock} minutes</dd></div><div><dt>Pairing</dt><dd>${isConnected() ? "Connected" : "Not paired"}</dd></div><div><dt>Notifications</dt><dd>${prefs.notifications ? "Enabled" : "Disabled"}</dd></div><div><dt>Start with Windows</dt><dd>${desktopAutostartEnabled ? "Enabled" : "Disabled"}</dd></div><div><dt>Close Button</dt><dd>Hide to tray</dd></div><div><dt>Backups</dt><dd>${backupCount()} records</dd></div><div><dt>Updates</dt><dd>${updateDisplayState() === "not_configured" ? "Beta channel" : humanize(updateDisplayState())}</dd></div></dl></article>
       <article class="panel"><div class="panel-title"><div><h2>Security Status</h2><p>Your HomeServer security boundaries.</p></div></div><div class="security-checks"><span>${icon("check", 17)}Loopback API<strong>${statusSnapshot?.api_available ? "Active" : "Offline"}</strong></span><span>${icon("check", 17)}Credential Vault<strong>${isConnected() ? "Configured" : "Waiting"}</strong></span><span>${icon("check", 17)}Backup Encryption<strong>Enabled</strong></span><span>${icon("check", 17)}Signed Updates<strong>${updateDisplayState() === "not_configured" ? "Beta" : "Enabled"}</strong></span></div><button id="cloud-vault-test" class="button secondary full" ${!isConnected() || busy ? "disabled" : ""}>Run Security Check</button></article>
     </aside></section>`;
 }
@@ -734,7 +736,7 @@ async function handleQuickAction(event) {
   if (action === "backup-now") return createManualBackup();
 }
 
-function savePreferences() {
+async function savePreferences() {
   const prefs = loadPreferences();
   const serverName = document.querySelector("#setting-server-name")?.value?.trim();
   if (serverName) prefs.serverName = serverName;
@@ -745,8 +747,18 @@ function savePreferences() {
   prefs.alerts = document.querySelector("#setting-alerts")?.value || prefs.alerts;
   prefs.compact = Boolean(document.querySelector("#setting-compact")?.checked);
   prefs.autoRefresh = Boolean(document.querySelector("#setting-auto-refresh")?.checked);
+  const requestedAutostart = Boolean(document.querySelector("#setting-start-with-windows")?.checked);
+  if (requestedAutostart !== desktopAutostartEnabled) {
+    try {
+      desktopAutostartEnabled = Boolean(await invoke("control_center_set_autostart", { enabled: requestedAutostart }));
+    } catch (error) {
+      notice = { kind: "warning", message: `Unable to update Windows startup: ${String(error)}` };
+      render();
+      return;
+    }
+  }
   localStorage.setItem("homeserver-ui-preferences", JSON.stringify(prefs));
-  notice = { kind: "success", message: "Control Center preferences saved locally." };
+  notice = { kind: "success", message: "Control Center and Windows desktop preferences saved." };
   render();
 }
 
@@ -1089,7 +1101,9 @@ async function loadAll(clearNotice = true) {
     invoke("homeserver_models"),
     invoke("homeserver_mcp"),
     invoke("homeserver_mcp_bridge_path"),
+    invoke("control_center_autostart_enabled"),
   ]);
+  if (results[9].status === "fulfilled") desktopAutostartEnabled = Boolean(results[9].value);
   if (results[0].status === "rejected") {
     statusSnapshot = null;
     if (activePage === "agent") {
@@ -1137,6 +1151,12 @@ async function loadAll(clearNotice = true) {
   render();
 }
 
+
+window.addEventListener("homeserver-tray-action", (event) => {
+  if (event.detail?.action !== "check-updates" || busy) return;
+  navigate("system");
+  void checkUpdates();
+});
 
 document.addEventListener("click", (event) => {
   if (!notificationMenuOpen) return;
