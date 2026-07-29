@@ -15,4 +15,4 @@ No HomeServer service, pairing, provider, model, backup, MCP, or local-data beha
 
 ## Validation
 
-The focused Windows implementation passed frontend validation, the production frontend build, Rust formatting, native Control Center compilation, and strict Clippy. Full Production Quality and Cloud Connector validation are running on the clean product source.
+The focused Windows implementation passed frontend validation, the production frontend build, Rust formatting, native Control Center compilation, and strict Clippy. The committed Rust source has been normalized with `cargo fmt`. Full Production Quality and Cloud Connector validation are running on the final clean product source.
