@@ -524,3 +524,11 @@ svg { flex: none; }
 .notification-list{display:grid;max-height:380px;overflow-y:auto;padding:7px}
 .notification-item{display:grid;grid-template-columns:34px minmax(0,1fr) 16px;align-items:center;gap:10px;width:100%;padding:11px 10px;border:0;border-radius:10px;background:transparent;color:#24334f;text-align:left}.notification-item:hover{background:#f5f8fc}.notification-item-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:#eef3fa;color:#52637d}.notification-item>span:nth-child(2){min-width:0}.notification-item strong,.notification-item small{display:block}.notification-item strong{font-size:11px}.notification-item small{margin-top:4px;color:var(--muted);font-size:9px;line-height:1.45}.notification-item.critical .notification-item-icon{background:var(--red-soft);color:var(--red)}.notification-item.warning .notification-item-icon{background:var(--amber-soft);color:var(--amber)}.notification-item.info .notification-item-icon{background:var(--blue-soft);color:var(--blue)}.notification-item.success .notification-item-icon{background:var(--green-soft);color:var(--green)}
 .notification-dropdown>footer{padding:10px 14px;border-top:1px solid #e8edf4;background:#fbfcfe}.notification-dropdown>footer button{padding:0;border:0;background:transparent;color:var(--blue);font-size:10px;font-weight:750}
+
+
+.settings-note {
+  margin: 0;
+  color: var(--text-muted, #687386);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}

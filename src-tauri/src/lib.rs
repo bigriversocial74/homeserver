@@ -16,7 +16,15 @@ use microgifter_homeserver_core::{
 };
 use rfd::AsyncFileDialog;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+#[cfg(desktop)]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+#[cfg(desktop)]
+use tauri::{
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager, WindowEvent,
+};
 use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 use zeroize::Zeroizing;
@@ -24,6 +32,91 @@ use zeroize::Zeroizing;
 const MAX_RECOVERY_PACKAGE_BYTES: u64 = 320 * 1024 * 1024;
 const MAX_LOCAL_JSON_BYTES: usize = 2 * 1024 * 1024;
 const PASSPHRASE_HEADER: &str = "x-mg-recovery-passphrase";
+
+#[cfg(desktop)]
+struct DesktopUiState {
+    quitting: AtomicBool,
+}
+
+#[cfg(desktop)]
+fn show_control_center(app: &tauri::AppHandle, route: Option<&str>) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        if let Some(route) = route {
+            let script = match route {
+                "dashboard" => "window.location.hash = '#dashboard';",
+                "agent" => "window.location.hash = '#agent';",
+                "system" => "window.location.hash = '#system';",
+                _ => "",
+            };
+            if !script.is_empty() {
+                let _ = window.eval(script);
+            }
+        }
+    }
+}
+
+#[cfg(desktop)]
+fn run_tray_action(app: &tauri::AppHandle, action: &str) {
+    match action {
+        "open-dashboard" => show_control_center(app, Some("dashboard")),
+        "open-agent" => show_control_center(app, Some("agent")),
+        "open-status" => show_control_center(app, Some("system")),
+        "check-updates" => {
+            show_control_center(app, Some("system"));
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.eval(
+                    "window.dispatchEvent(new CustomEvent('homeserver-tray-action', { detail: { action: 'check-updates' } }));",
+                );
+            }
+        }
+        "quit-control-center" => {
+            app.state::<DesktopUiState>()
+                .quitting
+                .store(true, Ordering::SeqCst);
+            app.exit(0);
+        }
+        _ => {}
+    }
+}
+
+#[tauri::command]
+fn control_center_autostart_enabled(app: tauri::AppHandle) -> Result<bool, String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        app.autolaunch()
+            .is_enabled()
+            .map_err(|error| error.to_string())
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = app;
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+fn control_center_set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        let manager = app.autolaunch();
+        if enabled {
+            manager.enable().map_err(|error| error.to_string())?;
+        } else {
+            manager.disable().map_err(|error| error.to_string())?;
+        }
+        manager.is_enabled().map_err(|error| error.to_string())
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = (app, enabled);
+        Ok(false)
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct ApiErrorPayload {
@@ -295,8 +388,93 @@ async fn homeserver_export_recovery_package(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_autostart::MacosLauncher;
+
+                app.handle().plugin(tauri_plugin_autostart::init(
+                    MacosLauncher::LaunchAgent,
+                    Some(vec!["--hidden"]),
+                ))?;
+                app.manage(DesktopUiState {
+                    quitting: AtomicBool::new(false),
+                });
+
+                let dashboard =
+                    MenuItem::with_id(app, "open-dashboard", "Open Dashboard", true, None::<&str>)?;
+                let agent =
+                    MenuItem::with_id(app, "open-agent", "Open Agent Chat", true, None::<&str>)?;
+                let status =
+                    MenuItem::with_id(app, "open-status", "HomeServer Status", true, None::<&str>)?;
+                let updates = MenuItem::with_id(
+                    app,
+                    "check-updates",
+                    "Check for Updates",
+                    true,
+                    None::<&str>,
+                )?;
+                let separator = PredefinedMenuItem::separator(app)?;
+                let quit = MenuItem::with_id(
+                    app,
+                    "quit-control-center",
+                    "Quit Control Center",
+                    true,
+                    None::<&str>,
+                )?;
+                let menu = Menu::with_items(
+                    app,
+                    &[&dashboard, &agent, &status, &updates, &separator, &quit],
+                )?;
+                let tray_icon = app
+                    .default_window_icon()
+                    .cloned()
+                    .ok_or("HomeServer application icon is unavailable")?;
+
+                TrayIconBuilder::with_id("homeserver-control-center")
+                    .icon(tray_icon)
+                    .tooltip("Microgifter HomeServer")
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| run_tray_action(app, event.id.as_ref()))
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            show_control_center(tray.app_handle(), None);
+                        }
+                    })
+                    .build(app)?;
+
+                if std::env::args().any(|argument| argument == "--hidden") {
+                    if let Some(window) = app.get_webview_window("main") {
+                        window.hide()?;
+                    }
+                }
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            #[cfg(desktop)]
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let quitting = window
+                    .app_handle()
+                    .state::<DesktopUiState>()
+                    .quitting
+                    .load(Ordering::SeqCst);
+                if !quitting {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             homeserver_status,
+            control_center_autostart_enabled,
+            control_center_set_autostart,
             agent::homeserver_agent_workspace,
             agent::homeserver_agent_prompt,
             agent::homeserver_create_agent_goal,
