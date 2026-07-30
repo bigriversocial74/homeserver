@@ -17,6 +17,10 @@ mod cloud_connector;
 #[path = "app/pod_provider_runtime.rs"]
 mod pod_provider_runtime;
 
+#[allow(
+    dead_code,
+    reason = "VP3 response schemas retain forward-compatible server contract fields"
+)]
 #[path = "vp3_client.rs"]
 mod vp3_client;
 
