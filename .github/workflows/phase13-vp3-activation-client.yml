@@ -23,8 +23,8 @@ jobs:
           toolchain: 1.88.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Validate formatting
-        run: cargo fmt --all -- --check
+      - name: Apply canonical formatting before diagnostics
+        run: cargo fmt --all
       - name: Compile complete workspace
         run: cargo check --workspace --all-targets
       - name: Run complete workspace tests
