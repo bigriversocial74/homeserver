@@ -48,13 +48,15 @@ fn authority_is_current_tx(transaction: &Transaction<'_>, job: &JobRecord) -> Re
     let Some((connection_state, connection_revision, wrapper_state, grant_state, grant_revision, grant_expires, decision_outcome)) = context else {
         return Ok(false);
     };
-    Ok(matches!(connection_state.as_str(), "active" | "offline" | "grace")
+    let base_current = matches!(connection_state.as_str(), "active" | "offline" | "grace")
         && wrapper_state == "active"
         && grant_state == "active"
         && decision_outcome == "allowed"
         && connection_revision.max(0) as u64 == job.connection_authority_revision
         && grant_revision.max(0) as u64 == job.grant_revision
-        && parse_utc(&grant_expires, "grant expiration")? > Utc::now())
+        && parse_utc(&grant_expires, "grant expiration")? > Utc::now();
+    Ok(base_current
+        && wrapper_agents::agent_job_authority_is_current_tx(transaction, &job.job_id)?)
 }
 
 fn cancel_for_authority_tx(
