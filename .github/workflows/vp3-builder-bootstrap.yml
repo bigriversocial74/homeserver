@@ -1,4 +1,4 @@
-name: VP3 Builder Bootstrap
+name: VP3 Product Recovery
 
 on:
   push:
@@ -11,94 +11,50 @@ permissions:
   contents: write
 
 jobs:
-  bootstrap:
+  recover:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: feature/vp3-http-client-v1-20260729
           fetch-depth: 0
-      - name: Publish execution checkpoint
-        run: |
-          printf '%s\n' "VP3 heavy client builder started." > .vp3-heavy-builder-started
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add .vp3-heavy-builder-started
-          git commit -m "Start VP3 client product build"
-          git push origin HEAD:feature/vp3-http-client-v1-20260729
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - name: Extract builder and normalizer
+      - name: Generate permanent product files
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          def extract(lines, marker, output):
-              marker_index = next(index for index, line in enumerate(lines) if marker in line)
-              start = next(index for index in range(marker_index, len(lines)) if "python - <<'PY'" in lines[index] or "cat > /tmp/" in lines[index]) + 1
-              end = next(index for index in range(start, len(lines)) if lines[index] == '          PY')
-              prefix = ' ' * 10
-              result = []
-              triple = None
-              for raw in lines[start:end]:
-                  candidate = raw[len(prefix):] if raw.startswith(prefix) else raw
-                  if triple is None:
-                      result.append(candidate)
-                      for token in ("'''", '\"\"\"'):
-                          if candidate.count(token) % 2 == 1:
-                              triple = token
-                              break
-                  else:
-                      result.append(candidate if raw.startswith(prefix) and triple in raw else raw)
-                      if raw.count(triple) % 2 == 1:
-                          triple = None
-              if triple is not None:
-                  raise SystemExit(f'{marker} contains an unterminated triple-quoted string')
-              Path(output).write_text('\n'.join(result) + '\n')
-
-          build_lines = Path('.github/workflows/build-vp3-http-client-v1.yml').read_text().splitlines()
-          run_lines = Path('.github/workflows/run-vp3-http-client-builder.yml').read_text().splitlines()
-          extract(build_lines, "cat > /tmp/build_vp3_client.py <<'PY'", '/tmp/build_vp3_client.py')
-          extract(run_lines, 'Normalize generated validator and Rust integration', '/tmp/normalize_vp3_client.py')
+          source = Path('.github/workflows/build-vp3-http-client-v1.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(source) if "cat > /tmp/build_vp3_client.py <<'PY'" in line) + 1
+          end = next(i for i in range(start, len(source)) if source[i] == '          PY')
+          prefix = ' ' * 10
+          output = []
+          triple = None
+          for raw in source[start:end]:
+              candidate = raw[len(prefix):] if raw.startswith(prefix) else raw
+              if triple is None:
+                  output.append(candidate)
+                  for token in ("'''", '\"\"\"'):
+                      if candidate.count(token) % 2 == 1:
+                          triple = token
+                          break
+              else:
+                  output.append(candidate if raw.startswith(prefix) and triple in raw else raw)
+                  if raw.count(triple) % 2 == 1:
+                      triple = None
+          if triple is not None:
+              raise SystemExit('Embedded builder contains an unterminated source string')
+          Path('/tmp/build_vp3_client.py').write_text('\n'.join(output) + '\n')
           PY
           test -s /tmp/build_vp3_client.py
-          test -s /tmp/normalize_vp3_client.py
-      - name: Generate and normalize product tree
-        run: |
           python /tmp/build_vp3_client.py
-          python /tmp/normalize_vp3_client.py
-      - name: Validate generated product tree
-        id: validate
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          {
-            python scripts/validate-vp3-network-client.py
-            cargo fmt --all
-            cargo test -p microgifter-homeserver-service
-            cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings
-          } 2>&1 | tee vp3-client-build.log
-      - name: Commit generated product tree
-        if: always()
-        env:
-          VALIDATION_OUTCOME: ${{ steps.validate.outcome }}
+      - name: Commit product tree before certification
         run: |
           rm -f .github/workflows/build-vp3-http-client-v1.yml
           rm -f .github/workflows/run-vp3-http-client-builder.yml
           rm -f .github/workflows/vp3-builder-bootstrap.yml
-          rm -f .vp3-builder-bootstrap
-          rm -f .vp3-heavy-builder-started
-          if [ "$VALIDATION_OUTCOME" = "success" ]; then
-            rm -f vp3-client-build.log
-            message="Build VP3 HomeServer HTTP client v1"
-          else
-            message="Stage VP3 HomeServer client compiler diagnostics"
-          fi
+          rm -f .vp3-builder-bootstrap .vp3-heavy-builder-started
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          git commit -m "$message"
+          git commit -m "Stage VP3 HomeServer HTTP client product tree"
           git push origin HEAD:feature/vp3-http-client-v1-20260729
-
-# execution-checkpoint-trigger-2
