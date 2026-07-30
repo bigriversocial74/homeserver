@@ -116,12 +116,13 @@ mod tests {
         let secret = [7_u8; 32];
         let signing = SigningKey::from_bytes(&secret);
         let now = Utc::now().timestamp();
+        let snapshot_hash = "a".repeat(64);
         let claims = json!({
             "schema": "vp3.federated-settings.v1",
             "account_id": 7,
             "device_public_id": "HS-TEST",
             "max_revision": 3,
-            "snapshot_hash": "a".repeat(64),
+            "snapshot_hash": snapshot_hash.clone(),
             "generated_at": "2026-07-30T07:00:00+00:00",
             "settings": [],
             "replayed": false,
@@ -148,7 +149,7 @@ mod tests {
             account_id: 7,
             device_public_id: "HS-TEST",
             max_revision: 3,
-            snapshot_hash: &"a".repeat(64),
+            snapshot_hash: &snapshot_hash,
             generated_at: "2026-07-30T07:00:00+00:00",
             settings: json!([]),
             replayed: false,
