@@ -28,7 +28,14 @@ const MAX_PAIRING_ATTEMPTS: i64 = 5_000;
 const MAX_EVENTS: i64 = 10_000;
 const MAX_CAPABILITIES: usize = 128;
 
-const WRAPPER_KINDS: &[&str] = &["pod", "application", "commerce", "media", "service", "other"];
+const WRAPPER_KINDS: &[&str] = &[
+    "pod",
+    "application",
+    "commerce",
+    "media",
+    "service",
+    "other",
+];
 
 #[derive(Debug, Serialize)]
 struct ApiError {
@@ -201,7 +208,10 @@ pub fn health_check(connection: &Connection) -> Result<()> {
         [],
         |row| row.get(0),
     )?;
-    ensure!(orphan_connections == 0, "wrapper connection identity binding is invalid");
+    ensure!(
+        orphan_connections == 0,
+        "wrapper connection identity binding is invalid"
+    );
     Ok(())
 }
 
@@ -239,7 +249,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-async fn snapshot_handler(State(state): State<Arc<AppState>>) -> ApiResult<WrapperRegistrySnapshot> {
+async fn snapshot_handler(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<WrapperRegistrySnapshot> {
     tokio::task::spawn_blocking(move || snapshot(&state))
         .await
         .map_err(task_error)?
@@ -302,7 +314,10 @@ fn snapshot_with_connection(connection: &Connection) -> Result<WrapperRegistrySn
     let connections = read_connections(connection)?;
     let devices = read_devices(connection)?;
     let pairing_attempts = read_pairing_attempts(connection)?;
-    let active_wrappers = wrappers.iter().filter(|item| item.state == "active").count() as u64;
+    let active_wrappers = wrappers
+        .iter()
+        .filter(|item| item.state == "active")
+        .count() as u64;
     let active_connections = connections
         .iter()
         .filter(|item| item.lifecycle_state == "active")
@@ -475,7 +490,8 @@ fn complete_pairing(
         "paired connection provider does not match the wrapper identity"
     );
     ensure!(
-        normalize_origin_for_compare(&attempt_origin)? == normalize_origin_for_compare(&legacy.remote_origin)?,
+        normalize_origin_for_compare(&attempt_origin)?
+            == normalize_origin_for_compare(&legacy.remote_origin)?,
         "paired connection origin does not match the approved pairing attempt"
     );
 
@@ -743,7 +759,10 @@ fn read_legacy_connections(connection: &Connection) -> Result<Vec<LegacyConnecti
         .map_err(Into::into)
 }
 
-fn legacy_connection_by_id(connection: &Connection, connection_id: &str) -> Result<LegacyConnection> {
+fn legacy_connection_by_id(
+    connection: &Connection,
+    connection_id: &str,
+) -> Result<LegacyConnection> {
     connection
         .query_row(
             "SELECT connection_id,provider_key,display_name,cloud_base_url,device_id,public_key_base64,credential_key,state,paired_at_utc,last_success_utc FROM cloud_connections WHERE connection_id=?1",
@@ -872,7 +891,10 @@ fn read_pairing_attempts(connection: &Connection) -> Result<Vec<WrapperPairingAt
         .map_err(Into::into)
 }
 
-fn wrapper_by_key(connection: &Connection, wrapper_key: &str) -> Result<Option<WrapperIdentitySummary>> {
+fn wrapper_by_key(
+    connection: &Connection,
+    wrapper_key: &str,
+) -> Result<Option<WrapperIdentitySummary>> {
     connection
         .query_row(
             "SELECT wrapper_id,wrapper_key,display_name,wrapper_kind,protocol_version,state,created_at_utc,updated_at_utc,revoked_at_utc FROM wrapper_identities WHERE wrapper_key=?1",
@@ -910,11 +932,14 @@ fn wrapper_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WrapperIdentity
 
 fn validate_wrapper_key(value: &str) -> Result<String> {
     let value = value.trim().to_ascii_lowercase();
-    ensure!((2..=40).contains(&value.len()), "wrapper key must contain 2 to 40 characters");
     ensure!(
-        value
-            .chars()
-            .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || matches!(character, '.' | '_' | '-')),
+        (2..=40).contains(&value.len()),
+        "wrapper key must contain 2 to 40 characters"
+    );
+    ensure!(
+        value.chars().all(|character| character.is_ascii_lowercase()
+            || character.is_ascii_digit()
+            || matches!(character, '.' | '_' | '-')),
         "wrapper key contains unsupported characters"
     );
     ensure!(
@@ -930,7 +955,10 @@ fn validate_wrapper_key(value: &str) -> Result<String> {
 fn validate_request_id(value: &str) -> Result<String> {
     let value = bounded_text(value, 8, 160, "request ID")?;
     ensure!(
-        value.chars().all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | ':' | '.')),
+        value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric()
+                || matches!(character, '-' | '_' | ':' | '.')),
         "request ID contains unsupported characters"
     );
     Ok(value)
@@ -971,9 +999,18 @@ fn normalize_capabilities(values: Vec<String>) -> Result<Vec<String>> {
 fn validate_remote_origin(value: &str) -> Result<String> {
     let value = bounded_text(value, 8, 500, "remote origin")?;
     let url = Url::parse(&value).context("remote origin is not a valid URL")?;
-    ensure!(url.username().is_empty() && url.password().is_none(), "remote origin must not contain credentials");
-    ensure!(url.query().is_none() && url.fragment().is_none(), "remote origin must not contain a query or fragment");
-    ensure!(url.path().is_empty() || url.path() == "/", "remote origin must not contain a path");
+    ensure!(
+        url.username().is_empty() && url.password().is_none(),
+        "remote origin must not contain credentials"
+    );
+    ensure!(
+        url.query().is_none() && url.fragment().is_none(),
+        "remote origin must not contain a query or fragment"
+    );
+    ensure!(
+        url.path().is_empty() || url.path() == "/",
+        "remote origin must not contain a path"
+    );
     let host = url.host_str().context("remote origin requires a host")?;
     let loopback = matches!(host, "localhost" | "127.0.0.1" | "::1");
     ensure!(
@@ -995,7 +1032,10 @@ fn bounded_text(value: &str, minimum: usize, maximum: usize, label: &str) -> Res
         (minimum..=maximum).contains(&value.chars().count()),
         "{label} must contain between {minimum} and {maximum} characters"
     );
-    ensure!(!value.chars().any(char::is_control), "{label} contains control characters");
+    ensure!(
+        !value.chars().any(char::is_control),
+        "{label} contains control characters"
+    );
     Ok(value.to_owned())
 }
 
@@ -1050,7 +1090,10 @@ mod tests {
 
     #[test]
     fn validates_wrapper_keys() {
-        assert_eq!(validate_wrapper_key("RSS-POD").expect("valid key"), "rss-pod");
+        assert_eq!(
+            validate_wrapper_key("RSS-POD").expect("valid key"),
+            "rss-pod"
+        );
         assert!(validate_wrapper_key("../pod").is_err());
         assert!(validate_wrapper_key("x").is_err());
     }
