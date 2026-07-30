@@ -1,16 +1,15 @@
 name: Phase 13 Device Binding Repair
 
 on:
-  push:
-    branches:
-      - feature/vp3-activation-update-client-v1-20260729
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
   repair:
-    if: github.actor != 'github-actions[bot]'
+    if: github.event.pull_request.head.ref == 'feature/vp3-activation-update-client-v1-20260729' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -39,7 +38,11 @@ jobs:
               '    pub device_public_id: Option<String>,\n    pub device_fingerprint: String,\n',
               1,
           )
-          source = source.replace('    device_fingerprint: String,\n', '', 1)
+          request_start = source.index('pub struct ActivateVp3Request')
+          request_end = source.index('\n}', request_start)
+          request_block = source[request_start:request_end]
+          request_block = request_block.replace('    device_fingerprint: String,\n', '', 1)
+          source = source[:request_start] + request_block + source[request_end:]
           source = source.replace(
               '    let authority = software_authority::status_snapshot(&connection)?;\n',
               '    let authority = software_authority::status_snapshot(&connection)?;\n    let device_fingerprint = local_device_fingerprint_from_connection(&connection)?;\n',
