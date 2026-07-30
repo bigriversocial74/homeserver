@@ -120,10 +120,6 @@ fn json_text(value: &Value) -> Result<String> {
     serde_json::to_string(&canonical_json(value)).map_err(Into::into)
 }
 
-fn json_bytes(value: &Value) -> Result<usize> {
-    Ok(json_text(value)?.len())
-}
-
 fn hash_text(value: &str) -> String {
     hex::encode(Sha256::digest(value.as_bytes()))
 }

@@ -3,7 +3,6 @@ struct JobGrantConstraints {
     result_policy: String,
     max_result_bytes: u64,
     max_execution_seconds: u32,
-    max_concurrent_jobs: u32,
     max_queued_jobs: u32,
 }
 
@@ -291,16 +290,12 @@ fn job_grant_constraints(
     scope_value: Option<&str>,
     authorized_policy: Option<&str>,
 ) -> Result<JobGrantConstraints> {
-    let (max_result_bytes, max_execution_seconds, max_concurrent_jobs, max_queued_jobs): (
-        i64,
-        i64,
-        i64,
-        i64,
-    ) = connection.query_row(
-        "SELECT max_result_bytes,max_execution_seconds,max_concurrent_jobs,max_queued_jobs FROM wrapper_resource_limits WHERE grant_id=?1",
-        params![grant_id],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-    )?;
+    let (max_result_bytes, max_execution_seconds, max_queued_jobs): (i64, i64, i64) =
+        connection.query_row(
+            "SELECT max_result_bytes,max_execution_seconds,max_queued_jobs FROM wrapper_resource_limits WHERE grant_id=?1",
+            params![grant_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
     let (allowed_fields, scoped_policy) = if let Some((kind, value)) = scope_kind.zip(scope_value) {
         let (fields_json, policy): (String, String) = connection.query_row(
             "SELECT allowed_fields_json,result_policy FROM wrapper_dataset_scopes WHERE grant_id=?1 AND scope_kind=?2 AND scope_value=?3 AND state='active'",
@@ -324,7 +319,6 @@ fn job_grant_constraints(
         result_policy,
         max_result_bytes: max_result_bytes.max(1024) as u64,
         max_execution_seconds: max_execution_seconds.max(1) as u32,
-        max_concurrent_jobs: max_concurrent_jobs.max(1) as u32,
         max_queued_jobs: max_queued_jobs.max(1) as u32,
     })
 }

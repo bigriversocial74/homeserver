@@ -91,7 +91,7 @@ pub fn claim_jobs(connection: &Connection, request: ClaimJobsRequest) -> Result<
         let lease_token = random_token();
         let lease_token_hash = hash_text(&lease_token);
         let now = Utc::now();
-        let lease_seconds = i64::from(candidate.max_execution_seconds.min(300).max(30));
+        let lease_seconds = i64::from(candidate.max_execution_seconds.clamp(30, 300));
         let lease_expires = (now + Duration::seconds(lease_seconds))
             .min(parse_utc(&candidate.expires_at_utc, "job expiration")?)
             .to_rfc3339_opts(SecondsFormat::Millis, true);
@@ -248,8 +248,9 @@ fn validate_worker_lease_tx(
         job.lease_owner_id.as_deref() == Some(worker_id),
         "job lease belongs to a different worker"
     );
+    let expected_lease_hash = hash_text(lease_token);
     ensure!(
-        job.lease_token_hash.as_deref() == Some(hash_text(lease_token).as_str()),
+        job.lease_token_hash.as_deref() == Some(expected_lease_hash.as_str()),
         "job lease token is invalid"
     );
     let lease_expires = job
