@@ -279,7 +279,7 @@ async fn run_update_scheduler(state: Arc<AppState>, mut shutdown: watch::Receive
                     .connection()
                     .ok()
                     .and_then(|connection| software_authority::status_snapshot(&connection).ok())
-                    .is_none_or(|authority| authority.current_authority != "vp3");
+                    .map_or(true, |authority| authority.current_authority != "vp3");
                 if use_legacy_manifest {
                     if let Err(error) = state.check_for_updates().await {
                         warn!(?error, "scheduled legacy HomeServer update check failed");
