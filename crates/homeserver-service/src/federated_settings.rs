@@ -557,7 +557,11 @@ fn validate_cloud_snapshot(
             device_public_id: identity.device_public_id.as_str(),
             max_revision: cloud.max_revision,
             snapshot_hash: &cloud.snapshot_hash,
+            generated_at: &cloud.generated_at,
             settings: serde_json::to_value(&cloud.settings)?,
+            replayed: cloud.replayed,
+            applied: serde_json::to_value(&cloud.applied)?,
+            conflicts: serde_json::to_value(&cloud.conflicts)?,
         },
     )?;
     ensure!(
