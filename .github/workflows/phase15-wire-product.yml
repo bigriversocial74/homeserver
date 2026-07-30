@@ -72,3 +72,5 @@ jobs:
           if ($LASTEXITCODE -eq 0) { exit 0 }
           git commit -m "Wire Phase 15 federated settings across HomeServer"
           git push origin HEAD:feature/phase-15-federated-settings-shared-control-center
+
+# phase15-wire-trigger-1
