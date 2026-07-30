@@ -177,6 +177,16 @@ struct DeviceIdentity {
     device_public_id: String,
 }
 
+struct ReceiptEvidence<'a> {
+    request_id: &'a str,
+    direction: &'a str,
+    base_revision: u64,
+    applied_revision: u64,
+    snapshot_hash: Option<&'a str>,
+    result: &'a str,
+    conflict_count: u64,
+}
+
 pub fn initialize(connection: &Connection) -> Result<()> {
     connection.execute_batch(MIGRATION)?;
     health_check(connection)?;
@@ -384,15 +394,18 @@ fn update_local(
             cloud_revision as i64,
         ],
     )?;
+    let local_request_id = format!("LOCAL-{}", Uuid::new_v4().simple());
     record_receipt(
         &transaction,
-        &format!("LOCAL-{}", Uuid::new_v4().simple()),
-        "local_update",
-        cloud_revision,
-        cloud_revision,
-        None,
-        "applied",
-        0,
+        ReceiptEvidence {
+            request_id: &local_request_id,
+            direction: "local_update",
+            base_revision: cloud_revision,
+            applied_revision: cloud_revision,
+            snapshot_hash: None,
+            result: "applied",
+            conflict_count: 0,
+        },
     )?;
     transaction.commit()?;
     snapshot_with_connection(&connection)
@@ -526,13 +539,15 @@ fn apply_cloud_snapshot(
     )?;
     record_receipt(
         &transaction,
-        request_id,
-        "device_sync",
-        base_revision,
-        cloud.max_revision,
-        Some(&cloud.snapshot_hash),
-        result,
-        cloud.conflicts.len() as u64,
+        ReceiptEvidence {
+            request_id,
+            direction: "device_sync",
+            base_revision,
+            applied_revision: cloud.max_revision,
+            snapshot_hash: Some(&cloud.snapshot_hash),
+            result,
+            conflict_count: cloud.conflicts.len() as u64,
+        },
     )?;
     transaction.commit()?;
     Ok(())
@@ -644,9 +659,16 @@ fn validate_cloud_snapshot(
             matches!(conflict.reason.as_str(), "revision" | "vp3_authority"),
             "VP3 federated settings conflict reason is invalid"
         );
-        if conflict.reason == "revision" {
+        if conflict.reason == "vp3_authority" {
             ensure!(
-                conflict.current_revision == setting.revision,
+                setting.authority == "vp3" && !setting.editable_in_homeserver,
+                "VP3 federated settings authority conflict does not match the signed setting"
+            );
+        } else {
+            ensure!(
+                setting.authority != "vp3"
+                    && setting.editable_in_homeserver
+                    && conflict.current_revision == setting.revision,
                 "VP3 federated settings revision conflict does not match the signed setting"
             );
         }
@@ -870,27 +892,18 @@ fn secret_like_key(value: &str) -> bool {
     .any(|needle| lower.contains(needle))
 }
 
-fn record_receipt(
-    connection: &Connection,
-    request_id: &str,
-    direction: &str,
-    base_revision: u64,
-    applied_revision: u64,
-    snapshot_hash: Option<&str>,
-    result: &str,
-    conflict_count: u64,
-) -> Result<()> {
+fn record_receipt(connection: &Connection, evidence: ReceiptEvidence<'_>) -> Result<()> {
     connection.execute(
         "INSERT INTO federated_settings_sync_receipts (receipt_id,request_id,direction,base_revision,applied_revision,snapshot_hash,result,conflict_count,created_at_utc) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
         params![
             Uuid::new_v4().to_string(),
-            request_id,
-            direction,
-            base_revision as i64,
-            applied_revision as i64,
-            snapshot_hash,
-            result,
-            conflict_count as i64,
+            evidence.request_id,
+            evidence.direction,
+            evidence.base_revision as i64,
+            evidence.applied_revision as i64,
+            evidence.snapshot_hash,
+            evidence.result,
+            evidence.conflict_count as i64,
         ],
     )?;
     Ok(())
