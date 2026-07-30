@@ -33,6 +33,9 @@ mod federated_settings;
 #[path = "federated_settings_signature.rs"]
 mod federated_settings_signature;
 
+#[path = "app/wrapper_core.rs"]
+mod wrapper_core;
+
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
     mcp_runtime, microgifter_connection, model_center, openrouter_provider, operational_data,
@@ -68,6 +71,7 @@ pub async fn run(
     federated_settings::initialize(&connection)?;
     cloud_connector::initialize(&connection)?;
     cloud_registry::initialize(&connection)?;
+    wrapper_core::initialize(&connection)?;
     microgifter_connection::initialize(&connection)?;
     pod_provider_runtime::initialize(&connection)?;
     operational_data::initialize(&connection)?;
@@ -171,6 +175,7 @@ pub async fn run(
             .merge(vp3_device_binding::router(state.clone()))
             .merge(vp3_router)
             .merge(federated_settings::router(state.clone()))
+            .merge(wrapper_core::router(state.clone()))
             .merge(microgifter_connection::router(state.clone()))
             .merge(pod_provider_runtime::router(state.clone()))
             .merge(knowledge_vault::router(state.clone()))
@@ -230,6 +235,9 @@ async fn run_backup_scheduler(state: Arc<AppState>, mut shutdown: watch::Receive
                         }
                         if let Err(error) = federated_settings::maintain_history(&connection) {
                             warn!(?error, "scheduled federated settings retention failed");
+                        }
+                        if let Err(error) = wrapper_core::maintain_history(&connection) {
+                            warn!(?error, "scheduled wrapper registry retention failed");
                         }
                     }
                     scheduled_state.create_automatic_backup_if_due()
