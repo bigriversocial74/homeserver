@@ -1,0 +1,134 @@
+name: Phase 16C Integrate
+
+on:
+  push:
+    branches:
+      - feature/phase-16c-shared-jobs-events-receipts
+
+permissions:
+  contents: write
+
+concurrency:
+  group: homeserver-phase16c-integrate
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          ref: feature/phase-16c-shared-jobs-events-receipts
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+      - name: Integrate Phase 16C runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text(encoding='utf-8')
+              if new in text:
+                  return
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'unexpected match count in {path}: {count} for {old!r}')
+              path.write_text(text.replace(old, new), encoding='utf-8')
+
+          app = Path('crates/homeserver-service/src/app.rs')
+          replace_once(
+              app,
+              '#[path = "app/wrapper_grants.rs"]\nmod wrapper_grants;\n',
+              '#[path = "app/wrapper_grants.rs"]\nmod wrapper_grants;\n\n#[path = "app/wrapper_jobs.rs"]\nmod wrapper_jobs;\n',
+          )
+          replace_once(
+              app,
+              '    wrapper_grants::initialize(&connection)?;\n',
+              '    wrapper_grants::initialize(&connection)?;\n    wrapper_jobs::initialize(&connection)?;\n',
+          )
+          replace_once(
+              app,
+              '            .merge(wrapper_grants::router(state.clone()))\n',
+              '            .merge(wrapper_grants::router(state.clone()))\n            .merge(wrapper_jobs::router(state.clone()))\n',
+          )
+          replace_once(
+              app,
+              '                        if let Err(error) = wrapper_grants::maintain_history(&connection) {\n                            warn!(?error, "scheduled wrapper grant retention failed");\n                        }\n',
+              '                        if let Err(error) = wrapper_grants::maintain_history(&connection) {\n                            warn!(?error, "scheduled wrapper grant retention failed");\n                        }\n                        if let Err(error) = wrapper_jobs::maintain_history(&connection) {\n                            warn!(?error, "scheduled wrapper job retention failed");\n                        }\n',
+          )
+
+          main = Path('crates/homeserver-service/src/app/wrapper_jobs.rs')
+          replace_once(
+              main,
+              '            let connection = state.connection()?;\n            cancel_job(&connection, request)?;\n            snapshot_with_connection(&connection, SnapshotRequest { connection_id: String::new(), limit: None })\n',
+              '            let connection = state.connection()?;\n            let connection_id = cancel_job(&connection, request)?;\n            snapshot_with_connection(&connection, SnapshotRequest { connection_id, limit: None })\n',
+          )
+
+          workers = Path('crates/homeserver-service/src/app/wrapper_jobs_workers.rs')
+          replace_once(
+              workers,
+              '    ensure!(\n        job.lease_token_hash.as_deref() == Some(hash_text(lease_token).as_str()),\n        "job lease token is invalid"\n    );\n',
+              '    let expected_lease_hash = hash_text(lease_token);\n    ensure!(\n        job.lease_token_hash.as_deref() == Some(expected_lease_hash.as_str()),\n        "job lease token is invalid"\n    );\n',
+          )
+
+          completion = Path('crates/homeserver-service/src/app/wrapper_jobs_completion.rs')
+          replace_once(
+              completion,
+              '''    let worker_kind: Option<String> = worker_id
+        .map(|worker_id| {
+            transaction
+                .query_row(
+                    "SELECT worker_kind FROM wrapper_job_workers WHERE worker_id=?1",
+                    params![worker_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map(|value| value.flatten())
+        })
+        .transpose()?
+        .flatten();
+''',
+              '''    let worker_kind: Option<String> = if let Some(worker_id) = worker_id {
+        transaction
+            .query_row(
+                "SELECT worker_kind FROM wrapper_job_workers WHERE worker_id=?1",
+                params![worker_id],
+                |row| row.get(0),
+            )
+            .optional()?
+    } else {
+        None
+    };
+''',
+          )
+
+          package_path = Path('package.json')
+          package = json.loads(package_path.read_text(encoding='utf-8'))
+          command = package['scripts']['check:frontend']
+          validator = 'validate-wrapper-jobs.py'
+          if validator not in command:
+              command += ' validate-wrapper-jobs.py'
+          package['scripts']['check:frontend'] = command
+          package_path.write_text(json.dumps(package, indent=2) + '\n', encoding='utf-8')
+          PY
+          cargo fmt --all
+          python scripts/validate-wrapper-jobs.py
+      - name: Commit integrated Phase 16C implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates database docs scripts package.json
+          if git diff --cached --quiet; then
+            echo 'Phase 16C source is already integrated.'
+            exit 0
+          fi
+          git commit -m 'Build Phase 16C shared wrapper jobs and receipts'
+          git push origin HEAD:feature/phase-16c-shared-jobs-events-receipts
