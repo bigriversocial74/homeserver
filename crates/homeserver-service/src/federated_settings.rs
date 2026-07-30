@@ -596,6 +596,7 @@ fn validate_cloud_snapshot(
         "VP3 federated settings snapshot hash does not match its content"
     );
     let mut keys = HashSet::new();
+    let mut settings_by_key = std::collections::HashMap::new();
     for setting in &cloud.settings {
         validate_setting_key(&setting.setting_key)?;
         ensure!(
@@ -606,7 +607,54 @@ fn validate_cloud_snapshot(
             !secret_like_key(&setting.setting_key),
             "VP3 federated settings snapshot contains a secret-like key"
         );
+        settings_by_key.insert(setting.setting_key.as_str(), setting);
     }
+    let mut applied_keys = HashSet::new();
+    for applied in &cloud.applied {
+        validate_setting_key(&applied.setting_key)?;
+        ensure!(
+            applied_keys.insert(applied.setting_key.as_str()),
+            "VP3 federated settings result contains duplicate applied keys"
+        );
+        let setting = settings_by_key
+            .get(applied.setting_key.as_str())
+            .context("VP3 federated settings result references an unknown applied key")?;
+        ensure!(
+            setting.revision == applied.revision
+                && setting.source_authority == "homeserver"
+                && setting.editable_in_homeserver,
+            "VP3 federated settings applied evidence does not match the signed setting"
+        );
+    }
+    let mut conflict_keys = HashSet::new();
+    for conflict in &cloud.conflicts {
+        validate_setting_key(&conflict.setting_key)?;
+        ensure!(
+            conflict_keys.insert(conflict.setting_key.as_str()),
+            "VP3 federated settings result contains duplicate conflict keys"
+        );
+        ensure!(
+            !applied_keys.contains(conflict.setting_key.as_str()),
+            "VP3 federated settings result marks one key applied and conflicted"
+        );
+        let setting = settings_by_key
+            .get(conflict.setting_key.as_str())
+            .context("VP3 federated settings result references an unknown conflict key")?;
+        ensure!(
+            matches!(conflict.reason.as_str(), "revision" | "vp3_authority"),
+            "VP3 federated settings conflict reason is invalid"
+        );
+        if conflict.reason == "revision" {
+            ensure!(
+                conflict.current_revision == setting.revision,
+                "VP3 federated settings revision conflict does not match the signed setting"
+            );
+        }
+    }
+    ensure!(
+        !cloud.replayed || (cloud.applied.is_empty() && cloud.conflicts.is_empty()),
+        "VP3 federated settings replay response contains mutation instructions"
+    );
     Ok(())
 }
 
