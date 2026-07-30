@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -35,6 +36,8 @@ require("CHECK (authority IN ('vp3','homeserver','shared'))" in migration, "auth
 require("sensitivity='non_secret'" in migration, "non-secret catalog boundary is missing")
 require("federated_settings_sync_receipts" in migration, "sync receipt table is missing")
 require("dirty INTEGER" in migration and "cloud_revision INTEGER" in migration, "local dirty/cloud revision state is missing")
+require("INSERT OR REPLACE INTO federated_setting_catalog" not in migration, "catalog refresh uses destructive SQLite REPLACE")
+require("ON CONFLICT(setting_key) DO UPDATE SET" in migration, "catalog refresh is not restart-safe")
 
 catalog_keys = set(re.findall(r"\('([a-z][a-z0-9_.-]+)'\s*,", migration))
 expected_keys = {
@@ -53,6 +56,34 @@ expected_keys = {
 require(expected_keys <= catalog_keys, "local federated settings catalog is incomplete")
 for forbidden in ("secret", "password", "credential", "private_key", "api_key", "token", "prompt", "conversation"):
     require(not any(forbidden in key for key in catalog_keys), f"secret-like catalog key contains {forbidden}")
+
+# Execute the migration twice with foreign keys enabled and prove a saved local value survives
+# the catalog seed refresh. SQLite REPLACE would delete the parent row and cascade this value.
+try:
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys=ON")
+    connection.execute("CREATE TABLE schema_migrations (migration_key TEXT PRIMARY KEY)")
+    connection.executescript(migration)
+    connection.execute(
+        "INSERT INTO federated_setting_values "
+        "(setting_key,value_json,value_hash,local_revision,cloud_revision,source_authority,dirty,updated_at_utc) "
+        "VALUES (?,?,?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+        ("appearance.theme", '"dark"', "a" * 64, 1, 0, "homeserver", 1),
+    )
+    connection.executescript(migration)
+    retained = connection.execute(
+        "SELECT value_json,local_revision,dirty FROM federated_setting_values WHERE setting_key='appearance.theme'"
+    ).fetchone()
+    require(retained == ('"dark"', 1, 1), "catalog refresh deleted or rewrote the saved local setting")
+    migration_count = connection.execute(
+        "SELECT COUNT(*) FROM schema_migrations WHERE migration_key='0019_federated_settings'"
+    ).fetchone()[0]
+    require(migration_count == 1, "repeat migration did not retain one migration registration")
+finally:
+    try:
+        connection.close()
+    except NameError:
+        pass
 
 require("this setting is controlled by VP3" in service, "local writes do not reject VP3 authority")
 require("expected_local_revision" in service, "local optimistic revision check is missing")
