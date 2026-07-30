@@ -99,6 +99,6 @@ jobs:
           git rm .github/workflows/phase16d-materialize.yml scripts/.phase16d-bundle-00.b64 scripts/.phase16d-bundle-01.b64 scripts/.phase16d-bundle-02.b64 scripts/.phase16d-bundle-03.b64
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/workflows/phase16d-agent-lifecycle.yml crates/homeserver-service/src/app.rs crates/homeserver-service/src/app/wrapper_agents.rs crates/homeserver-service/src/app/wrapper_jobs.rs crates/homeserver-service/src/app/wrapper_jobs_submit.rs crates/homeserver-service/src/app/wrapper_jobs_reconcile.rs docs/phase-16d-agent-lifecycle-action-policy.md package.json scripts/validate-wrapper-agents.py .github/workflows/phase16d-materialize.yml
+          git add .github/workflows/phase16d-agent-lifecycle.yml crates/homeserver-service/src/app.rs crates/homeserver-service/src/app/wrapper_agents.rs crates/homeserver-service/src/app/wrapper_jobs.rs crates/homeserver-service/src/app/wrapper_jobs_submit.rs crates/homeserver-service/src/app/wrapper_jobs_reconcile.rs docs/phase-16d-agent-lifecycle-action-policy.md package.json scripts/validate-wrapper-agents.py
           git commit -m 'Build Phase 16D agent lifecycle and action authority'
           git push origin HEAD:feature/phase-16d-agent-lifecycle-action-policy
