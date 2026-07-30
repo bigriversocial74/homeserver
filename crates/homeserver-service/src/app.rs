@@ -17,6 +17,9 @@ mod cloud_connector;
 #[path = "app/pod_provider_runtime.rs"]
 mod pod_provider_runtime;
 
+#[path = "vp3_client.rs"]
+mod vp3_client;
+
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
     mcp_runtime, microgifter_connection, model_center, openrouter_provider, operational_data,
@@ -48,6 +51,7 @@ pub async fn run(
     activity::initialize(&connection)?;
     update_store::initialize(&connection)?;
     software_authority::initialize(&connection)?;
+    vp3_client::initialize(&connection)?;
     cloud_connector::initialize(&connection)?;
     cloud_registry::initialize(&connection)?;
     microgifter_connection::initialize(&connection)?;
@@ -124,6 +128,7 @@ pub async fn run(
     let cloud_worker = tokio::spawn(cloud_registry::run(state.clone(), shutdown.clone()));
     let microgifter_connection_worker =
         tokio::spawn(microgifter_connection::run(state.clone(), shutdown.clone()));
+    let vp3_authority_worker = tokio::spawn(vp3_client::run(state.clone(), shutdown.clone()));
     let pod_provider_worker =
         tokio::spawn(pod_provider_runtime::run(state.clone(), shutdown.clone()));
     let review_intelligence_worker = tokio::spawn(run_review_intelligence_scheduler(
@@ -145,6 +150,7 @@ pub async fn run(
             .merge(registry_router)
             .merge(cloud_pairing_v2::router(state.clone()))
             .merge(software_authority::router(state.clone()))
+            .merge(vp3_client::router(state.clone()))
             .merge(microgifter_connection::router(state.clone()))
             .merge(pod_provider_runtime::router(state.clone()))
             .merge(knowledge_vault::router(state.clone()))
@@ -171,6 +177,7 @@ pub async fn run(
     update_scheduler.abort();
     cloud_worker.abort();
     microgifter_connection_worker.abort();
+    vp3_authority_worker.abort();
     pod_provider_worker.abort();
     review_intelligence_worker.abort();
     result?;
@@ -197,6 +204,9 @@ async fn run_backup_scheduler(state: Arc<AppState>, mut shutdown: watch::Receive
                         }
                         if let Err(error) = openrouter_provider::maintain_history(&connection) {
                             warn!(?error, "scheduled OpenRouter receipt retention failed");
+                        }
+                        if let Err(error) = vp3_client::maintain_history(&connection) {
+                            warn!(?error, "scheduled VP3 authority retention failed");
                         }
                     }
                     scheduled_state.create_automatic_backup_if_due()
@@ -265,8 +275,15 @@ async fn run_update_scheduler(state: Arc<AppState>, mut shutdown: watch::Receive
     loop {
         tokio::select! {
             _ = check_interval.tick() => {
-                if let Err(error) = state.check_for_updates().await {
-                    warn!(?error, "scheduled HomeServer update check failed");
+                let use_legacy_manifest = state
+                    .connection()
+                    .ok()
+                    .and_then(|connection| software_authority::status_snapshot(&connection).ok())
+                    .is_none_or(|authority| authority.current_authority != "vp3");
+                if use_legacy_manifest {
+                    if let Err(error) = state.check_for_updates().await {
+                        warn!(?error, "scheduled legacy HomeServer update check failed");
+                    }
                 }
             }
             _ = result_interval.tick() => {
