@@ -1,4 +1,4 @@
-name: VP3 Rust Format Repair
+name: VP3 Focused Source Repair
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  format:
+  repair:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -21,16 +21,38 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           components: rustfmt
-      - name: Format VP3 integration
-        run: cargo fmt --all
-      - name: Commit formatted Rust sources
+      - name: Repair migration fixture and authorization identity check
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          authority = Path('crates/homeserver-service/src/software_authority.rs')
+          text = authority.read_text()
+          old = '        initialize(&connection).expect("software authority migration");\n        let snapshot = status_snapshot(&connection).expect("authority snapshot");'
+          new = '        initialize(&connection).expect("software authority migration");\n        vp3_client::initialize(&connection).expect("VP3 network client migration");\n        let snapshot = status_snapshot(&connection).expect("authority snapshot");'
+          if old not in text:
+              raise SystemExit('software-authority test fixture was not found')
+          authority.write_text(text.replace(old, new, 1))
+
+          client = Path('crates/homeserver-service/src/vp3_client.rs')
+          text = client.read_text()
+          old = '    let authorization = load_authorization(&*state.connection()?, &record.update_id)?;\n    verify_authorization(&authorization)?;'
+          new = '    let authorization = load_authorization(&*state.connection()?, &record.update_id)?;\n    ensure!(\n        authorization.update_id == record.update_id,\n        "VP3 release authorization identity does not match the update record"\n    );\n    verify_authorization(&authorization)?;'
+          if old not in text:
+              raise SystemExit('VP3 authorization load block was not found')
+          client.write_text(text.replace(old, new, 1))
+          '@ | python -
+          cargo fmt --all
+      - name: Commit focused source repair
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/homeserver-service/src/app.rs crates/homeserver-service/src/main.rs crates/homeserver-service/src/software_authority.rs crates/homeserver-service/src/update.rs crates/homeserver-service/src/vp3_client.rs
-          if (git diff --cached --quiet) { exit 0 }
-          git commit -m "Format VP3 HomeServer client integration"
+          git add crates/homeserver-service/src/software_authority.rs crates/homeserver-service/src/vp3_client.rs
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          git commit -m "Repair VP3 migration fixture and authorization identity"
           git push origin HEAD:feature/vp3-http-client-v1-20260729
 
-# format-trigger-1
+# focused-repair-trigger-1
