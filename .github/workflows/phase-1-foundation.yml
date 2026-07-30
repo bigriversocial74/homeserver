@@ -31,7 +31,10 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          def extract(source_path: str, marker: str, output_path: str) -> None:
+          temp = Path('.tmp')
+          temp.mkdir(exist_ok=True)
+
+          def extract(source_path: str, marker: str, output_path: Path) -> None:
               source = Path(source_path).read_text().splitlines()
               marker_index = next(i for i, line in enumerate(source) if marker in line)
               start = next(i for i in range(marker_index, len(source)) if "python - <<'PY'" in source[i] or "cat > /tmp/" in source[i]) + 1
@@ -53,19 +56,20 @@ jobs:
                           triple = None
               if triple is not None:
                   raise SystemExit(f'{marker} contains an unterminated source string')
-              Path(output_path).write_text('\n'.join(output) + '\n')
+              output_path.write_text('\n'.join(output) + '\n')
 
-          extract('.github/workflows/build-vp3-http-client-v1.yml', "cat > /tmp/build_vp3_client.py <<'PY'", '/tmp/build_vp3_client.py')
-          extract('.github/workflows/run-vp3-http-client-builder.yml', 'Normalize generated validator and Rust integration', '/tmp/normalize_vp3_client.py')
+          extract('.github/workflows/build-vp3-http-client-v1.yml', "cat > /tmp/build_vp3_client.py <<'PY'", temp / 'build_vp3_client.py')
+          extract('.github/workflows/run-vp3-http-client-builder.yml', 'Normalize generated validator and Rust integration', temp / 'normalize_vp3_client.py')
           PY
-          test -s /tmp/build_vp3_client.py
-          test -s /tmp/normalize_vp3_client.py
-          python /tmp/build_vp3_client.py
-          python /tmp/normalize_vp3_client.py
+          test -s .tmp/build_vp3_client.py
+          test -s .tmp/normalize_vp3_client.py
+          python .tmp/build_vp3_client.py
+          python .tmp/normalize_vp3_client.py
       - name: Restore permanent workflow and commit product tree
         run: |
           git fetch origin main
           git checkout origin/main -- .github/workflows/phase-1-foundation.yml
+          rm -rf .tmp
           rm -f .github/workflows/build-vp3-http-client-v1.yml
           rm -f .github/workflows/run-vp3-http-client-builder.yml
           rm -f .github/workflows/vp3-builder-bootstrap.yml
