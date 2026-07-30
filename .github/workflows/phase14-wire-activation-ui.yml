@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   wire:
-    if: github.actor != 'github-actions[bot]' && github.head_ref == 'feature/phase-14-vp3-activation-control-center'
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
