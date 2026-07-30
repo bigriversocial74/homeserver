@@ -1,0 +1,67 @@
+name: Phase 16 Compile Repair
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: homeserver-phase16-compile-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          ref: feature/phase-16-multi-wrapper-core-v1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+      - name: Repair Phase 16A compiler defects
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('crates/homeserver-service/src/app/wrapper_core.rs')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'include_str!("../../../database/migrations/0020_wrapper_identity_and_pairing.sql")',
+              'include_str!("../../../../database/migrations/0020_wrapper_identity_and_pairing.sql")',
+          )
+          text = text.replace(
+              'let mut wrappers = HashMap::new();',
+              'let mut wrappers: HashMap<String, String> = HashMap::new();',
+          )
+          pattern = re.compile(
+              r'    statement\n(?P<body>        \.query_map\(.*?\n        \.collect::<rusqlite::Result<Vec<_>>>\(\)\n        \.map_err\(Into::into\)',
+              re.DOTALL,
+          )
+          def repair(match):
+              body = match.group('body')
+              body = body.replace(
+                  '        .collect::<rusqlite::Result<Vec<_>>>()\n        .map_err(Into::into)',
+                  '        .collect::<rusqlite::Result<Vec<_>>>()?;',
+              )
+              return '    let rows = statement\n' + body + '\n    Ok(rows)'
+          text, count = pattern.subn(repair, text)
+          if count != 5:
+              raise SystemExit(f'expected 5 statement lifetime repairs, found {count}')
+          path.write_text(text, encoding='utf-8')
+          PY
+          cargo fmt --all
+      - name: Commit compiler repair
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates
+          git commit -m 'Repair Phase 16A native compilation'
+          git push origin HEAD:feature/phase-16-multi-wrapper-core-v1
