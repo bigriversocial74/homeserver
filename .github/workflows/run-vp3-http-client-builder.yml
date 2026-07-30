@@ -232,8 +232,12 @@ jobs:
         run: |
           rm .github/workflows/build-vp3-http-client-v1.yml
           rm .github/workflows/run-vp3-http-client-builder.yml
+          rm .github/workflows/vp3-builder-bootstrap.yml
+          rm -f .vp3-builder-bootstrap
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
           git commit -m "Build VP3 HomeServer HTTP client v1"
           git push origin HEAD:feature/vp3-http-client-v1-20260729
+
+# aligned-builder-trigger-1
