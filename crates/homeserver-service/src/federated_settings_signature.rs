@@ -20,7 +20,11 @@ pub(super) struct SignedSnapshotEvidence<'a> {
     pub device_public_id: &'a str,
     pub max_revision: u64,
     pub snapshot_hash: &'a str,
+    pub generated_at: &'a str,
     pub settings: Value,
+    pub replayed: bool,
+    pub applied: Value,
+    pub conflicts: Value,
 }
 
 pub(super) fn verify(evidence: SignedSnapshotEvidence<'_>) -> Result<()> {
@@ -86,7 +90,11 @@ pub(super) fn verify(evidence: SignedSnapshotEvidence<'_>) -> Result<()> {
         "device_public_id": evidence.device_public_id,
         "max_revision": evidence.max_revision,
         "snapshot_hash": evidence.snapshot_hash,
+        "generated_at": evidence.generated_at,
         "settings": evidence.settings,
+        "replayed": evidence.replayed,
+        "applied": evidence.applied,
+        "conflicts": evidence.conflicts,
         "iat": issued_at,
         "exp": expires_at,
     });
@@ -104,7 +112,7 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
 
     #[test]
-    fn valid_snapshot_signature_is_accepted_and_tampering_is_rejected() {
+    fn valid_snapshot_signature_is_accepted_and_sync_tampering_is_rejected() {
         let secret = [7_u8; 32];
         let signing = SigningKey::from_bytes(&secret);
         let now = Utc::now().timestamp();
@@ -114,7 +122,11 @@ mod tests {
             "device_public_id": "HS-TEST",
             "max_revision": 3,
             "snapshot_hash": "a".repeat(64),
+            "generated_at": "2026-07-30T07:00:00+00:00",
             "settings": [],
+            "replayed": false,
+            "applied": [{"setting_key": "appearance.theme", "revision": 3, "index": 0}],
+            "conflicts": [],
             "iat": now,
             "exp": now + 600,
         });
@@ -124,7 +136,7 @@ mod tests {
         let encoded_signature = URL_SAFE_NO_PAD.encode(signature.to_bytes());
         let public_key = STANDARD.encode(signing.verifying_key().to_bytes());
         let document_hash = hex::encode(Sha256::digest(&document));
-        let evidence = SignedSnapshotEvidence {
+        let common = || SignedSnapshotEvidence {
             public_key_base64: &public_key,
             expected_key_id: "settings-key-v1",
             algorithm: "Ed25519",
@@ -137,24 +149,17 @@ mod tests {
             device_public_id: "HS-TEST",
             max_revision: 3,
             snapshot_hash: &"a".repeat(64),
+            generated_at: "2026-07-30T07:00:00+00:00",
             settings: json!([]),
+            replayed: false,
+            applied: json!([{"setting_key": "appearance.theme", "revision": 3, "index": 0}]),
+            conflicts: json!([]),
         };
-        assert!(verify(evidence).is_ok());
+        assert!(verify(common()).is_ok());
 
         let tampered = SignedSnapshotEvidence {
-            public_key_base64: &public_key,
-            expected_key_id: "settings-key-v1",
-            algorithm: "Ed25519",
-            key_id: "settings-key-v1",
-            signed_document: &encoded_document,
-            signature: &encoded_signature,
-            signed_document_hash: &document_hash,
-            schema: "vp3.federated-settings.v1",
-            account_id: 8,
-            device_public_id: "HS-TEST",
-            max_revision: 3,
-            snapshot_hash: &"a".repeat(64),
-            settings: json!([]),
+            applied: json!([]),
+            ..common()
         };
         assert!(verify(tampered).is_err());
     }
