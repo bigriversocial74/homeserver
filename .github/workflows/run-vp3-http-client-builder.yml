@@ -19,10 +19,33 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Extract and execute product builder
+      - name: Extract product builder without altering embedded source
         run: |
-          sed -n "/cat > \/tmp\/build_vp3_client.py <<'PY'/,/^          PY$/p" .github/workflows/build-vp3-http-client-v1.yml \
-            | sed '1d;$d;s/^          //' > /tmp/build_vp3_client.py
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('.github/workflows/build-vp3-http-client-v1.yml').read_text().splitlines()
+          start = next(index for index, line in enumerate(source) if "cat > /tmp/build_vp3_client.py <<'PY'" in line) + 1
+          end = next(index for index in range(start, len(source)) if source[index] == '          PY')
+          prefix = ' ' * 10
+          output = []
+          triple = None
+          for raw in source[start:end]:
+              candidate = raw[len(prefix):] if raw.startswith(prefix) else raw
+              if triple is None:
+                  output.append(candidate)
+                  for token in ("'''", '\"\"\"'):
+                      if candidate.count(token) % 2 == 1:
+                          triple = token
+                          break
+              else:
+                  output.append(candidate if raw.startswith(prefix) and triple in raw else raw)
+                  if raw.count(triple) % 2 == 1:
+                      triple = None
+          if triple is not None:
+              raise SystemExit('Embedded builder contains an unterminated triple-quoted string')
+          Path('/tmp/build_vp3_client.py').write_text('\n'.join(output) + '\n')
+          PY
           test -s /tmp/build_vp3_client.py
           python /tmp/build_vp3_client.py
       - name: Validate generated product tree
