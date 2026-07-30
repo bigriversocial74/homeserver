@@ -55,3 +55,7 @@ HomeServer verifies the pinned key ID, Ed25519 signature, document hash, lifetim
 - `POST /v1/federated-settings/sync`
 
 The Tauri bridge exposes matching commands to the Control Center Settings interface.
+
+## Certification boundary
+
+Phase 15 is mergeable only after the exact PR head passes the permanent Phase 15 contract plus complete HomeServer Production Quality, including native builds, workspace tests and lint, API smoke tests, NSIS installation, LocalSystem security, signed update, and forced rollback.
