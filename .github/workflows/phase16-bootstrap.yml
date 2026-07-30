@@ -28,10 +28,10 @@ jobs:
         run: |
           set -euo pipefail
           shas=(
-            c65d86ef2af3d4d7061e19d155e5d9131b80f754
-            1b7e0a23b4989845b9ab0dbdcd58a1b65bd4a247
-            fb44da6e313badd44acf440f5618818dfa5054aa
-            0c4dd35b54fa7e4ade326a00a28ee2fe45ab91ce
+            6c717978811c15262e20b6c5d7061d2502b5ff48
+            ebf10722881201b84a8632f9895271e5667ac47e
+            5e5996e2bf049fb748fbe34064218a5c17cc77d5
+            58e081b25f6012ed3759095e958225c23b76734a
           )
           : > phase16-bundle.tgz
           for sha in "${shas[@]}"; do
@@ -43,14 +43,23 @@ jobs:
               | tr -d '\n' \
               | base64 --decode >> phase16-bundle.tgz
           done
-          printf '%s  %s\n' 'a2fe223a9fbbc1596ddffc006feb0450e5196cfe39eb307fbf096f42e2b0e497' 'phase16-bundle.tgz' | sha256sum --check
+          printf '%s  %s\n' 'e3522b4c0f7cc905be9c3fd2381a87b1c492a2cd4233a8e9ab98a8c77a097141' 'phase16-bundle.tgz' | sha256sum --check
           tar --extract --gzip --file phase16-bundle.tgz
-          rm phase16-bundle.tgz .github/workflows/phase16-bootstrap.yml
+          rm phase16-bundle.tgz
+          rm -f crates/homeserver-service/src/app/wrapper_core_part1.rs \
+                crates/homeserver-service/src/app/wrapper_core_part2.rs \
+                crates/homeserver-service/src/app/wrapper_core_part3.rs \
+                crates/homeserver-service/src/app/wrapper_core_part4.rs \
+                crates/homeserver-service/src/app/wrapper_core_part5.rs
       - name: Commit integrated Phase 16A implementation
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add --all
+          if git diff --cached --quiet; then
+            echo 'Phase 16A source bundle is already materialized.'
+            exit 0
+          fi
           git commit -m 'Build Phase 16A shared multi-wrapper identity and pairing core'
           git push origin HEAD:feature/phase-16-multi-wrapper-core-v1
