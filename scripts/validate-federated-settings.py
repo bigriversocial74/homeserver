@@ -100,6 +100,21 @@ require("wrapper does not match its signed document" in signature, "signed docum
 require("signature verification failed" in signature, "signature failure path is missing")
 require("sync_tampering_is_rejected" in signature, "signed merge-instruction tamper test is missing")
 
+for result_boundary in (
+    "result contains duplicate applied keys",
+    "result references an unknown applied key",
+    "applied evidence does not match the signed setting",
+    "result contains duplicate conflict keys",
+    "result marks one key applied and conflicted",
+    "result references an unknown conflict key",
+    "authority conflict does not match the signed setting",
+    "revision conflict does not match the signed setting",
+    "replay response contains mutation instructions",
+):
+    require(result_boundary in service, f"missing signed result boundary: {result_boundary}")
+require("struct ReceiptEvidence" in service, "receipt persistence still uses an oversized positional argument list")
+require("base64::Engine as _" not in signature, "signature tests retain a redundant base64 import")
+
 require(app.count('mod federated_settings;') == 1, "federated settings service module is not wired exactly once")
 require(app.count('mod federated_settings_signature;') == 1, "signature module is not wired exactly once")
 require(app.count("federated_settings::initialize(&connection)?;") == 1, "federated settings migration is not initialized exactly once")
