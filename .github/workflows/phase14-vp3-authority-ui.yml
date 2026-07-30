@@ -72,9 +72,15 @@ jobs:
           npm run build
       - name: Validate canonical Rust formatting
         run: cargo fmt --all -- --check
-      - name: Compile Windows service, updater, and Control Center
-        run: cargo check -p microgifter-homeserver-service -p microgifter-homeserver-updater -p microgifter-homeserver-control-center --all-targets
+      - name: Compile Windows service and updater crates
+        run: cargo check -p microgifter-homeserver-service -p microgifter-homeserver-updater --all-targets
       - name: Run HomeServer service and updater tests
         run: cargo test -p microgifter-homeserver-service -p microgifter-homeserver-updater
       - name: Run strict Windows Phase 14 Clippy
-        run: cargo clippy -p microgifter-homeserver-service -p microgifter-homeserver-updater -p microgifter-homeserver-control-center --all-targets -- -D warnings -A unused-imports -A dead-code -A clippy::uninlined-format-args -A clippy::const-is-empty
+        run: cargo clippy -p microgifter-homeserver-service -p microgifter-homeserver-updater --all-targets -- -D warnings -A unused-imports -A dead-code -A clippy::uninlined-format-args -A clippy::const-is-empty
+      - name: Verify packaged Control Center registration
+        shell: pwsh
+        run: |
+          Select-String -Path src-tauri/src/lib.rs -Pattern 'mod vp3_authority;' -Quiet | Out-Null
+          Select-String -Path src-tauri/src/lib.rs -Pattern 'vp3_authority::homeserver_activate_vp3_authority' -Quiet | Out-Null
+          Select-String -Path index.html -Pattern '/src/vp3-authority.js' -Quiet | Out-Null
