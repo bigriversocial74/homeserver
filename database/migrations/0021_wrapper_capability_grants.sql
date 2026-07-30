@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS wrapper_bridge_grants (
   result_policy TEXT NOT NULL CHECK (result_policy IN (
     'safe_result','metadata_only','aggregate_only','proposal_only','receipt_only'
   )),
-  approval_mode TEXT NOT NULL CHECK (approval_mode IN ('explicit','per_request')),
+  approval_mode TEXT NOT NULL CHECK (approval_mode IN ('explicit')),
   state TEXT NOT NULL CHECK (state IN (
     'pending_approval','active','suspended','expired','revoked'
   )),

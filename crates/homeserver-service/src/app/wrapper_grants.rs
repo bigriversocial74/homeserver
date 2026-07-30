@@ -280,8 +280,6 @@ pub struct AuthorizeBridgeRequest {
     pub operation: String,
     pub scope_kind: String,
     pub scope_value: String,
-    pub approval_id: Option<String>,
-    pub plan_hash: Option<String>,
     pub correlation_id: Option<String>,
 }
 
@@ -312,7 +310,6 @@ struct StoredGrant {
     approval_mode: String,
     state: String,
     expires_at_utc: String,
-    request_hash: String,
     supersedes_grant_id: Option<String>,
 }
 
@@ -355,7 +352,10 @@ pub fn health_check(connection: &Connection) -> Result<()> {
         [],
         |row| row.get(0),
     )?;
-    ensure!(catalog_count >= 10, "wrapper capability catalog is incomplete");
+    ensure!(
+        catalog_count >= 10,
+        "wrapper capability catalog is incomplete"
+    );
 
     let broad_count: i64 = connection.query_row(
         "SELECT COUNT(*) FROM wrapper_capability_catalog WHERE capability_key IN ('admin','knowledge.all','tools.all','agent.execute_any','cross_wrapper.read') OR capability_key LIKE '%.all'",
@@ -369,14 +369,20 @@ pub fn health_check(connection: &Connection) -> Result<()> {
         [],
         |row| row.get(0),
     )?;
-    ensure!(orphan_grants == 0, "wrapper grants contain cross-wrapper bindings");
+    ensure!(
+        orphan_grants == 0,
+        "wrapper grants contain cross-wrapper bindings"
+    );
 
     let invalid_bridges: i64 = connection.query_row(
         "SELECT COUNT(*) FROM wrapper_bridge_grants WHERE source_wrapper_id=target_wrapper_id",
         [],
         |row| row.get(0),
     )?;
-    ensure!(invalid_bridges == 0, "same-wrapper bridge grants are invalid");
+    ensure!(
+        invalid_bridges == 0,
+        "same-wrapper bridge grants are invalid"
+    );
 
     let active_expired: i64 = connection.query_row(
         "SELECT COUNT(*) FROM wrapper_capability_grants WHERE state='active' AND expires_at_utc<=strftime('%Y-%m-%dT%H:%M:%fZ','now')",
@@ -437,9 +443,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-async fn snapshot_handler(
-    State(state): State<Arc<AppState>>,
-) -> ApiResult<GrantRegistrySnapshot> {
+async fn snapshot_handler(State(state): State<Arc<AppState>>) -> ApiResult<GrantRegistrySnapshot> {
     run_blocking(move || snapshot(&state), "wrapper_grant_snapshot_failed").await
 }
 
@@ -578,7 +582,7 @@ async fn authorize_bridge_handler(
 
 async fn run_blocking<T, F>(task: F, code: &'static str) -> ApiResult<T>
 where
-    T: Send + 'static,
+    T: Serialize + Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
 {
     tokio::task::spawn_blocking(task)
@@ -605,7 +609,10 @@ fn snapshot_with_connection(connection: &Connection) -> Result<GrantRegistrySnap
     let bridges = read_bridges(connection)?;
     Ok(GrantRegistrySnapshot {
         schema: "homeserver.wrapper-grants.v1".to_owned(),
-        active_grants: grants.iter().filter(|grant| grant.state == "active").count() as u64,
+        active_grants: grants
+            .iter()
+            .filter(|grant| grant.state == "active")
+            .count() as u64,
         pending_approvals: approvals
             .iter()
             .filter(|approval| approval.state == "pending")
@@ -622,6 +629,16 @@ fn snapshot_with_connection(connection: &Connection) -> Result<GrantRegistrySnap
     })
 }
 
-include!("wrapper_grants_authority.rs");
-include!("wrapper_grants_bridge.rs");
-include!("wrapper_grants_support.rs");
+include!("wrapper_grants_lifecycle.rs");
+include!("wrapper_grants_approvals.rs");
+include!("wrapper_grants_authorize.rs");
+include!("wrapper_grants_bridge_create.rs");
+include!("wrapper_grants_bridge_revoke.rs");
+include!("wrapper_grants_bridge_authorize.rs");
+include!("wrapper_grants_decision.rs");
+include!("wrapper_grants_expiration.rs");
+include!("wrapper_grants_context.rs");
+include!("wrapper_grants_storage.rs");
+include!("wrapper_grants_usage.rs");
+include!("wrapper_grants_validation.rs");
+include!("wrapper_grants_read.rs");
