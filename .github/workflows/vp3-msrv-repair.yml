@@ -1,0 +1,47 @@
+name: VP3 MSRV Repair
+
+on:
+  push:
+    branches:
+      - feature/vp3-http-client-v1-20260729
+    paths:
+      - .github/workflows/vp3-msrv-repair.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/vp3-http-client-v1-20260729
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+      - name: Replace post-MSRV Option helper
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          path = Path('crates/homeserver-service/src/vp3_client.rs')
+          text = path.read_text()
+          old = '.and_then(|value| parse_remote_time(&value).ok()).is_none_or(|expires| expires <= Utc::now());'
+          new = '.and_then(|value| parse_remote_time(&value).ok()).map_or(true, |expires| expires <= Utc::now());'
+          if old not in text:
+              raise SystemExit('post-MSRV Option helper was not found')
+          path.write_text(text.replace(old, new, 1))
+          '@ | python -
+          cargo fmt --all
+      - name: Commit MSRV repair
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/homeserver-service/src/vp3_client.rs
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          git commit -m "Keep VP3 client compatible with Rust 1.80"
+          git push origin HEAD:feature/vp3-http-client-v1-20260729
