@@ -48,6 +48,11 @@ jobs:
                   raise SystemExit(f'Expected one match in {path}, found {count}: {old[:120]!r}')
               p.write_text(text.replace(old,new), encoding='utf-8')
 
+          validator='scripts/validate-wrapper-agents.py'
+          replace_once(validator,
+              'require("use super::{wrapper_agents, wrapper_grants" in jobs, "wrapper jobs do not import agent authority")',
+              'require("use super::wrapper_agents;" in jobs, "wrapper jobs do not import agent authority")')
+
           app='crates/homeserver-service/src/app.rs'
           replace_once(app,
               '#[path = "app/wrapper_jobs.rs"]\nmod wrapper_jobs;\n',
