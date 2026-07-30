@@ -1,4 +1,7 @@
-pub fn authorize(connection: &Connection, request: AuthorizeRequest) -> Result<AuthorizationDecision> {
+pub fn authorize(
+    connection: &Connection,
+    request: AuthorizeRequest,
+) -> Result<AuthorizationDecision> {
     expire_stale_authority(connection)?;
     let context = connection_context(connection, &request.connection_id)?;
     let capability_key = validate_capability_key(&request.capability_key)?;
@@ -13,26 +16,30 @@ pub fn authorize(connection: &Connection, request: AuthorizeRequest) -> Result<A
         return denied_decision(
             connection,
             &context,
-            None,
-            None,
-            &capability_key,
-            &operation,
-            "grant_missing",
-            correlation_id.as_deref(),
-            None,
+            DeniedAuthorization {
+                grant_id: None,
+                bridge_id: None,
+                capability_key: &capability_key,
+                operation: &operation,
+                detail_code: "grant_missing",
+                correlation_id: correlation_id.as_deref(),
+                grant_revision: None,
+            },
         );
     };
     if !grant.allowed_operations.iter().any(|item| item == &operation) {
         return denied_decision(
             connection,
             &context,
-            Some(&grant.grant_id),
-            None,
-            &capability_key,
-            &operation,
-            "operation_not_granted",
-            correlation_id.as_deref(),
-            Some(grant.grant_revision),
+            DeniedAuthorization {
+                grant_id: Some(&grant.grant_id),
+                bridge_id: None,
+                capability_key: &capability_key,
+                operation: &operation,
+                detail_code: "operation_not_granted",
+                correlation_id: correlation_id.as_deref(),
+                grant_revision: Some(grant.grant_revision),
+            },
         );
     }
     let rule = capability_rule(connection, &capability_key)?;
@@ -51,13 +58,15 @@ pub fn authorize(connection: &Connection, request: AuthorizeRequest) -> Result<A
                 return denied_decision(
                     connection,
                     &context,
-                    Some(&grant.grant_id),
-                    None,
-                    &capability_key,
-                    &operation,
-                    "scope_not_granted",
-                    correlation_id.as_deref(),
-                    Some(grant.grant_revision),
+                    DeniedAuthorization {
+                        grant_id: Some(&grant.grant_id),
+                        bridge_id: None,
+                        capability_key: &capability_key,
+                        operation: &operation,
+                        detail_code: "scope_not_granted",
+                        correlation_id: correlation_id.as_deref(),
+                        grant_revision: Some(grant.grant_revision),
+                    },
                 )
             }
         }
@@ -122,4 +131,3 @@ pub fn authorize(connection: &Connection, request: AuthorizeRequest) -> Result<A
         detail_code: "authorized".to_owned(),
     })
 }
-
