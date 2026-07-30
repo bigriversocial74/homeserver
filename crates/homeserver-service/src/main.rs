@@ -19,6 +19,7 @@ mod software_authority;
 mod update;
 mod update_apply;
 mod update_store;
+mod vp3_client;
 
 use anyhow::{anyhow, bail, Context, Result};
 use config::AppConfig;
@@ -91,6 +92,13 @@ impl AppState {
             return HealthSnapshot::needs_attention(
                 &self.config.server_name,
                 "software_authority_integrity_check_failed",
+            );
+        }
+        if let Err(error) = vp3_client::health_check(&connection) {
+            error!(?error, "HomeServer VP3 network-client database health check failed");
+            return HealthSnapshot::needs_attention(
+                &self.config.server_name,
+                "vp3_network_client_integrity_check_failed",
             );
         }
         if let Err(error) = microgifter_connection::health_check(&connection) {
@@ -229,7 +237,8 @@ impl AppState {
 
         match update_store::status(
             &connection,
-            &self.config.update_manifest_url,
+            &software_authority::manifest_url(&connection, &self.config.update_manifest_url)
+                .unwrap_or_else(|_| self.config.update_manifest_url.clone()),
             self.config.update_plan_path().exists(),
         ) {
             Ok(status) => {
@@ -281,6 +290,7 @@ impl AppState {
             database::maintain_history(&connection)?;
             update_store::maintain_history(&connection)?;
             software_authority::maintain_history(&connection)?;
+            vp3_client::maintain_history(&connection)?;
             microgifter_connection::maintain_history(&connection)?;
             model_center::maintain_history(&connection)?;
             operational_data::maintain_history(&connection)?;
@@ -358,42 +368,53 @@ impl AppState {
 
     async fn check_for_updates(&self) -> Result<UpdateActionResult> {
         update_store::begin_check(&*self.connection()?)?;
-        let verified = match update::fetch_and_verify_manifest(
-            &self.config,
-            env!("CARGO_PKG_VERSION"),
-        )
-        .await
-        {
-            Ok(verified) => verified,
-            Err(error) => {
-                let _ = update_store::record_check_failure(
-                    &*self.connection()?,
-                    &public_update_failure(&error),
-                );
-                return Err(error);
+        let vp3_active = software_authority::uses_vp3(&*self.connection()?)?;
+        let (update_id, manifest_url, manifest) = if vp3_active {
+            match vp3_client::check_for_updates(self, env!("CARGO_PKG_VERSION")).await {
+                Ok(Some(verified)) => (verified.update_id, verified.manifest_url, verified.manifest),
+                Ok(None) => {
+                    update_store::record_current(&*self.connection()?)?;
+                    return Ok(UpdateActionResult {
+                        status: self.update_status()?,
+                        message: "HomeServer is current.".to_owned(),
+                        restart_required: false,
+                    });
+                }
+                Err(error) => {
+                    let _ = update_store::record_check_failure(&*self.connection()?, &public_update_failure(&error));
+                    return Err(error);
+                }
             }
+        } else {
+            let verified = match update::fetch_and_verify_manifest(&self.config, env!("CARGO_PKG_VERSION")).await {
+                Ok(verified) => verified,
+                Err(error) => {
+                    let _ = update_store::record_check_failure(&*self.connection()?, &public_update_failure(&error));
+                    return Err(error);
+                }
+            };
+            if !update::manifest_is_newer(&verified, env!("CARGO_PKG_VERSION"))? {
+                update_store::record_current(&*self.connection()?)?;
+                return Ok(UpdateActionResult {
+                    status: self.update_status()?,
+                    message: "HomeServer is current.".to_owned(),
+                    restart_required: false,
+                });
+            }
+            (verified.update_id, self.config.update_manifest_url.clone(), verified.manifest)
         };
-
-        if !update::manifest_is_newer(&verified, env!("CARGO_PKG_VERSION"))? {
-            update_store::record_current(&*self.connection()?)?;
-            return Ok(UpdateActionResult {
-                status: self.update_status()?,
-                message: "HomeServer is current.".to_owned(),
-                restart_required: false,
-            });
-        }
 
         update_store::save_available(
             &*self.connection()?,
-            &verified.update_id,
-            &self.config.update_manifest_url,
-            &verified.manifest,
+            &update_id,
+            &manifest_url,
+            &manifest,
         )?;
         Ok(UpdateActionResult {
             status: self.update_status()?,
             message: format!(
                 "HomeServer {} is available and its release manifest is valid.",
-                verified.manifest.payload.version
+                manifest.payload.version
             ),
             restart_required: false,
         })
@@ -409,13 +430,12 @@ impl AppState {
             )?;
             update_store::mark_downloading(&connection, &available.record.update_id)?
         };
-        let path = match update::download_and_verify_installer(
-            &self.config,
-            &stored.record,
-            &stored.manifest,
-        )
-        .await
-        {
+        let vp3_active = software_authority::uses_vp3(&*self.connection()?)?;
+        let path = match if vp3_active {
+            vp3_client::download_and_verify_installer(self, &stored.record).await
+        } else {
+            update::download_and_verify_installer(&self.config, &stored.record, &stored.manifest).await
+        } {
             Ok(path) => path,
             Err(error) => {
                 let _ = update_store::mark_failure(
@@ -426,8 +446,16 @@ impl AppState {
                 return Err(error);
             }
         };
-        let staged =
-            update_store::mark_staged(&*self.connection()?, &stored.record.update_id, &path)?;
+        let staged = update_store::mark_staged(&*self.connection()?, &stored.record.update_id, &path)?;
+        if vp3_active {
+            vp3_client::queue_update_receipt(
+                &*self.connection()?,
+                &staged.record.update_id,
+                &staged.record.version,
+                "staged",
+                None,
+            )?;
+        }
         Ok(UpdateActionResult {
             status: self.update_status()?,
             message: format!(

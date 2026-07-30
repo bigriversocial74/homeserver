@@ -20,7 +20,7 @@ mod pod_provider_runtime;
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
     mcp_runtime, microgifter_connection, model_center, openrouter_provider, operational_data,
-    review_intelligence, semantic_vault, software_authority, update, update_store, AppState,
+    review_intelligence, semantic_vault, software_authority, update, update_store, vp3_client, AppState,
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -48,6 +48,7 @@ pub async fn run(
     activity::initialize(&connection)?;
     update_store::initialize(&connection)?;
     software_authority::initialize(&connection)?;
+    vp3_client::initialize(&connection)?;
     cloud_connector::initialize(&connection)?;
     cloud_registry::initialize(&connection)?;
     microgifter_connection::initialize(&connection)?;
@@ -121,6 +122,7 @@ pub async fn run(
 
     let backup_scheduler = tokio::spawn(run_backup_scheduler(state.clone(), shutdown.clone()));
     let update_scheduler = tokio::spawn(run_update_scheduler(state.clone(), shutdown.clone()));
+    let vp3_worker = tokio::spawn(vp3_client::run(state.clone(), shutdown.clone()));
     let cloud_worker = tokio::spawn(cloud_registry::run(state.clone(), shutdown.clone()));
     let microgifter_connection_worker =
         tokio::spawn(microgifter_connection::run(state.clone(), shutdown.clone()));
@@ -169,6 +171,7 @@ pub async fn run(
     }
     backup_scheduler.abort();
     update_scheduler.abort();
+    vp3_worker.abort();
     cloud_worker.abort();
     microgifter_connection_worker.abort();
     pod_provider_worker.abort();

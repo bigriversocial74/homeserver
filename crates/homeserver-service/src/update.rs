@@ -70,6 +70,29 @@ pub async fn fetch_and_verify_manifest(
     verify_manifest(&manifest, current_version)
 }
 
+pub(crate) fn verify_authority_document(
+    document: &str,
+    signature: &str,
+    key_id: &str,
+) -> Result<Vec<u8>> {
+    ensure!(
+        key_id == compiled_update_key_id(),
+        "VP3 authority signing key is not trusted"
+    );
+    let document = URL_SAFE_NO_PAD
+        .decode(document)
+        .context("VP3 authority document encoding is invalid")?;
+    let signature = URL_SAFE_NO_PAD
+        .decode(signature)
+        .context("VP3 authority signature encoding is invalid")?;
+    let signature = Signature::from_slice(&signature)
+        .context("VP3 authority signature length is invalid")?;
+    decode_pinned_public_key()?
+        .verify(&document, &signature)
+        .context("VP3 authority signature verification failed")?;
+    Ok(document)
+}
+
 pub fn verify_manifest(
     manifest: &SignedUpdateManifest,
     current_version: &str,

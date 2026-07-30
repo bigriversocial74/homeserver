@@ -1,94 +1,8 @@
-name: Build HomeServer VP3 HTTP Client v1
-
-on:
-  push:
-    branches:
-      - feature/vp3-http-client-v1-20260729
-    paths:
-      - .github/workflows/build-vp3-http-client-v1.yml
-
-permissions:
-  contents: write
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: feature/vp3-http-client-v1-20260729
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - name: Build VP3 client
-        run: |
-          cat > /tmp/build_vp3_client.py <<'PY'
-          from pathlib import Path
-          import re
-
-          migration = Path('database/migrations/0018_vp3_network_client.sql')
-          migration.write_text(r'''-- VP3 network client state and signed release authorization evidence.
-ALTER TABLE homeserver_software_authority ADD COLUMN vp3_api_base_url TEXT;
-ALTER TABLE homeserver_software_authority ADD COLUMN vp3_account_id INTEGER;
-ALTER TABLE homeserver_software_authority ADD COLUMN vp3_device_fingerprint TEXT;
-ALTER TABLE homeserver_software_authority ADD COLUMN vp3_credential_key TEXT;
-ALTER TABLE homeserver_software_authority ADD COLUMN vp3_lease_document TEXT;
-ALTER TABLE homeserver_software_authority ADD COLUMN vp3_lease_signature TEXT;
-ALTER TABLE homeserver_software_authority ADD COLUMN vp3_lease_key_id TEXT;
-ALTER TABLE homeserver_software_authority ADD COLUMN vp3_release_public_id TEXT;
-ALTER TABLE homeserver_software_authority ADD COLUMN last_vp3_manifest_at_utc TEXT;
-
-CREATE TABLE IF NOT EXISTS vp3_release_authorizations (
-  update_id TEXT PRIMARY KEY,
-  release_public_id TEXT NOT NULL,
-  version TEXT NOT NULL,
-  channel TEXT NOT NULL,
-  signed_document TEXT NOT NULL,
-  signature TEXT NOT NULL,
-  signing_key_id TEXT NOT NULL,
-  manifest_hash TEXT NOT NULL,
-  installer_url TEXT NOT NULL,
-  installer_file_name TEXT NOT NULL,
-  installer_size_bytes INTEGER NOT NULL,
-  installer_sha256 TEXT NOT NULL,
-  authenticode_thumbprint TEXT NOT NULL,
-  grant_credential_key TEXT NOT NULL,
-  grant_expires_at_utc TEXT NOT NULL,
-  created_at_utc TEXT NOT NULL,
-  updated_at_utc TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS vp3_authority_outbox (
-  receipt_id TEXT PRIMARY KEY,
-  request_id TEXT NOT NULL UNIQUE,
-  update_id TEXT NOT NULL,
-  release_public_id TEXT,
-  version TEXT NOT NULL,
-  disposition TEXT NOT NULL CHECK (disposition IN ('downloaded','staged','installed','rolled_back','failed')),
-  failure_code TEXT,
-  receipt_hash TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','submitted','failed')),
-  attempt_count INTEGER NOT NULL DEFAULT 0,
-  last_attempt_at_utc TEXT,
-  submitted_at_utc TEXT,
-  last_error_code TEXT,
-  created_at_utc TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_vp3_authority_outbox_state
-  ON vp3_authority_outbox (state,created_at_utc);
-
-INSERT OR IGNORE INTO schema_migrations (migration_key)
-VALUES ('0018_vp3_network_client');
-''')
-
-          client = Path('crates/homeserver-service/src/vp3_client.rs')
-          client.write_text(r'''use crate::{software_authority, update, AppState};
+use crate::{update, AppState};
 use anyhow::{anyhow, bail, ensure, Context, Result};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}, Engine as _};
 use chrono::{DateTime, Duration as ChronoDuration, NaiveDateTime, TimeZone, Utc};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures_util::StreamExt;
 use keyring::Entry;
 use microgifter_homeserver_core::{
@@ -119,6 +33,7 @@ const MAX_INSTALLER_BYTES: u64 = 1024 * 1024 * 1024;
 const MIN_INSTALLER_BYTES: u64 = 1_000_000;
 const HEARTBEAT_SECONDS: u64 = 5 * 60;
 const LEASE_REFRESH_WINDOW_SECONDS: i64 = 15 * 60;
+const DEFAULT_LEASE_KEY_ID: &str = "homeserver-lease-ed25519-v1";
 
 #[derive(Debug, Deserialize)]
 pub struct ActivateVp3Request {
@@ -203,8 +118,6 @@ struct ManifestArtifact {
     architecture: String,
     sha256: String,
     size_bytes: u64,
-    authenticode_thumbprint: String,
-    file_name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -225,7 +138,7 @@ struct Vp3ReleaseDocument {
     published_at_utc: String,
     #[serde(default)]
     release_notes: String,
-    installer_download_url: String,
+    installer_download_path: String,
     #[serde(default)]
     artifacts: Vec<Vp3ReleaseArtifact>,
     #[serde(default)]
@@ -236,6 +149,7 @@ struct Vp3ReleaseDocument {
 struct Vp3ReleaseArtifact {
     platform: String,
     architecture: String,
+    file_name: Option<String>,
     sha256: String,
     size_bytes: u64,
     authenticode_thumbprint: Option<String>,
@@ -420,7 +334,7 @@ pub async fn activate(state: &AppState, request: &ActivateVp3Request) -> Result<
 }
 
 pub async fn refresh_lease(state: &AppState) -> Result<()> {
-    let identity = load_identity(&state.connection()?, false)?;
+    let identity = load_identity(&*state.connection()?, false)?;
     let credential = load_secret(&identity.credential_key)?;
     let base = secure_api_base(&identity.api_base_url)?;
     let request_id = request_id();
@@ -442,7 +356,7 @@ pub async fn refresh_lease(state: &AppState) -> Result<()> {
 }
 
 pub async fn heartbeat(state: &AppState) -> Result<()> {
-    let identity = load_identity(&state.connection()?, true)?;
+    let identity = load_identity(&*state.connection()?, true)?;
     let credential = load_secret(&identity.credential_key)?;
     let base = secure_api_base(&identity.api_base_url)?;
     let request_id = request_id();
@@ -481,8 +395,8 @@ pub async fn heartbeat(state: &AppState) -> Result<()> {
 }
 
 pub async fn check_for_updates(state: &AppState, current_version: &str) -> Result<Option<VerifiedVp3Update>> {
-    let identity = load_identity(&state.connection()?, true)?;
-    ensure_active_lease(&state.connection()?)?;
+    let identity = load_identity(&*state.connection()?, true)?;
+    ensure_active_lease(&*state.connection()?)?;
     let credential = load_secret(&identity.credential_key)?;
     let base = secure_api_base(&identity.api_base_url)?;
     let request_id = request_id();
@@ -533,15 +447,16 @@ pub async fn check_for_updates(state: &AppState, current_version: &str) -> Resul
     }
     let signed_artifact = signed.artifacts.iter().find(|artifact| artifact.platform == "windows" && artifact.architecture == "x86_64").context("VP3 signed release does not include the Windows x86_64 artifact")?;
     let thumbprint = signed_artifact.authenticode_thumbprint.as_deref().unwrap_or("").to_uppercase();
+    let file_name = signed_artifact.file_name.as_deref().unwrap_or("").to_owned();
     validate_artifact(
-        &endpoint_artifact.sha256,
-        endpoint_artifact.size_bytes,
-        &endpoint_artifact.authenticode_thumbprint,
-        &endpoint_artifact.file_name,
+        &signed_artifact.sha256,
+        signed_artifact.size_bytes,
+        &thumbprint,
+        &file_name,
     )?;
-    ensure!(signed_artifact.sha256.eq_ignore_ascii_case(&endpoint_artifact.sha256) && signed_artifact.size_bytes == endpoint_artifact.size_bytes && thumbprint.eq_ignore_ascii_case(&endpoint_artifact.authenticode_thumbprint), "VP3 authorized artifact does not match the signed release document");
+    ensure!(signed_artifact.sha256.eq_ignore_ascii_case(&endpoint_artifact.sha256) && signed_artifact.size_bytes == endpoint_artifact.size_bytes, "VP3 authorized artifact does not match the signed release document");
     ensure!(endpoint_artifact.platform == "windows" && endpoint_artifact.architecture == "x86_64", "VP3 authorized artifact target is invalid");
-    let installer_url = secure_installer_url(&base, &signed.installer_download_url)?;
+    let installer_url = secure_installer_url(&base, &signed.installer_download_path)?;
     ensure!(grant.download_path.starts_with("/api/homeserver/v1/installer-download.php"), "VP3 installer authorization path is invalid");
     validate_grant(&grant)?;
 
@@ -561,10 +476,10 @@ pub async fn check_for_updates(state: &AppState, current_version: &str) -> Resul
             release_notes: signed.release_notes.clone(),
             installer: UpdateInstallerContract {
                 url: installer_url.to_string(),
-                file_name: endpoint_artifact.file_name.clone(),
-                size_bytes: endpoint_artifact.size_bytes,
-                sha256: endpoint_artifact.sha256.to_lowercase(),
-                authenticode_thumbprint: endpoint_artifact.authenticode_thumbprint.to_uppercase(),
+                file_name: file_name.clone(),
+                size_bytes: signed_artifact.size_bytes,
+                sha256: signed_artifact.sha256.to_lowercase(),
+                authenticode_thumbprint: thumbprint.clone(),
             },
         },
         signature: signature.clone(),
@@ -573,7 +488,7 @@ pub async fn check_for_updates(state: &AppState, current_version: &str) -> Resul
         let connection = state.connection()?;
         connection.execute(
             "INSERT INTO vp3_release_authorizations (update_id,release_public_id,version,channel,signed_document,signature,signing_key_id,manifest_hash,installer_url,installer_file_name,installer_size_bytes,installer_sha256,authenticode_thumbprint,grant_credential_key,grant_expires_at_utc,created_at_utc,updated_at_utc) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now')) ON CONFLICT(update_id) DO UPDATE SET release_public_id=excluded.release_public_id,version=excluded.version,channel=excluded.channel,signed_document=excluded.signed_document,signature=excluded.signature,signing_key_id=excluded.signing_key_id,manifest_hash=excluded.manifest_hash,installer_url=excluded.installer_url,installer_file_name=excluded.installer_file_name,installer_size_bytes=excluded.installer_size_bytes,installer_sha256=excluded.installer_sha256,authenticode_thumbprint=excluded.authenticode_thumbprint,grant_credential_key=excluded.grant_credential_key,grant_expires_at_utc=excluded.grant_expires_at_utc,updated_at_utc=excluded.updated_at_utc",
-            params![update_id, release_public_id, version, channel, document, signature, key_id, manifest_hash, installer_url.as_str(), endpoint_artifact.file_name, endpoint_artifact.size_bytes as i64, endpoint_artifact.sha256.to_lowercase(), endpoint_artifact.authenticode_thumbprint.to_uppercase(), grant_key, normalize_remote_time(&grant.expires_at)?,],
+            params![update_id, release_public_id, version, channel, document, signature, key_id, manifest_hash, installer_url.as_str(), file_name, signed_artifact.size_bytes as i64, signed_artifact.sha256.to_lowercase(), thumbprint, grant_key, normalize_remote_time(&grant.expires_at)?,],
         )?;
         connection.execute(
             "UPDATE homeserver_software_authority SET vp3_release_public_id=?1,last_vp3_manifest_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),last_error_code=NULL,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE singleton_id=1",
@@ -589,7 +504,7 @@ pub async fn check_for_updates(state: &AppState, current_version: &str) -> Resul
 
 pub async fn download_and_verify_installer(state: &AppState, record: &UpdateRecord) -> Result<PathBuf> {
     ensure!(matches!(record.state, UpdateState::Available | UpdateState::Downloading), "VP3 update is not available for download");
-    let authorization = load_authorization(&state.connection()?, &record.update_id)?;
+    let authorization = load_authorization(&*state.connection()?, &record.update_id)?;
     verify_authorization(&authorization)?;
     ensure!(authorization.version == record.version, "VP3 release authorization version does not match the update record");
     ensure!(authorization.installer_sha256.eq_ignore_ascii_case(&record.installer_sha256) && authorization.installer_size_bytes == record.installer_size_bytes && authorization.authenticode_thumbprint.eq_ignore_ascii_case(&record.authenticode_thumbprint), "VP3 release authorization does not match the stored update record");
@@ -630,7 +545,7 @@ pub async fn download_and_verify_installer(state: &AppState, record: &UpdateReco
     ensure!(hash.eq_ignore_ascii_case(&authorization.installer_sha256), "VP3 installer SHA-256 does not match the signed release");
     update::verify_authenticode(&temporary, &authorization.authenticode_thumbprint)?;
     replace_file(&temporary, &destination)?;
-    queue_update_receipt(&state.connection()?, &record.update_id, &record.version, "downloaded", None)?;
+    queue_update_receipt(&*state.connection()?, &record.update_id, &record.version, "downloaded", None)?;
     Ok(destination)
 }
 
@@ -668,13 +583,13 @@ pub fn queue_update_receipt(connection: &Connection, update_id: &str, version: &
 }
 
 pub async fn submit_pending_receipts(state: &AppState) -> Result<()> {
-    let identity = match load_identity(&state.connection()?, true) {
+    let identity = match load_identity(&*state.connection()?, true) {
         Ok(identity) => identity,
         Err(_) => return Ok(()),
     };
     let credential = load_secret(&identity.credential_key)?;
     let base = secure_api_base(&identity.api_base_url)?;
-    let pending = load_pending_receipts(&state.connection()?)?;
+    let pending = load_pending_receipts(&*state.connection()?)?;
     for receipt in pending {
         let metadata: Value = serde_json::from_str(&receipt.metadata_json).unwrap_or_else(|_| json!({}));
         let result: Result<DataEnvelope<Value>> = post_json(
@@ -746,7 +661,7 @@ fn apply_verified_lease(state: &AppState, lease: &VerifiedLease, cutover: bool) 
 fn verify_lease(response: &LeaseResponse, account_id: u64, device_public_id: &str, fingerprint: &str) -> Result<VerifiedLease> {
     ensure!(response.algorithm.eq_ignore_ascii_case("Ed25519"), "VP3 entitlement lease is not Ed25519-signed");
     ensure!(!response.expires_at.trim().is_empty(), "VP3 entitlement lease expiration evidence is missing");
-    let document = update::verify_authority_document(&response.document, &response.signature, &response.key_id)?;
+    let document = verify_lease_document(&response.document, &response.signature, &response.key_id)?;
     let claims: LeaseClaims = serde_json::from_slice(&document).context("VP3 entitlement lease claims are invalid")?;
     ensure!(claims.iss == "vp3.me", "VP3 entitlement lease issuer is invalid");
     ensure!(claims.sub == device_public_id, "VP3 entitlement lease device identity is invalid");
@@ -766,6 +681,24 @@ fn verify_lease(response: &LeaseResponse, account_id: u64, device_public_id: &st
         signature: response.signature.clone(),
         key_id: response.key_id.clone(),
     })
+}
+
+fn verify_lease_document(document: &str, signature: &str, key_id: &str) -> Result<Vec<u8>> {
+    let expected_key_id = option_env!("VP3_HOMESERVER_LEASE_SIGNING_KEY_ID")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(DEFAULT_LEASE_KEY_ID);
+    ensure!(key_id == expected_key_id, "VP3 entitlement lease signing key is not trusted");
+    let public_key = option_env!("VP3_HOMESERVER_LEASE_PUBLIC_KEY_B64")
+        .filter(|value| !value.trim().is_empty())
+        .context("VP3 entitlement lease public key is not compiled into this HomeServer release")?;
+    let public_key = STANDARD.decode(public_key).context("VP3 entitlement lease public key encoding is invalid")?;
+    let public_key: [u8; 32] = public_key.try_into().map_err(|_| anyhow!("VP3 entitlement lease public key length is invalid"))?;
+    let verifier = VerifyingKey::from_bytes(&public_key).context("VP3 entitlement lease public key is invalid")?;
+    let document = URL_SAFE_NO_PAD.decode(document).context("VP3 entitlement lease document encoding is invalid")?;
+    let signature = URL_SAFE_NO_PAD.decode(signature).context("VP3 entitlement lease signature encoding is invalid")?;
+    let signature = Signature::from_slice(&signature).context("VP3 entitlement lease signature length is invalid")?;
+    verifier.verify(&document, &signature).context("VP3 entitlement lease signature verification failed")?;
+    Ok(document)
 }
 
 fn verify_authorization(authorization: &ReleaseAuthorization) -> Result<()> {
@@ -875,7 +808,7 @@ fn secure_api_base(value: &str) -> Result<Url> {
 }
 
 fn secure_installer_url(base: &Url, value: &str) -> Result<Url> {
-    let url = Url::parse(value).context("VP3 installer URL is invalid")?;
+    let url = base.join(value).context("VP3 installer path is invalid")?;
     ensure!(url.scheme() == "https" && url.host_str() == base.host_str() && url.port_or_known_default() == base.port_or_known_default(), "VP3 installer URL escaped the trusted authority host");
     ensure!(url.path() == "/api/homeserver/v1/installer-download.php" && url.query().is_none() && url.fragment().is_none(), "VP3 installer URL path is invalid");
     Ok(url)
@@ -1064,461 +997,3 @@ mod tests {
         assert!(secure_installer_url(&base, "https://evil.example/installer.exe").is_err());
     }
 }
-''')
-
-          update = Path('crates/homeserver-service/src/update.rs')
-          text = update.read_text()
-          marker = "pub fn verify_manifest(\n    manifest: &SignedUpdateManifest,\n    current_version: &str,\n) -> Result<VerifiedUpdate> {"
-          if marker not in text:
-              raise SystemExit('Update verifier marker not found')
-          helper = r'''pub(crate) fn verify_authority_document(
-    document: &str,
-    signature: &str,
-    key_id: &str,
-) -> Result<Vec<u8>> {
-    ensure!(
-        key_id == compiled_update_key_id(),
-        "VP3 authority signing key is not trusted"
-    );
-    let document = URL_SAFE_NO_PAD
-        .decode(document)
-        .context("VP3 authority document encoding is invalid")?;
-    let signature = URL_SAFE_NO_PAD
-        .decode(signature)
-        .context("VP3 authority signature encoding is invalid")?;
-    let signature = Signature::from_slice(&signature)
-        .context("VP3 authority signature length is invalid")?;
-    decode_pinned_public_key()?
-        .verify(&document, &signature)
-        .context("VP3 authority signature verification failed")?;
-    Ok(document)
-}
-
-'''
-          text = text.replace(marker, helper + marker, 1)
-          update.write_text(text)
-
-          main = Path('crates/homeserver-service/src/main.rs')
-          text = main.read_text()
-          text = text.replace('mod update_store;\n', 'mod update_store;\nmod vp3_client;\n', 1)
-          health_marker = '''        if let Err(error) = software_authority::health_check(&connection) {
-            error!(
-                ?error,
-                "HomeServer software-authority database health check failed"
-            );
-            return HealthSnapshot::needs_attention(
-                &self.config.server_name,
-                "software_authority_integrity_check_failed",
-            );
-        }
-'''
-          health_add = health_marker + '''        if let Err(error) = vp3_client::health_check(&connection) {
-            error!(?error, "HomeServer VP3 network-client database health check failed");
-            return HealthSnapshot::needs_attention(
-                &self.config.server_name,
-                "vp3_network_client_integrity_check_failed",
-            );
-        }
-'''
-          if health_marker not in text:
-              raise SystemExit('Main health marker not found')
-          text = text.replace(health_marker, health_add, 1)
-          text = text.replace('            software_authority::maintain_history(&connection)?;\n', '            software_authority::maintain_history(&connection)?;\n            vp3_client::maintain_history(&connection)?;\n', 1)
-          text = text.replace(
-              '            &self.config.update_manifest_url,\n            self.config.update_plan_path().exists(),',
-              '            &software_authority::manifest_url(&connection, &self.config.update_manifest_url)?,\n            self.config.update_plan_path().exists(),',
-              1,
-          )
-          old_check = '''        let verified = match update::fetch_and_verify_manifest(
-            &self.config,
-            env!("CARGO_PKG_VERSION"),
-        )
-        .await
-        {
-            Ok(verified) => verified,
-            Err(error) => {
-                let _ = update_store::record_check_failure(
-                    &*self.connection()?,
-                    &public_update_failure(&error),
-                );
-                return Err(error);
-            }
-        };
-
-        if !update::manifest_is_newer(&verified, env!("CARGO_PKG_VERSION"))? {
-            update_store::record_current(&*self.connection()?)?;
-            return Ok(UpdateActionResult {
-                status: self.update_status()?,
-                message: "HomeServer is current.".to_owned(),
-                restart_required: false,
-            });
-        }
-
-        update_store::save_available(
-            &*self.connection()?,
-            &verified.update_id,
-            &self.config.update_manifest_url,
-            &verified.manifest,
-        )?;
-'''
-          new_check = '''        let vp3_active = software_authority::uses_vp3(&self.connection()?)?;
-        let (update_id, manifest_url, manifest) = if vp3_active {
-            match vp3_client::check_for_updates(self, env!("CARGO_PKG_VERSION")).await {
-                Ok(Some(verified)) => (verified.update_id, verified.manifest_url, verified.manifest),
-                Ok(None) => {
-                    update_store::record_current(&*self.connection()?)?;
-                    return Ok(UpdateActionResult {
-                        status: self.update_status()?,
-                        message: "HomeServer is current.".to_owned(),
-                        restart_required: false,
-                    });
-                }
-                Err(error) => {
-                    let _ = update_store::record_check_failure(&*self.connection()?, &public_update_failure(&error));
-                    return Err(error);
-                }
-            }
-        } else {
-            let verified = match update::fetch_and_verify_manifest(&self.config, env!("CARGO_PKG_VERSION")).await {
-                Ok(verified) => verified,
-                Err(error) => {
-                    let _ = update_store::record_check_failure(&*self.connection()?, &public_update_failure(&error));
-                    return Err(error);
-                }
-            };
-            if !update::manifest_is_newer(&verified, env!("CARGO_PKG_VERSION"))? {
-                update_store::record_current(&*self.connection()?)?;
-                return Ok(UpdateActionResult {
-                    status: self.update_status()?,
-                    message: "HomeServer is current.".to_owned(),
-                    restart_required: false,
-                });
-            }
-            (verified.update_id, self.config.update_manifest_url.clone(), verified.manifest)
-        };
-
-        update_store::save_available(
-            &*self.connection()?,
-            &update_id,
-            &manifest_url,
-            &manifest,
-        )?;
-'''
-          if old_check not in text:
-              raise SystemExit('Update check block not found')
-          text = text.replace(old_check, new_check, 1)
-          text = text.replace('                verified.manifest.payload.version\n', '                manifest.payload.version\n', 1)
-          old_download = '''        let path = match update::download_and_verify_installer(
-            &self.config,
-            &stored.record,
-            &stored.manifest,
-        )
-        .await
-        {'''
-          new_download = '''        let vp3_active = software_authority::uses_vp3(&self.connection()?)?;
-        let path = match if vp3_active {
-            vp3_client::download_and_verify_installer(self, &stored.record).await
-        } else {
-            update::download_and_verify_installer(&self.config, &stored.record, &stored.manifest).await
-        } {'''
-          if old_download not in text:
-              raise SystemExit('Update download block not found')
-          text = text.replace(old_download, new_download, 1)
-          old_staged = '''        let staged =
-            update_store::mark_staged(&*self.connection()?, &stored.record.update_id, &path)?;
-'''
-          new_staged = '''        let staged = update_store::mark_staged(&*self.connection()?, &stored.record.update_id, &path)?;
-        if vp3_active {
-            vp3_client::queue_update_receipt(
-                &self.connection()?,
-                &staged.record.update_id,
-                &staged.record.version,
-                "staged",
-                None,
-            )?;
-        }
-'''
-          if old_staged not in text:
-              raise SystemExit('Staged update block not found')
-          text = text.replace(old_staged, new_staged, 1)
-          main.write_text(text)
-
-          authority = Path('crates/homeserver-service/src/software_authority.rs')
-          text = authority.read_text()
-          text = text.replace('use crate::{microgifter_connection, AppState};', 'use crate::{microgifter_connection, vp3_client, AppState};', 1)
-          text = text.replace('use axum::{extract::State, http::StatusCode, routing::get, Json, Router};', 'use axum::{extract::{DefaultBodyLimit, State}, http::StatusCode, routing::{get, post}, Json, Router};', 1)
-          text = text.replace('    pub vp3_device_id: Option<String>,\n', '    pub vp3_api_base_url: Option<String>,\n    pub vp3_account_id: Option<u64>,\n    pub vp3_device_id: Option<String>,\n    pub vp3_device_fingerprint: Option<String>,\n    pub vp3_credential_configured: bool,\n', 1)
-          text = text.replace('    pub vp3_lease_expires_at_utc: Option<String>,\n', '    pub vp3_lease_expires_at_utc: Option<String>,\n    pub vp3_release_public_id: Option<String>,\n', 1)
-          old_router = '''    Router::new()
-        .route("/v1/software-authority/status", get(status_handler))
-        .with_state(state)
-'''
-          new_router = '''    Router::new()
-        .route("/v1/software-authority/status", get(status_handler))
-        .route("/v1/software-authority/fingerprint", get(fingerprint_handler))
-        .route("/v1/software-authority/activate", post(activate_handler))
-        .route("/v1/software-authority/refresh", post(refresh_handler))
-        .route("/v1/software-authority/heartbeat", post(heartbeat_handler))
-        .layer(DefaultBodyLimit::max(64 * 1024))
-        .with_state(state)
-'''
-          if old_router not in text:
-              raise SystemExit('Software authority router block not found')
-          text = text.replace(old_router, new_router, 1)
-          handlers = r'''
-async fn fingerprint_handler(
-    State(state): State<Arc<AppState>>,
-) -> ApiResult<vp3_client::DeviceFingerprintSnapshot> {
-    tokio::task::spawn_blocking(move || vp3_client::fingerprint_snapshot(&state.connection()?))
-        .await
-        .map_err(|error| internal_error("vp3_fingerprint_task_failed", error))?
-        .map(Json)
-        .map_err(|error| internal_error("vp3_fingerprint_failed", error))
-}
-
-async fn activate_handler(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<vp3_client::ActivateVp3Request>,
-) -> ApiResult<SoftwareAuthoritySnapshot> {
-    vp3_client::activate(&state, &request)
-        .await
-        .map_err(|error| internal_error("vp3_activation_failed", error))?;
-    status_snapshot(&state.connection()?)
-        .map(Json)
-        .map_err(|error| internal_error("vp3_activation_status_failed", error))
-}
-
-async fn refresh_handler(
-    State(state): State<Arc<AppState>>,
-) -> ApiResult<SoftwareAuthoritySnapshot> {
-    vp3_client::refresh_lease(&state)
-        .await
-        .map_err(|error| internal_error("vp3_lease_refresh_failed", error))?;
-    status_snapshot(&state.connection()?)
-        .map(Json)
-        .map_err(|error| internal_error("vp3_lease_refresh_status_failed", error))
-}
-
-async fn heartbeat_handler(
-    State(state): State<Arc<AppState>>,
-) -> ApiResult<SoftwareAuthoritySnapshot> {
-    vp3_client::heartbeat(&state)
-        .await
-        .map_err(|error| internal_error("vp3_heartbeat_failed", error))?;
-    status_snapshot(&state.connection()?)
-        .map(Json)
-        .map_err(|error| internal_error("vp3_heartbeat_status_failed", error))
-}
-'''
-          marker = 'pub fn status_snapshot(connection: &Connection) -> Result<SoftwareAuthoritySnapshot> {'
-          if marker not in text:
-              raise SystemExit('Status snapshot marker not found')
-          text = text.replace(marker, handlers + '\n' + marker, 1)
-          old_query = '"SELECT current_authority,target_authority,cutover_state,vp3_device_id,vp3_license_id,vp3_lease_id,vp3_lease_expires_at_utc,update_eligible,allowed_update_channels_json,last_vp3_heartbeat_at_utc,last_error_code FROM homeserver_software_authority WHERE singleton_id=1"'
-          new_query = '"SELECT current_authority,target_authority,cutover_state,vp3_api_base_url,vp3_account_id,vp3_device_id,vp3_device_fingerprint,vp3_credential_key,vp3_license_id,vp3_lease_id,vp3_lease_expires_at_utc,vp3_release_public_id,update_eligible,allowed_update_channels_json,last_vp3_heartbeat_at_utc,last_error_code FROM homeserver_software_authority WHERE singleton_id=1"'
-          if old_query not in text:
-              raise SystemExit('Status query not found')
-          text = text.replace(old_query, new_query, 1)
-          old_row = '''                let current_authority: String = row.get(0)?;
-                let channels_json: String = row.get(8)?;
-                let allowed_update_channels =
-                    serde_json::from_str::<Vec<String>>(&channels_json).unwrap_or_default();
-                Ok(SoftwareAuthoritySnapshot {
-                    legacy_microgifter_fallback_active: current_authority == LEGACY_AUTHORITY,
-                    current_authority,
-                    target_authority: row.get(1)?,
-                    cutover_state: row.get(2)?,
-                    vp3_device_id: row.get(3)?,
-                    vp3_license_id: row.get(4)?,
-                    vp3_lease_id: row.get(5)?,
-                    vp3_lease_expires_at_utc: row.get(6)?,
-                    update_eligible: row.get::<_, i64>(7)? == 1,
-                    allowed_update_channels,
-                    last_vp3_heartbeat_at_utc: row.get(9)?,
-                    last_error_code: row.get(10)?,
-                })
-'''
-          new_row = '''                let current_authority: String = row.get(0)?;
-                let credential_key: Option<String> = row.get(7)?;
-                let channels_json: String = row.get(13)?;
-                let allowed_update_channels = serde_json::from_str::<Vec<String>>(&channels_json).unwrap_or_default();
-                Ok(SoftwareAuthoritySnapshot {
-                    legacy_microgifter_fallback_active: current_authority == LEGACY_AUTHORITY,
-                    current_authority,
-                    target_authority: row.get(1)?,
-                    cutover_state: row.get(2)?,
-                    vp3_api_base_url: row.get(3)?,
-                    vp3_account_id: row.get::<_, Option<i64>>(4)?.map(|value| value.max(0) as u64),
-                    vp3_device_id: row.get(5)?,
-                    vp3_device_fingerprint: row.get(6)?,
-                    vp3_credential_configured: vp3_client::credential_configured(credential_key.as_deref()),
-                    vp3_license_id: row.get(8)?,
-                    vp3_lease_id: row.get(9)?,
-                    vp3_lease_expires_at_utc: row.get(10)?,
-                    vp3_release_public_id: row.get(11)?,
-                    update_eligible: row.get::<_, i64>(12)? == 1,
-                    allowed_update_channels,
-                    last_vp3_heartbeat_at_utc: row.get(14)?,
-                    last_error_code: row.get(15)?,
-                })
-'''
-          if old_row not in text:
-              raise SystemExit('Status row mapping not found')
-          text = text.replace(old_row, new_row, 1)
-          text = text.replace('            ensure!(\n                snapshot.vp3_device_id.is_some() && snapshot.vp3_license_id.is_some(),', '            vp3_client::ensure_release_authorized(connection, update_id)?;\n            ensure!(\n                snapshot.vp3_device_id.is_some() && snapshot.vp3_license_id.is_some(),', 1)
-          old_receipt_tail = '''    if snapshot.legacy_microgifter_fallback_active {
-        microgifter_connection::record_update_result_receipt(
-            connection,
-            update_id,
-            version,
-            disposition,
-            failure_code,
-        )?;
-    }
-    Ok(())
-}
-'''
-          new_receipt_tail = '''    if snapshot.legacy_microgifter_fallback_active {
-        microgifter_connection::record_update_result_receipt(
-            connection,
-            update_id,
-            version,
-            disposition,
-            failure_code,
-        )?;
-    } else {
-        vp3_client::queue_update_receipt(connection, update_id, version, disposition, failure_code)?;
-    }
-    Ok(())
-}
-
-pub fn uses_vp3(connection: &Connection) -> Result<bool> {
-    Ok(status_snapshot(connection)?.current_authority == VP3_AUTHORITY)
-}
-
-pub fn manifest_url(connection: &Connection, fallback: &str) -> Result<String> {
-    let snapshot = status_snapshot(connection)?;
-    if snapshot.current_authority != VP3_AUTHORITY {
-        return Ok(fallback.to_owned());
-    }
-    let base = snapshot.vp3_api_base_url.context("VP3 API base URL is unavailable")?;
-    Ok(format!("{}/api/homeserver/v1/manifest.php", base.trim_end_matches('/')))
-}
-'''
-          if old_receipt_tail not in text:
-              raise SystemExit('Receipt tail not found')
-          text = text.replace(old_receipt_tail, new_receipt_tail, 1)
-          authority.write_text(text)
-
-          app = Path('crates/homeserver-service/src/app.rs')
-          text = app.read_text()
-          text = text.replace('review_intelligence, semantic_vault, software_authority, update, update_store, AppState,', 'review_intelligence, semantic_vault, software_authority, update, update_store, vp3_client, AppState,', 1)
-          text = text.replace('    software_authority::initialize(&connection)?;\n', '    software_authority::initialize(&connection)?;\n    vp3_client::initialize(&connection)?;\n', 1)
-          text = text.replace('    let update_scheduler = tokio::spawn(run_update_scheduler(state.clone(), shutdown.clone()));\n', '    let update_scheduler = tokio::spawn(run_update_scheduler(state.clone(), shutdown.clone()));\n    let vp3_worker = tokio::spawn(vp3_client::run(state.clone(), shutdown.clone()));\n', 1)
-          text = text.replace('    update_scheduler.abort();\n', '    update_scheduler.abort();\n    vp3_worker.abort();\n', 1)
-          app.write_text(text)
-
-          validator = Path('scripts/validate-vp3-network-client.py')
-          validator.write_text(r'''from pathlib import Path
-
-root = Path(__file__).resolve().parents[1]
-client = (root / 'crates/homeserver-service/src/vp3_client.rs').read_text()
-authority = (root / 'crates/homeserver-service/src/software_authority.rs').read_text()
-migration = (root / 'database/migrations/0018_vp3_network_client.sql').read_text()
-update = (root / 'crates/homeserver-service/src/update.rs').read_text()
-
-required = [
-    'Policy::none()',
-    'host == "vp3.me" || host.ends_with(".vp3.me")',
-    'ACTIVATE VP3',
-    'verify_authority_document',
-    'sodium',
-    'bearer_auth',
-    'verify_authenticode',
-    'vp3_authority_outbox',
-    'vp3_release_authorizations',
-    'Operating-system credential vault',
-]
-for marker in required[:-1]:
-    if marker not in client and marker not in migration and marker not in update:
-        raise SystemExit(f'missing VP3 client boundary: {marker}')
-if 'credential TEXT' in migration or 'grant_token TEXT' in migration:
-    raise SystemExit('plaintext VP3 credentials are forbidden in SQLite')
-for route in ['fingerprint', 'activate', 'refresh', 'heartbeat']:
-    if f'/v1/software-authority/{route}' not in authority:
-        raise SystemExit(f'missing local VP3 authority route: {route}')
-print('VP3 network client contract passed.')
-''')
-
-          docs = Path('docs/vp3-network-client-v1.md')
-          docs.write_text(r'''# VP3 Network Client v1
-
-The HomeServer service now consumes the VP3 software-authority control plane independently of Microgifter provider pairing.
-
-## Local activation
-
-1. Read `GET /v1/software-authority/fingerprint`.
-2. Register that SHA-256 fingerprint against an eligible HomeServer license in VP3.
-3. Submit the one-time VP3 device credential and enrollment code to `POST /v1/software-authority/activate` with confirmation `ACTIVATE VP3`.
-4. HomeServer verifies the Ed25519 entitlement lease using its pinned authority public key, stores the device credential in the operating-system credential vault, and cuts over atomically.
-
-## Runtime
-
-- heartbeat every five minutes
-- signed lease refresh before expiration
-- fail-closed update eligibility
-- signed VP3 release document verification
-- device/release/artifact-scoped installer grants stored only in the credential vault
-- SHA-256, byte-size, and Authenticode verification
-- durable idempotent update-receipt outbox
-- no Microgifter authority dependency
-
-The client trusts only HTTPS endpoints on `vp3.me` or its subdomains, rejects redirects, and never accepts a caller-provided installer host.
-''')
-
-          workflow = Path('.github/workflows/vp3-network-client-contract.yml')
-          workflow.write_text(r'''name: VP3 Network Client Contract
-
-on:
-  push:
-    branches:
-      - main
-      - feature/vp3-http-client-v1-20260729
-  pull_request:
-
-permissions:
-  contents: read
-
-jobs:
-  contract:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - name: Validate VP3 client boundaries
-        run: python scripts/validate-vp3-network-client.py
-      - name: Validate Rust formatting
-        run: cargo fmt --all -- --check
-      - name: Compile and test HomeServer service
-        run: cargo test -p microgifter-homeserver-service
-      - name: Strict HomeServer service lint
-        run: cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings
-''')
-          PY
-          python /tmp/build_vp3_client.py
-      - name: Validate generated tree
-        run: |
-          python scripts/validate-vp3-network-client.py
-          cargo fmt --all
-          cargo test -p microgifter-homeserver-service
-          cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings
-      - name: Commit product files
-        run: |
-          rm .github/workflows/build-vp3-http-client-v1.yml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m "Build VP3 HomeServer HTTP client v1"
-          git push origin HEAD:feature/vp3-http-client-v1-20260729
