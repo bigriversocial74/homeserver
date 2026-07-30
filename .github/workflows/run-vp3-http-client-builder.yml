@@ -1,0 +1,42 @@
+name: Run HomeServer VP3 HTTP Client Builder
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/run-vp3-http-client-builder.yml
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/vp3-http-client-v1-20260729
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Extract and execute product builder
+        run: |
+          sed -n "/cat > \/tmp\/build_vp3_client.py <<'PY'/,/^          PY$/p" .github/workflows/build-vp3-http-client-v1.yml \
+            | sed '1d;$d;s/^          //' > /tmp/build_vp3_client.py
+          test -s /tmp/build_vp3_client.py
+          python /tmp/build_vp3_client.py
+      - name: Validate generated product tree
+        run: |
+          python scripts/validate-vp3-network-client.py
+          cargo fmt --all
+          cargo test -p microgifter-homeserver-service
+          cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings
+      - name: Commit validated product files
+        run: |
+          rm .github/workflows/build-vp3-http-client-v1.yml
+          rm .github/workflows/run-vp3-http-client-builder.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Build VP3 HomeServer HTTP client v1"
+          git push origin HEAD:feature/vp3-http-client-v1-20260729
