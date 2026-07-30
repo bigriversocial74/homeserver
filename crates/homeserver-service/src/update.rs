@@ -85,8 +85,8 @@ pub(crate) fn verify_authority_document(
     let signature = URL_SAFE_NO_PAD
         .decode(signature)
         .context("VP3 authority signature encoding is invalid")?;
-    let signature = Signature::from_slice(&signature)
-        .context("VP3 authority signature length is invalid")?;
+    let signature =
+        Signature::from_slice(&signature).context("VP3 authority signature length is invalid")?;
     decode_pinned_public_key()?
         .verify(&document, &signature)
         .context("VP3 authority signature verification failed")?;

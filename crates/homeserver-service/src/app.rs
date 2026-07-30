@@ -20,7 +20,8 @@ mod pod_provider_runtime;
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
     mcp_runtime, microgifter_connection, model_center, openrouter_provider, operational_data,
-    review_intelligence, semantic_vault, software_authority, update, update_store, vp3_client, AppState,
+    review_intelligence, semantic_vault, software_authority, update, update_store, vp3_client,
+    AppState,
 };
 use anyhow::{Context, Result};
 use chrono::Utc;

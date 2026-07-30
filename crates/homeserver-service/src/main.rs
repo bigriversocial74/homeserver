@@ -95,7 +95,10 @@ impl AppState {
             );
         }
         if let Err(error) = vp3_client::health_check(&connection) {
-            error!(?error, "HomeServer VP3 network-client database health check failed");
+            error!(
+                ?error,
+                "HomeServer VP3 network-client database health check failed"
+            );
             return HealthSnapshot::needs_attention(
                 &self.config.server_name,
                 "vp3_network_client_integrity_check_failed",
@@ -371,7 +374,9 @@ impl AppState {
         let vp3_active = software_authority::uses_vp3(&*self.connection()?)?;
         let (update_id, manifest_url, manifest) = if vp3_active {
             match vp3_client::check_for_updates(self, env!("CARGO_PKG_VERSION")).await {
-                Ok(Some(verified)) => (verified.update_id, verified.manifest_url, verified.manifest),
+                Ok(Some(verified)) => {
+                    (verified.update_id, verified.manifest_url, verified.manifest)
+                }
                 Ok(None) => {
                     update_store::record_current(&*self.connection()?)?;
                     return Ok(UpdateActionResult {
@@ -381,18 +386,27 @@ impl AppState {
                     });
                 }
                 Err(error) => {
-                    let _ = update_store::record_check_failure(&*self.connection()?, &public_update_failure(&error));
+                    let _ = update_store::record_check_failure(
+                        &*self.connection()?,
+                        &public_update_failure(&error),
+                    );
                     return Err(error);
                 }
             }
         } else {
-            let verified = match update::fetch_and_verify_manifest(&self.config, env!("CARGO_PKG_VERSION")).await {
-                Ok(verified) => verified,
-                Err(error) => {
-                    let _ = update_store::record_check_failure(&*self.connection()?, &public_update_failure(&error));
-                    return Err(error);
-                }
-            };
+            let verified =
+                match update::fetch_and_verify_manifest(&self.config, env!("CARGO_PKG_VERSION"))
+                    .await
+                {
+                    Ok(verified) => verified,
+                    Err(error) => {
+                        let _ = update_store::record_check_failure(
+                            &*self.connection()?,
+                            &public_update_failure(&error),
+                        );
+                        return Err(error);
+                    }
+                };
             if !update::manifest_is_newer(&verified, env!("CARGO_PKG_VERSION"))? {
                 update_store::record_current(&*self.connection()?)?;
                 return Ok(UpdateActionResult {
@@ -401,15 +415,14 @@ impl AppState {
                     restart_required: false,
                 });
             }
-            (verified.update_id, self.config.update_manifest_url.clone(), verified.manifest)
+            (
+                verified.update_id,
+                self.config.update_manifest_url.clone(),
+                verified.manifest,
+            )
         };
 
-        update_store::save_available(
-            &*self.connection()?,
-            &update_id,
-            &manifest_url,
-            &manifest,
-        )?;
+        update_store::save_available(&*self.connection()?, &update_id, &manifest_url, &manifest)?;
         Ok(UpdateActionResult {
             status: self.update_status()?,
             message: format!(
@@ -434,7 +447,8 @@ impl AppState {
         let path = match if vp3_active {
             vp3_client::download_and_verify_installer(self, &stored.record).await
         } else {
-            update::download_and_verify_installer(&self.config, &stored.record, &stored.manifest).await
+            update::download_and_verify_installer(&self.config, &stored.record, &stored.manifest)
+                .await
         } {
             Ok(path) => path,
             Err(error) => {
@@ -446,7 +460,8 @@ impl AppState {
                 return Err(error);
             }
         };
-        let staged = update_store::mark_staged(&*self.connection()?, &stored.record.update_id, &path)?;
+        let staged =
+            update_store::mark_staged(&*self.connection()?, &stored.record.update_id, &path)?;
         if vp3_active {
             vp3_client::queue_update_receipt(
                 &*self.connection()?,

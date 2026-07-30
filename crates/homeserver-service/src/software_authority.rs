@@ -1,6 +1,11 @@
 use crate::{microgifter_connection, vp3_client, AppState};
 use anyhow::{bail, ensure, Context, Result};
-use axum::{extract::{DefaultBodyLimit, State}, http::StatusCode, routing::{get, post}, Json, Router};
+use axum::{
+    extract::{DefaultBodyLimit, State},
+    http::StatusCode,
+    routing::{get, post},
+    Json, Router,
+};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -92,7 +97,10 @@ pub fn maintain_history(connection: &Connection) -> Result<()> {
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/software-authority/status", get(status_handler))
-        .route("/v1/software-authority/fingerprint", get(fingerprint_handler))
+        .route(
+            "/v1/software-authority/fingerprint",
+            get(fingerprint_handler),
+        )
         .route("/v1/software-authority/activate", post(activate_handler))
         .route("/v1/software-authority/refresh", post(refresh_handler))
         .route("/v1/software-authority/heartbeat", post(heartbeat_handler))
@@ -109,7 +117,6 @@ async fn status_handler(
         .map(Json)
         .map_err(|error| internal_error("software_authority_status_failed", error))
 }
-
 
 async fn fingerprint_handler(
     State(state): State<Arc<AppState>>,
@@ -270,7 +277,13 @@ pub fn record_update_result_receipt(
             failure_code,
         )?;
     } else {
-        vp3_client::queue_update_receipt(connection, update_id, version, disposition, failure_code)?;
+        vp3_client::queue_update_receipt(
+            connection,
+            update_id,
+            version,
+            disposition,
+            failure_code,
+        )?;
     }
     Ok(())
 }
@@ -284,8 +297,13 @@ pub fn manifest_url(connection: &Connection, fallback: &str) -> Result<String> {
     if snapshot.current_authority != VP3_AUTHORITY {
         return Ok(fallback.to_owned());
     }
-    let base = snapshot.vp3_api_base_url.context("VP3 API base URL is unavailable")?;
-    Ok(format!("{}/api/homeserver/v1/manifest.php", base.trim_end_matches('/')))
+    let base = snapshot
+        .vp3_api_base_url
+        .context("VP3 API base URL is unavailable")?;
+    Ok(format!(
+        "{}/api/homeserver/v1/manifest.php",
+        base.trim_end_matches('/')
+    ))
 }
 
 fn internal_error(
