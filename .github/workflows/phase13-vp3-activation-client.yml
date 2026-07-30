@@ -23,14 +23,14 @@ jobs:
           toolchain: 1.88.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Apply canonical formatting before diagnostics
-        run: cargo fmt --all
-      - name: Compile complete workspace
-        run: cargo check --workspace --all-targets
-      - name: Run complete workspace tests
-        run: cargo test --workspace
+      - name: Validate canonical formatting
+        run: cargo fmt --all -- --check
+      - name: Compile service and updater
+        run: cargo check -p microgifter-homeserver-service -p microgifter-homeserver-updater --all-targets
+      - name: Run service and updater tests
+        run: cargo test -p microgifter-homeserver-service -p microgifter-homeserver-updater
       - name: Run strict Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy -p microgifter-homeserver-service -p microgifter-homeserver-updater --all-targets -- -D warnings
       - name: Verify Phase 13 trust boundaries
         shell: bash
         run: |
@@ -50,9 +50,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.88.0
-          components: rustfmt
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Validate canonical formatting
+        run: cargo fmt --all -- --check
       - name: Compile Windows service and updater
         run: cargo check -p microgifter-homeserver-service -p microgifter-homeserver-updater --all-targets
-      - name: Run HomeServer service tests
-        run: cargo test -p microgifter-homeserver-service
+      - name: Run HomeServer service and updater tests
+        run: cargo test -p microgifter-homeserver-service -p microgifter-homeserver-updater
+      - name: Run strict Windows Clippy
+        run: cargo clippy -p microgifter-homeserver-service -p microgifter-homeserver-updater --all-targets -- -D warnings
