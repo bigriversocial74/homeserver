@@ -101,6 +101,11 @@ struct CloudSnapshot {
     settings: Vec<CloudSetting>,
     generated_at: String,
     snapshot_hash: String,
+    signed_document: String,
+    signature: String,
+    signing_key_id: String,
+    signature_algorithm: String,
+    signed_document_hash: String,
     #[serde(default)]
     replayed: bool,
     #[serde(default)]
@@ -434,7 +439,7 @@ async fn synchronize(state: &AppState) -> Result<FederatedSettingsSnapshot> {
         updates,
     };
     let response: CloudSnapshot = post_settings_sync(state, &credential, &request).await?;
-    validate_cloud_snapshot(&identity, &response)?;
+    validate_cloud_snapshot(state, &identity, &response)?;
     apply_cloud_snapshot(state, &request_id, base_revision, &response)?;
     snapshot(state)
 }
@@ -533,7 +538,28 @@ fn apply_cloud_snapshot(
     Ok(())
 }
 
-fn validate_cloud_snapshot(identity: &DeviceIdentity, cloud: &CloudSnapshot) -> Result<()> {
+fn validate_cloud_snapshot(
+    state: &AppState,
+    identity: &DeviceIdentity,
+    cloud: &CloudSnapshot,
+) -> Result<()> {
+    super::federated_settings_signature::verify(
+        super::federated_settings_signature::SignedSnapshotEvidence {
+            public_key_base64: &state.config.vp3_lease_public_key_base64(),
+            expected_key_id: &state.config.vp3_lease_key_id(),
+            algorithm: &cloud.signature_algorithm,
+            key_id: &cloud.signing_key_id,
+            signed_document: &cloud.signed_document,
+            signature: &cloud.signature,
+            signed_document_hash: &cloud.signed_document_hash,
+            schema: &cloud.schema,
+            account_id: cloud.account_id,
+            device_public_id: identity.device_public_id.as_str(),
+            max_revision: cloud.max_revision,
+            snapshot_hash: &cloud.snapshot_hash,
+            settings: serde_json::to_value(&cloud.settings)?,
+        },
+    )?;
     ensure!(
         cloud.schema == "vp3.federated-settings.v1",
         "VP3 federated settings schema is unsupported"

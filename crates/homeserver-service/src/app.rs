@@ -30,6 +30,9 @@ mod vp3_device_binding;
 #[path = "federated_settings.rs"]
 mod federated_settings;
 
+#[path = "federated_settings_signature.rs"]
+mod federated_settings_signature;
+
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
     mcp_runtime, microgifter_connection, model_center, openrouter_provider, operational_data,

@@ -1,5 +1,7 @@
 use anyhow::{ensure, Context, Result};
-use base64::{engine::general_purpose::STANDARD, engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{
+    engine::general_purpose::STANDARD, engine::general_purpose::URL_SAFE_NO_PAD, Engine as _,
+};
 use chrono::Utc;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde_json::{json, Value};
@@ -69,7 +71,10 @@ pub(super) fn verify(evidence: SignedSnapshotEvidence<'_>) -> Result<()> {
         issued_at <= now + 600,
         "VP3 federated settings snapshot was issued in the future"
     );
-    ensure!(expires_at > now, "VP3 federated settings snapshot has expired");
+    ensure!(
+        expires_at > now,
+        "VP3 federated settings snapshot has expired"
+    );
     ensure!(
         (60..=900).contains(&(expires_at - issued_at)),
         "VP3 federated settings snapshot lifetime is invalid"
