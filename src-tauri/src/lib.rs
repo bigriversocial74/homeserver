@@ -7,6 +7,7 @@ mod openrouter;
 mod operational;
 mod review_intelligence;
 mod vault;
+mod vp3_authority;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use futures_util::StreamExt;
@@ -552,6 +553,15 @@ pub fn run() {
             openrouter::homeserver_configure_openrouter,
             openrouter::homeserver_test_openrouter,
             openrouter::homeserver_disconnect_openrouter,
+            vp3_authority::homeserver_vp3_authority_status,
+            vp3_authority::homeserver_vp3_device_identity,
+            vp3_authority::homeserver_activate_vp3_authority,
+            vp3_authority::homeserver_vp3_heartbeat,
+            vp3_authority::homeserver_vp3_refresh_lease,
+            vp3_authority::homeserver_vp3_check_update,
+            vp3_authority::homeserver_vp3_download_update,
+            vp3_authority::homeserver_vp3_submit_receipts,
+            vp3_authority::homeserver_disconnect_vp3_authority,
             mcp::homeserver_mcp,
             mcp::homeserver_create_mcp_client,
             mcp::homeserver_revoke_mcp_client,
