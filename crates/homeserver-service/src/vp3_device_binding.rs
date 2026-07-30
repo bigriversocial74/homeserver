@@ -164,7 +164,16 @@ fn binding_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{
+        engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+        Engine as _,
+    };
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
     use serde_json::json;
+
+    const CONTRACT_PUBLIC_KEY_B64: &str = "v0EJ8PUBEWAAeoMiO7Gl+l6ddA89XiaC5vN+C28g254=";
+    const CONTRACT_DOCUMENT_B64URL: &str = "eyJhY2NvdW50X2lkIjoxMzAwMSwiZGV2aWNlX2ZpbmdlcnByaW50IjoiZjMyZmI2OWZjZTQwYzZkNmFkNWIxNmUxYjMxMTQzNWVjOWFkOTY0MDRjOWUwMTRhM2NjMzdmNDU2NGFkYWVhZCIsImV4cCI6NDEwMjQ0NDgwMCwiaWF0IjoxODkzNDU2MDAwLCJpc3MiOiJ2cDMubWUiLCJsZWFzZV9pZCI6IkxFQVNFLUNPTlRSQUNULTEiLCJzb2Z0d2FyZV9hdXRob3JpdHkiOiJ2cDMiLCJzdWIiOiJIUy1DT05UUkFDVC0xIiwidXBkYXRlX2NoYW5uZWwiOiJzdGFibGUifQ";
+    const CONTRACT_SIGNATURE_B64URL: &str = "ieeMo1Sro9beDs97zLUZINMAbMEvPM30zio9eBDCpsY2rYY2wvCIRfrlgJJTyIDMCNV4zu-rc77qCGtc8pQiBA";
 
     #[test]
     fn fingerprint_is_stable_namespaced_and_bounded() {
@@ -192,5 +201,32 @@ mod tests {
         let expected = "a".repeat(64);
         let mut payload = json!({"device_fingerprint": "b".repeat(64)});
         assert!(bind_payload(&mut payload, &expected).is_err());
+    }
+
+    #[test]
+    fn vp3_contract_lease_vector_matches_local_device_identity() {
+        let public_key: [u8; 32] = STANDARD
+            .decode(CONTRACT_PUBLIC_KEY_B64)
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let document = URL_SAFE_NO_PAD.decode(CONTRACT_DOCUMENT_B64URL).unwrap();
+        let signature = URL_SAFE_NO_PAD.decode(CONTRACT_SIGNATURE_B64URL).unwrap();
+        let signature = Signature::from_slice(&signature).unwrap();
+        VerifyingKey::from_bytes(&public_key)
+            .unwrap()
+            .verify(&document, &signature)
+            .unwrap();
+
+        let claims: Value = serde_json::from_slice(&document).unwrap();
+        let expected = fingerprint_from_installation_id("phase13-contract-installation").unwrap();
+        assert_eq!(
+            claims.get("device_fingerprint").and_then(Value::as_str),
+            Some(expected.as_str())
+        );
+        assert_eq!(
+            hex::encode(Sha256::digest(&document)),
+            "c08076aea798fb5c1cebd51e6f23ef4ba3735d37ef18ee53ff7bb8f601cd3c02"
+        );
     }
 }
