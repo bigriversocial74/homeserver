@@ -6,6 +6,7 @@ let identity = null;
 let loading = false;
 let notice = null;
 let installed = false;
+let shellObserver = null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -205,6 +206,15 @@ function install() {
   window.addEventListener("homeserver:rendered", mount);
   window.addEventListener("hashchange", mount);
   window.addEventListener("DOMContentLoaded", mount, { once: true });
+  const app = document.querySelector("#app");
+  if (app) {
+    shellObserver = new MutationObserver(() => {
+      if (window.location.hash === "#settings" && !document.querySelector("#vp3-authority-section")) {
+        queueMicrotask(mount);
+      }
+    });
+    shellObserver.observe(app, { childList: true, subtree: true });
+  }
   mount();
 }
 
