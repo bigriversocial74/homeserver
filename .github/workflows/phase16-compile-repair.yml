@@ -28,32 +28,34 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          import re
 
           path = Path('crates/homeserver-service/src/app/wrapper_core.rs')
           text = path.read_text(encoding='utf-8')
-          text = text.replace(
-              'include_str!("../../../database/migrations/0020_wrapper_identity_and_pairing.sql")',
-              'include_str!("../../../../database/migrations/0020_wrapper_identity_and_pairing.sql")',
-          )
-          text = text.replace(
-              'let mut wrappers = HashMap::new();',
-              'let mut wrappers: HashMap<String, String> = HashMap::new();',
-          )
-          pattern = re.compile(
-              r'    statement\n(?P<body>        \.query_map\(.*?\n        \.collect::<rusqlite::Result<Vec<_>>>\(\)\n        \.map_err\(Into::into\)',
-              re.DOTALL,
-          )
-          def repair(match):
-              body = match.group('body')
-              body = body.replace(
-                  '        .collect::<rusqlite::Result<Vec<_>>>()\n        .map_err(Into::into)',
-                  '        .collect::<rusqlite::Result<Vec<_>>>()?;',
-              )
-              return '    let rows = statement\n' + body + '\n    Ok(rows)'
-          text, count = pattern.subn(repair, text)
-          if count != 5:
-              raise SystemExit(f'expected 5 statement lifetime repairs, found {count}')
+
+          old_include = 'include_str!("../../../database/migrations/0020_wrapper_identity_and_pairing.sql")'
+          new_include = 'include_str!("../../../../database/migrations/0020_wrapper_identity_and_pairing.sql")'
+          if text.count(old_include) != 1:
+              raise SystemExit('unexpected migration include path count')
+          text = text.replace(old_include, new_include)
+
+          old_map = 'let mut wrappers = HashMap::new();'
+          new_map = 'let mut wrappers: HashMap<String, String> = HashMap::new();'
+          if text.count(old_map) != 1:
+              raise SystemExit('unexpected wrapper map declaration count')
+          text = text.replace(old_map, new_map)
+
+          old_prefix = '    statement\n        .query_map'
+          new_prefix = '    let rows = statement\n        .query_map'
+          if text.count(old_prefix) != 5:
+              raise SystemExit(f'unexpected query collector prefix count: {text.count(old_prefix)}')
+          text = text.replace(old_prefix, new_prefix)
+
+          old_suffix = '        .collect::<rusqlite::Result<Vec<_>>>()\n        .map_err(Into::into)\n}'
+          new_suffix = '        .collect::<rusqlite::Result<Vec<_>>>()?;\n    Ok(rows)\n}'
+          if text.count(old_suffix) != 5:
+              raise SystemExit(f'unexpected query collector suffix count: {text.count(old_suffix)}')
+          text = text.replace(old_suffix, new_suffix)
+
           path.write_text(text, encoding='utf-8')
           PY
           cargo fmt --all
