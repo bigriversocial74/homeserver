@@ -382,7 +382,10 @@ pub fn health_check(connection: &Connection) -> Result<()> {
             params![key],
             |row| row.get(0),
         )?;
-        ensure!(count == 1, "wrapper job migration is not registered exactly once");
+        ensure!(
+            count == 1,
+            "wrapper job migration is not registered exactly once"
+        );
     }
     for table in [
         "wrapper_job_workers",
@@ -403,19 +406,28 @@ pub fn health_check(connection: &Connection) -> Result<()> {
         [],
         |row| row.get(0),
     )?;
-    ensure!(orphan_authority == 0, "wrapper jobs are missing authority snapshots");
+    ensure!(
+        orphan_authority == 0,
+        "wrapper jobs are missing authority snapshots"
+    );
     let cross_wrapper_jobs: i64 = connection.query_row(
         "SELECT COUNT(*) FROM wrapper_jobs j LEFT JOIN wrapper_connections c ON c.connection_id=j.connection_id AND c.wrapper_id=j.wrapper_id LEFT JOIN wrapper_capability_grants g ON g.grant_id=j.grant_id AND g.connection_id=j.connection_id AND g.wrapper_id=j.wrapper_id WHERE c.connection_id IS NULL OR g.grant_id IS NULL",
         [],
         |row| row.get(0),
     )?;
-    ensure!(cross_wrapper_jobs == 0, "wrapper jobs contain cross-wrapper authority");
+    ensure!(
+        cross_wrapper_jobs == 0,
+        "wrapper jobs contain cross-wrapper authority"
+    );
     let incomplete_terminal: i64 = connection.query_row(
         "SELECT COUNT(*) FROM wrapper_jobs j LEFT JOIN wrapper_job_execution_receipts r ON r.job_id=j.job_id WHERE j.state IN ('completed','failed','cancelled','expired','dead_letter') AND r.job_id IS NULL",
         [],
         |row| row.get(0),
     )?;
-    ensure!(incomplete_terminal == 0, "terminal wrapper jobs are missing receipts");
+    ensure!(
+        incomplete_terminal == 0,
+        "terminal wrapper jobs are missing receipts"
+    );
     Ok(())
 }
 
@@ -438,7 +450,10 @@ pub fn maintain_history(connection: &Connection) -> Result<()> {
         [],
         |row| row.get(0),
     )?;
-    ensure!(receipt_count <= MAX_RECEIPTS, "wrapper job receipt retention requires archival");
+    ensure!(
+        receipt_count <= MAX_RECEIPTS,
+        "wrapper job receipt retention requires archival"
+    );
     Ok(())
 }
 
@@ -448,13 +463,28 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/wrapper-jobs/snapshot", post(snapshot_handler))
         .route("/v1/wrapper-jobs/submit", post(submit_handler))
         .route("/v1/wrapper-jobs/cancel", post(cancel_handler))
-        .route("/v1/wrapper-jobs/deliveries/poll", post(poll_deliveries_handler))
-        .route("/v1/wrapper-jobs/deliveries/ack", post(ack_delivery_handler))
-        .route("/v1/internal/wrapper-jobs/workers/register", post(register_worker_handler))
+        .route(
+            "/v1/wrapper-jobs/deliveries/poll",
+            post(poll_deliveries_handler),
+        )
+        .route(
+            "/v1/wrapper-jobs/deliveries/ack",
+            post(ack_delivery_handler),
+        )
+        .route(
+            "/v1/internal/wrapper-jobs/workers/register",
+            post(register_worker_handler),
+        )
         .route("/v1/internal/wrapper-jobs/claim", post(claim_jobs_handler))
         .route("/v1/internal/wrapper-jobs/start", post(start_job_handler))
-        .route("/v1/internal/wrapper-jobs/heartbeat", post(heartbeat_job_handler))
-        .route("/v1/internal/wrapper-jobs/complete", post(complete_job_handler))
+        .route(
+            "/v1/internal/wrapper-jobs/heartbeat",
+            post(heartbeat_job_handler),
+        )
+        .route(
+            "/v1/internal/wrapper-jobs/complete",
+            post(complete_job_handler),
+        )
         .route("/v1/internal/wrapper-jobs/fail", post(fail_job_handler))
         .layer(DefaultBodyLimit::max(MAX_CONTROL_BODY_BYTES))
         .with_state(state)
@@ -475,14 +505,22 @@ async fn snapshot_handler(
     State(state): State<Arc<AppState>>,
     Json(request): Json<SnapshotRequest>,
 ) -> ApiResult<ConnectionJobSnapshot> {
-    run_blocking(move || snapshot(&state, request), "wrapper_job_snapshot_failed").await
+    run_blocking(
+        move || snapshot(&state, request),
+        "wrapper_job_snapshot_failed",
+    )
+    .await
 }
 
 async fn submit_handler(
     State(state): State<Arc<AppState>>,
     Json(request): Json<SubmitJobRequest>,
 ) -> ApiResult<SubmittedJobResponse> {
-    run_blocking(move || submit_job(&state, request), "wrapper_job_submit_failed").await
+    run_blocking(
+        move || submit_job(&state, request),
+        "wrapper_job_submit_failed",
+    )
+    .await
 }
 
 async fn cancel_handler(
@@ -493,7 +531,13 @@ async fn cancel_handler(
         move || {
             let connection = state.connection()?;
             cancel_job(&connection, request)?;
-            snapshot_with_connection(&connection, SnapshotRequest { connection_id: String::new(), limit: None })
+            snapshot_with_connection(
+                &connection,
+                SnapshotRequest {
+                    connection_id: String::new(),
+                    limit: None,
+                },
+            )
         },
         "wrapper_job_cancel_failed",
     )
