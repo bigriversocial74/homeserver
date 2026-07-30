@@ -32,3 +32,5 @@ jobs:
           if (git diff --cached --quiet) { exit 0 }
           git commit -m "Format VP3 HomeServer client integration"
           git push origin HEAD:feature/vp3-http-client-v1-20260729
+
+# format-trigger-1
