@@ -1,4 +1,5 @@
 name: Phase 14 Version Bump
+# One-use coordinated release metadata update.
 
 on:
   push:
