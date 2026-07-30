@@ -20,104 +20,126 @@ jobs:
         with:
           toolchain: 1.88.0
           components: rustfmt
-      - name: Repair strict Clippy findings
+      - name: Apply compiler-reported quality repairs
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           root = Path('crates/homeserver-service/src')
 
-          path = root / 'app.rs'
-          source = path.read_text()
-          old = '.is_none_or(|authority| authority.current_authority != "vp3")'
-          if old not in source:
-              raise SystemExit('Phase 13 MSRV expression was not found')
-          path.write_text(source.replace(old, '.map_or(true, |authority| authority.current_authority != "vp3")', 1))
-
-          path = root / 'vp3_client.rs'
-          source = path.read_text()
-          source = source.replace('    current_version: Option<String>,\n', '', 1)
-          source = source.replace('    license_public_id: Option<String>,\n', '', 1)
-          source = source.replace(
-              'SELECT account_id,device_public_id,license_public_id,device_fingerprint,lease_expires_at_utc FROM vp3_authority_client_state',
-              'SELECT account_id,device_public_id,device_fingerprint,lease_expires_at_utc FROM vp3_authority_client_state',
-              1,
-          )
-          source = source.replace(
-              '''                    license_public_id: row.get(2)?,
-                      device_fingerprint: row.get(3)?,
-                      lease_expires_at_utc: row.get(4)?,''',
-              '''                    device_fingerprint: row.get(2)?,
-                      lease_expires_at_utc: row.get(3)?,''',
-              1,
-          )
-          if 'current_version: Option<String>' in source or 'license_public_id: Option<String>' in source:
-              raise SystemExit('Unused Phase 13 response fields remain')
-          path.write_text(source)
-
-          path = root / 'backup_key.rs'
-          source = path.read_text()
-          source = source.replace('use sha2::{Digest, Sha256};', '#[cfg(any(windows, test))]\nuse sha2::{Digest, Sha256};', 1)
-          source = source.replace('use zeroize::Zeroize;', '#[cfg(windows)]\nuse zeroize::Zeroize;', 1)
-          source = source.replace('fn entropy(installation_id: &str) -> [u8; 32] {', '#[cfg(any(windows, test))]\nfn entropy(installation_id: &str) -> [u8; 32] {', 1)
-          path.write_text(source)
-
-          for name in ('update.rs', 'update_apply.rs'):
+          def edit(name, transform):
               path = root / name
-              source = path.read_text()
+              original = path.read_text()
+              repaired = transform(original)
+              if repaired == original:
+                  print(f'No change required for {name}')
+              path.write_text(repaired)
+
+          edit('app.rs', lambda source: source.replace(
+              '.is_none_or(|authority| authority.current_authority != "vp3")',
+              '.map_or(true, |authority| authority.current_authority != "vp3")',
+          ))
+
+          def repair_client(source):
+              source = re.sub(r'^    current_version: Option<String>,\n', '', source, flags=re.MULTILINE)
+              source = re.sub(r'^    license_public_id: Option<String>,\n', '', source, flags=re.MULTILINE)
+              source = source.replace(
+                  'SELECT account_id,device_public_id,license_public_id,device_fingerprint,lease_expires_at_utc FROM vp3_authority_client_state',
+                  'SELECT account_id,device_public_id,device_fingerprint,lease_expires_at_utc FROM vp3_authority_client_state',
+              )
+              source = re.sub(r'\n\s*license_public_id: row\.get\(2\)\?,', '', source, count=1)
+              source = source.replace('device_fingerprint: row.get(3)?,', 'device_fingerprint: row.get(2)?,', 1)
+              source = source.replace('lease_expires_at_utc: row.get(4)?,', 'lease_expires_at_utc: row.get(3)?,', 1)
+              return source
+          edit('vp3_client.rs', repair_client)
+
+          def repair_backup_key(source):
+              source = source.replace(
+                  'use sha2::{Digest, Sha256};',
+                  '#[cfg(any(windows, test))]\nuse sha2::{Digest, Sha256};',
+                  1,
+              )
+              source = source.replace(
+                  'use zeroize::Zeroize;',
+                  '#[cfg(windows)]\nuse zeroize::Zeroize;',
+                  1,
+              )
+              source = source.replace(
+                  'fn entropy(installation_id: &str) -> [u8; 32] {',
+                  '#[cfg(any(windows, test))]\nfn entropy(installation_id: &str) -> [u8; 32] {',
+                  1,
+              )
+              return source
+          edit('backup_key.rs', repair_backup_key)
+
+          def gate_command_import(source):
               source = source.replace('    process::Command,\n', '', 1)
-              marker = 'use std::{\n'
-              if marker not in source:
-                  raise SystemExit(f'{name} std import marker was not found')
-              source = source.replace(marker, '#[cfg(windows)]\nuse std::process::Command;\n' + marker, 1)
-              path.write_text(source)
+              if '#[cfg(windows)]\nuse std::process::Command;' not in source:
+                  source = source.replace(
+                      'use std::{\n',
+                      '#[cfg(windows)]\nuse std::process::Command;\nuse std::{\n',
+                      1,
+                  )
+              return source
+          edit('update.rs', gate_command_import)
+          edit('update_apply.rs', gate_command_import)
 
-          path = root / 'agent_runtime.rs'
-          source = path.read_text()
-          old = '''    Ok(format!(
-              "{}{}\\n\\n{}\\n\\nHomeServer preserved provider authority and used only locally granted evidence. No provider record was changed.",
-              context_line, safety_line, evidence_section
-          ))'''
-          new = '''    Ok(format!(
-              "{context_line}{safety_line}\\n\\n{evidence_section}\\n\\nHomeServer preserved provider authority and used only locally granted evidence. No provider record was changed."
-          ))'''
-          if old not in source:
-              raise SystemExit('agent_runtime format expression was not found')
-          path.write_text(source.replace(old, new, 1))
+          def repair_agent(source):
+              return re.sub(
+                  r'Ok\(format!\(\s*"\{\}\{\}\\n\\n\{\}\\n\\nHomeServer preserved provider authority and used only locally granted evidence\. No provider record was changed\.",\s*context_line, safety_line, evidence_section\s*\)\)',
+                  'Ok(format!("{context_line}{safety_line}\\n\\n{evidence_section}\\n\\nHomeServer preserved provider authority and used only locally granted evidence. No provider record was changed."))',
+                  source,
+                  count=1,
+                  flags=re.DOTALL,
+              )
+          edit('agent_runtime.rs', repair_agent)
 
-          path = root / 'knowledge_vault.rs'
-          source = path.read_text()
-          old = 'destination.with_extension(format!("{}.tmp", extension))'
-          if old not in source:
-              raise SystemExit('knowledge_vault format expression was not found')
-          path.write_text(source.replace(old, 'destination.with_extension(format!("{extension}.tmp"))', 1))
-
-          path = root / 'microgifter_connection.rs'
-          source = path.read_text()
-          old = '''    ensure!(
-              !APPLICATION_ERROR_CODES.is_empty(),
-              "Phase 6A application error registry is unavailable"
-          );
-          '''
-          if old not in source:
-              raise SystemExit('constant application error registry assertion was not found')
-          path.write_text(source.replace(old, '', 1))
-
-          path = root / 'review_intelligence.rs'
-          source = path.read_text()
-          source = source.replace(
-              'format!(" and average rating {:.1}", rating)',
-              'format!(" and average rating {rating:.1}")',
+          edit('knowledge_vault.rs', lambda source: source.replace(
+              'destination.with_extension(format!("{}.tmp", extension))',
+              'destination.with_extension(format!("{extension}.tmp"))',
               1,
-          )
-          source = source.replace(
-              '''"SELECT entity_id,dataset_key,source_object_type,source_object_id,current_source_revision,current_payload_json,source_updated_at_utc,received_at_utc FROM operational_entities WHERE connection_id=?1 AND state='active' AND dataset_key IN ({placeholders}) ORDER BY COALESCE(source_updated_at_utc,received_at_utc) DESC LIMIT {}",
-              limit''',
-              '''"SELECT entity_id,dataset_key,source_object_type,source_object_id,current_source_revision,current_payload_json,source_updated_at_utc,received_at_utc FROM operational_entities WHERE connection_id=?1 AND state='active' AND dataset_key IN ({placeholders}) ORDER BY COALESCE(source_updated_at_utc,received_at_utc) DESC LIMIT {limit}"''',
-              1,
-          )
-          path.write_text(source)
+          ))
+
+          def repair_microgifter(source):
+              return re.sub(
+                  r'    ensure!\(\s*!APPLICATION_ERROR_CODES\.is_empty\(\),\s*"Phase 6A application error registry is unavailable"\s*\);\s*',
+                  '',
+                  source,
+                  count=1,
+                  flags=re.DOTALL,
+              )
+          edit('microgifter_connection.rs', repair_microgifter)
+
+          def repair_reviews(source):
+              source = source.replace(
+                  'format!(" and average rating {:.1}", rating)',
+                  'format!(" and average rating {rating:.1}")',
+                  1,
+              )
+              source = re.sub(
+                  r'"SELECT entity_id,dataset_key,source_object_type,source_object_id,current_source_revision,current_payload_json,source_updated_at_utc,received_at_utc FROM operational_entities WHERE connection_id=\?1 AND state=\'active\' AND dataset_key IN \(\{placeholders\}\) ORDER BY COALESCE\(source_updated_at_utc,received_at_utc\) DESC LIMIT \{\}",\s*limit',
+                  '"SELECT entity_id,dataset_key,source_object_type,source_object_id,current_source_revision,current_payload_json,source_updated_at_utc,received_at_utc FROM operational_entities WHERE connection_id=?1 AND state=\'active\' AND dataset_key IN ({placeholders}) ORDER BY COALESCE(source_updated_at_utc,received_at_utc) DESC LIMIT {limit}"',
+                  source,
+                  count=1,
+                  flags=re.DOTALL,
+              )
+              return source
+          edit('review_intelligence.rs', repair_reviews)
+
+          checks = {
+              'app.rs': ['.is_none_or('],
+              'vp3_client.rs': ['current_version: Option<String>', 'license_public_id: Option<String>'],
+              'knowledge_vault.rs': ['format!("{}.tmp", extension)'],
+              'microgifter_connection.rs': ['!APPLICATION_ERROR_CODES.is_empty()'],
+              'review_intelligence.rs': ['format!(" and average rating {:.1}", rating)'],
+          }
+          for name, patterns in checks.items():
+              source = (root / name).read_text()
+              for pattern in patterns:
+                  if pattern in source:
+                      raise SystemExit(f'{name} still contains {pattern}')
           PY
           cargo fmt --all
       - name: Commit quality repairs
