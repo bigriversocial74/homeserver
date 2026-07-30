@@ -1,15 +1,16 @@
 name: Phase 13 Device Binding Repair
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - feature/vp3-activation-update-client-v1-20260729
 
 permissions:
   contents: write
 
 jobs:
   repair:
-    if: github.event.pull_request.head.ref == 'feature/vp3-activation-update-client-v1-20260729' && github.actor != 'github-actions[bot]'
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
