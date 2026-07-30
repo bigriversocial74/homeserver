@@ -45,3 +45,5 @@ jobs:
           if ($LASTEXITCODE -eq 0) { exit 0 }
           git commit -m "Keep VP3 client compatible with Rust 1.80"
           git push origin HEAD:feature/vp3-http-client-v1-20260729
+
+# msrv-trigger-1
