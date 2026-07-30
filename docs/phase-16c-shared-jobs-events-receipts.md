@@ -7,6 +7,7 @@
 - Target: **10/10 production certification**
 - Migration: `0022_wrapper_jobs_events_receipts.sql`
 - Supplemental authority migration: `0022a_wrapper_job_authority_snapshots.sql`
+- Integration contract: wrapper-neutral authority and evidence around existing workers.
 
 ## Initial gaps
 
