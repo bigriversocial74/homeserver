@@ -1,7 +1,6 @@
 mod agent;
 mod cloud;
 mod federated_settings;
-mod federated_settings;
 mod mcp;
 mod model;
 mod ollama_install;
@@ -564,9 +563,6 @@ pub fn run() {
             vp3_authority::homeserver_vp3_download_update,
             vp3_authority::homeserver_vp3_submit_receipts,
             vp3_authority::homeserver_disconnect_vp3_authority,
-            federated_settings::homeserver_federated_settings,
-            federated_settings::homeserver_update_federated_setting,
-            federated_settings::homeserver_sync_federated_settings,
             federated_settings::homeserver_federated_settings,
             federated_settings::homeserver_update_federated_setting,
             federated_settings::homeserver_sync_federated_settings,

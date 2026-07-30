@@ -30,9 +30,6 @@ mod vp3_device_binding;
 #[path = "federated_settings.rs"]
 mod federated_settings;
 
-#[path = "federated_settings.rs"]
-mod federated_settings;
-
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
     mcp_runtime, microgifter_connection, model_center, openrouter_provider, operational_data,
@@ -65,7 +62,6 @@ pub async fn run(
     update_store::initialize(&connection)?;
     software_authority::initialize(&connection)?;
     vp3_client::initialize(&connection)?;
-    federated_settings::initialize(&connection)?;
     federated_settings::initialize(&connection)?;
     cloud_connector::initialize(&connection)?;
     cloud_registry::initialize(&connection)?;
@@ -172,7 +168,6 @@ pub async fn run(
             .merge(vp3_device_binding::router(state.clone()))
             .merge(vp3_router)
             .merge(federated_settings::router(state.clone()))
-            .merge(federated_settings::router(state.clone()))
             .merge(microgifter_connection::router(state.clone()))
             .merge(pod_provider_runtime::router(state.clone()))
             .merge(knowledge_vault::router(state.clone()))
@@ -229,9 +224,6 @@ async fn run_backup_scheduler(state: Arc<AppState>, mut shutdown: watch::Receive
                         }
                         if let Err(error) = vp3_client::maintain_history(&connection) {
                             warn!(?error, "scheduled VP3 authority retention failed");
-                        }
-                        if let Err(error) = federated_settings::maintain_history(&connection) {
-                            warn!(?error, "scheduled federated settings retention failed");
                         }
                         if let Err(error) = federated_settings::maintain_history(&connection) {
                             warn!(?error, "scheduled federated settings retention failed");
