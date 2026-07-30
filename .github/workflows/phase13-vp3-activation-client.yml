@@ -41,6 +41,9 @@ jobs:
           grep -q 'pending_vp3_submission' crates/homeserver-service/src/vp3_client.rs
           grep -q 'ACTIVATE VP3' crates/homeserver-service/src/vp3_client.rs
           grep -q 'DISCONNECT VP3' crates/homeserver-service/src/vp3_client.rs
+          grep -q 'local_device_fingerprint_from_connection' crates/homeserver-service/src/vp3_client.rs
+          grep -q 'MicrogifterHomeServer:vp3-device:' crates/homeserver-service/src/vp3_client.rs
+          ! sed -n '/pub struct ActivateVp3Request/,/^}/p' crates/homeserver-service/src/vp3_client.rs | grep -q 'device_fingerprint'
           ! grep -Eqi 'credential[[:space:]]+(TEXT|BLOB)|enrollment_code[[:space:]]+(TEXT|BLOB)' database/migrations/0018_vp3_activation_update_client.sql
 
   windows:
