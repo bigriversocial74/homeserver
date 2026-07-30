@@ -20,6 +20,9 @@ mod pod_provider_runtime;
 #[path = "vp3_client.rs"]
 mod vp3_client;
 
+#[path = "vp3_device_binding.rs"]
+mod vp3_device_binding;
+
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
     mcp_runtime, microgifter_connection, model_center, openrouter_provider, operational_data,
@@ -143,6 +146,12 @@ pub async fn run(
     let registry_router = cloud_registry::router(state.clone()).layer(axum::middleware::from_fn(
         cloud_pairing_v2::reject_legacy_pairing,
     ));
+    let vp3_router = vp3_client::router(state.clone()).layer(
+        axum::middleware::from_fn_with_state(
+            state.clone(),
+            vp3_device_binding::bind_activation_identity,
+        ),
+    );
     let router = http::secure(
         http::router(state.clone())
             .merge(activity::router(state.clone()))
@@ -150,7 +159,8 @@ pub async fn run(
             .merge(registry_router)
             .merge(cloud_pairing_v2::router(state.clone()))
             .merge(software_authority::router(state.clone()))
-            .merge(vp3_client::router(state.clone()))
+            .merge(vp3_device_binding::router(state.clone()))
+            .merge(vp3_router)
             .merge(microgifter_connection::router(state.clone()))
             .merge(pod_provider_runtime::router(state.clone()))
             .merge(knowledge_vault::router(state.clone()))
