@@ -18,6 +18,14 @@ jobs:
         with:
           ref: feature/vp3-http-client-v1-20260729
           fetch-depth: 0
+      - name: Publish execution checkpoint
+        run: |
+          printf '%s\n' "VP3 heavy client builder started." > .vp3-heavy-builder-started
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .vp3-heavy-builder-started
+          git commit -m "Start VP3 client product build"
+          git push origin HEAD:feature/vp3-http-client-v1-20260729
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -80,6 +88,7 @@ jobs:
           rm -f .github/workflows/run-vp3-http-client-builder.yml
           rm -f .github/workflows/vp3-builder-bootstrap.yml
           rm -f .vp3-builder-bootstrap
+          rm -f .vp3-heavy-builder-started
           if [ "$VALIDATION_OUTCOME" = "success" ]; then
             rm -f vp3-client-build.log
             message="Build VP3 HomeServer HTTP client v1"
@@ -92,4 +101,4 @@ jobs:
           git commit -m "$message"
           git push origin HEAD:feature/vp3-http-client-v1-20260729
 
-# execute-product-trigger-1
+# execution-checkpoint-trigger-2
