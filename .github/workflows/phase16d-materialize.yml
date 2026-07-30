@@ -26,9 +26,15 @@ jobs:
         with:
           components: rustfmt
       - name: Materialize reviewed Phase 16D source
+        id: materialize
         shell: bash
         run: |
           set -euo pipefail
+          if [[ -f crates/homeserver-service/src/app/wrapper_agents.rs ]]; then
+            echo 'Phase 16D source is already materialized.'
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           cat scripts/.phase16d-bundle-00.b64 scripts/.phase16d-bundle-01.b64 scripts/.phase16d-bundle-02.b64 scripts/.phase16d-bundle-03.b64 > /tmp/phase16d-bundle.b64
           base64 -d /tmp/phase16d-bundle.b64 > /tmp/phase16d-bundle.tar.gz
           mkdir -p /tmp/phase16d-materialized
@@ -36,7 +42,6 @@ jobs:
           install -m 0644 /tmp/phase16d-materialized/wrapper_agents.rs crates/homeserver-service/src/app/wrapper_agents.rs
           install -m 0644 /tmp/phase16d-materialized/validate-wrapper-agents.py scripts/validate-wrapper-agents.py
           install -m 0644 /tmp/phase16d-materialized/phase-16d-agent-lifecycle-action-policy.md docs/phase-16d-agent-lifecycle-action-policy.md
-          install -m 0644 /tmp/phase16d-materialized/phase16d-agent-lifecycle.yml .github/workflows/phase16d-agent-lifecycle.yml
           python - <<'PY'
           from pathlib import Path
 
@@ -92,13 +97,14 @@ jobs:
           PY
           cargo fmt --all
           python scripts/validate-wrapper-agents.py
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
       - name: Commit complete Phase 16D candidate
+        if: steps.materialize.outputs.changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          git rm .github/workflows/phase16d-materialize.yml scripts/.phase16d-bundle-00.b64 scripts/.phase16d-bundle-01.b64 scripts/.phase16d-bundle-02.b64 scripts/.phase16d-bundle-03.b64
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/workflows/phase16d-agent-lifecycle.yml crates/homeserver-service/src/app.rs crates/homeserver-service/src/app/wrapper_agents.rs crates/homeserver-service/src/app/wrapper_jobs.rs crates/homeserver-service/src/app/wrapper_jobs_submit.rs crates/homeserver-service/src/app/wrapper_jobs_reconcile.rs docs/phase-16d-agent-lifecycle-action-policy.md package.json scripts/validate-wrapper-agents.py
+          git add crates/homeserver-service/src/app.rs crates/homeserver-service/src/app/wrapper_agents.rs crates/homeserver-service/src/app/wrapper_jobs.rs crates/homeserver-service/src/app/wrapper_jobs_submit.rs crates/homeserver-service/src/app/wrapper_jobs_reconcile.rs docs/phase-16d-agent-lifecycle-action-policy.md package.json scripts/validate-wrapper-agents.py
           git commit -m 'Build Phase 16D agent lifecycle and action authority'
           git push origin HEAD:feature/phase-16d-agent-lifecycle-action-policy
