@@ -1,0 +1,28 @@
+name: VP3 Builder Bootstrap
+
+on:
+  push:
+    branches:
+      - feature/vp3-http-client-v1-20260729
+    paths:
+      - .github/workflows/vp3-builder-bootstrap.yml
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/vp3-http-client-v1-20260729
+          fetch-depth: 0
+      - name: Publish bootstrap marker
+        run: |
+          printf '%s\n' "VP3 builder bootstrap reached GitHub Actions." > .vp3-builder-bootstrap
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .vp3-builder-bootstrap
+          git commit -m "Confirm VP3 builder execution"
+          git push origin HEAD:feature/vp3-http-client-v1-20260729
