@@ -146,12 +146,10 @@ pub async fn run(
     let registry_router = cloud_registry::router(state.clone()).layer(axum::middleware::from_fn(
         cloud_pairing_v2::reject_legacy_pairing,
     ));
-    let vp3_router = vp3_client::router(state.clone()).layer(
-        axum::middleware::from_fn_with_state(
-            state.clone(),
-            vp3_device_binding::bind_activation_identity,
-        ),
-    );
+    let vp3_router = vp3_client::router(state.clone()).layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        vp3_device_binding::bind_activation_identity,
+    ));
     let router = http::secure(
         http::router(state.clone())
             .merge(activity::router(state.clone()))
