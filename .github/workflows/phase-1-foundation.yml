@@ -17,7 +17,10 @@ permissions:
 jobs:
   recover-vp3-client:
     if: github.ref == 'refs/heads/feature/vp3-http-client-v1-20260729' || github.head_ref == 'feature/vp3-http-client-v1-20260729'
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
