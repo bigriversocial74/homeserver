@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   phase16e_integrate:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/feature/phase-16e-private-knowledge-egress'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/feature/phase-16e-private-knowledge-egress') || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'feature/phase-16e-private-knowledge-egress')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
