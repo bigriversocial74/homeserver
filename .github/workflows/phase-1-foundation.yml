@@ -23,35 +23,42 @@ jobs:
         with:
           ref: feature/vp3-http-client-v1-20260729
           fetch-depth: 0
-      - name: Generate VP3 product files
+      - name: Generate and normalize VP3 product files
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          source = Path('.github/workflows/build-vp3-http-client-v1.yml').read_text().splitlines()
-          start = next(i for i, line in enumerate(source) if "cat > /tmp/build_vp3_client.py <<'PY'" in line) + 1
-          end = next(i for i in range(start, len(source)) if source[i] == '          PY')
-          prefix = ' ' * 10
-          output = []
-          triple = None
-          for raw in source[start:end]:
-              candidate = raw[len(prefix):] if raw.startswith(prefix) else raw
-              if triple is None:
-                  output.append(candidate)
-                  for token in ("'''", '\"\"\"'):
-                      if candidate.count(token) % 2 == 1:
-                          triple = token
-                          break
-              else:
-                  output.append(candidate if raw.startswith(prefix) and triple in raw else raw)
-                  if raw.count(triple) % 2 == 1:
-                      triple = None
-          if triple is not None:
-              raise SystemExit('Embedded builder contains an unterminated source string')
-          Path('/tmp/build_vp3_client.py').write_text('\n'.join(output) + '\n')
+          def extract(source_path: str, marker: str, output_path: str) -> None:
+              source = Path(source_path).read_text().splitlines()
+              marker_index = next(i for i, line in enumerate(source) if marker in line)
+              start = next(i for i in range(marker_index, len(source)) if "python - <<'PY'" in source[i] or "cat > /tmp/" in source[i]) + 1
+              end = next(i for i in range(start, len(source)) if source[i] == '          PY')
+              prefix = ' ' * 10
+              output = []
+              triple = None
+              for raw in source[start:end]:
+                  candidate = raw[len(prefix):] if raw.startswith(prefix) else raw
+                  if triple is None:
+                      output.append(candidate)
+                      for token in ("'''", '\"\"\"'):
+                          if candidate.count(token) % 2 == 1:
+                              triple = token
+                              break
+                  else:
+                      output.append(candidate if raw.startswith(prefix) and triple in raw else raw)
+                      if raw.count(triple) % 2 == 1:
+                          triple = None
+              if triple is not None:
+                  raise SystemExit(f'{marker} contains an unterminated source string')
+              Path(output_path).write_text('\n'.join(output) + '\n')
+
+          extract('.github/workflows/build-vp3-http-client-v1.yml', "cat > /tmp/build_vp3_client.py <<'PY'", '/tmp/build_vp3_client.py')
+          extract('.github/workflows/run-vp3-http-client-builder.yml', 'Normalize generated validator and Rust integration', '/tmp/normalize_vp3_client.py')
           PY
           test -s /tmp/build_vp3_client.py
+          test -s /tmp/normalize_vp3_client.py
           python /tmp/build_vp3_client.py
+          python /tmp/normalize_vp3_client.py
       - name: Restore permanent workflow and commit product tree
         run: |
           git fetch origin main
