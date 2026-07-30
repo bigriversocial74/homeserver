@@ -1,0 +1,74 @@
+name: Phase 15 Product Wiring
+
+on:
+  push:
+    branches:
+      - feature/phase-15-federated-settings-shared-control-center
+    paths:
+      - .github/workflows/phase15-wire-product.yml
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-15-federated-settings-shared-control-center
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+      - name: Wire Phase 15 product files
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          app = Path('crates/homeserver-service/src/app.rs')
+          text = app.read_text()
+          patches = [
+              ('#[path = "vp3_device_binding.rs"]\nmod vp3_device_binding;\n', '#[path = "vp3_device_binding.rs"]\nmod vp3_device_binding;\n\n#[path = "federated_settings.rs"]\nmod federated_settings;\n'),
+              ('    vp3_client::initialize(&connection)?;\n', '    vp3_client::initialize(&connection)?;\n    federated_settings::initialize(&connection)?;\n'),
+              ('                        if let Err(error) = vp3_client::maintain_history(&connection) {\n                            warn!(?error, "scheduled VP3 authority retention failed");\n                        }\n', '                        if let Err(error) = vp3_client::maintain_history(&connection) {\n                            warn!(?error, "scheduled VP3 authority retention failed");\n                        }\n                        if let Err(error) = federated_settings::maintain_history(&connection) {\n                            warn!(?error, "scheduled federated settings retention failed");\n                        }\n'),
+              ('            .merge(vp3_router)\n', '            .merge(vp3_router)\n            .merge(federated_settings::router(state.clone()))\n'),
+          ]
+          for old, new in patches:
+              if old not in text:
+                  raise SystemExit(f'app.rs patch not found: {old[:60]}')
+              text = text.replace(old, new, 1)
+          app.write_text(text)
+
+          tauri = Path('src-tauri/src/lib.rs')
+          text = tauri.read_text()
+          patches = [
+              ('mod cloud;\n', 'mod cloud;\nmod federated_settings;\n'),
+              ('            vp3_authority::homeserver_disconnect_vp3_authority,\n', '            vp3_authority::homeserver_disconnect_vp3_authority,\n            federated_settings::homeserver_federated_settings,\n            federated_settings::homeserver_update_federated_setting,\n            federated_settings::homeserver_sync_federated_settings,\n'),
+          ]
+          for old, new in patches:
+              if old not in text:
+                  raise SystemExit(f'Tauri patch not found: {old[:60]}')
+              text = text.replace(old, new, 1)
+          tauri.write_text(text)
+
+          index = Path('index.html')
+          text = index.read_text()
+          old = '    <script type="module" src="/src/vp3-authority.js"></script>\n'
+          new = old + '    <script type="module" src="/src/federated-settings.js"></script>\n'
+          if old not in text:
+              raise SystemExit('index script anchor not found')
+          index.write_text(text.replace(old, new, 1))
+          '@ | python -
+          cargo fmt --all
+      - name: Commit permanent wiring
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/homeserver-service/src/app.rs src-tauri/src/lib.rs index.html crates/homeserver-service/src/federated_settings.rs src-tauri/src/federated_settings.rs database/migrations/0019_federated_settings.sql src/federated-settings.js src/federated-settings.css
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          git commit -m "Wire Phase 15 federated settings across HomeServer"
+          git push origin HEAD:feature/phase-15-federated-settings-shared-control-center
