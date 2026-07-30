@@ -376,6 +376,46 @@ struct ProposalAuthority {
     autonomy_level: u8,
 }
 
+struct PolicyInsertContext<'a> {
+    agent_id: &'a str,
+    revision: u64,
+    autonomy_level: u8,
+    actor: &'a str,
+    not_before: &'a str,
+    expires: &'a str,
+}
+
+type AgentJobAuthorityRow = (
+    String,
+    i64,
+    String,
+    i64,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+);
+
+type ProposalAuthorityRow = (
+    String,
+    i64,
+    String,
+    i64,
+    String,
+    i64,
+    String,
+    i64,
+    String,
+    i64,
+    String,
+    String,
+    String,
+    String,
+);
+
 pub fn initialize(connection: &Connection) -> Result<()> {
     connection.execute_batch(MIGRATION)?;
     expire_and_reconcile(connection)?;
@@ -760,13 +800,15 @@ fn create_agent(connection: &Connection, request: CreateAgentRequest) -> Result<
     for policy in request.policies {
         insert_policy_tx(
             &transaction,
-            &agent_id,
-            1,
-            request.autonomy_level,
-            &owner_user_id,
+            PolicyInsertContext {
+                agent_id: &agent_id,
+                revision: 1,
+                autonomy_level: request.autonomy_level,
+                actor: &owner_user_id,
+                not_before: &now_text,
+                expires: &expires,
+            },
             policy,
-            &now_text,
-            &expires,
         )?;
     }
     record_event_tx(
@@ -928,13 +970,15 @@ fn create_policy(connection: &Connection, request: CreatePolicyRequest) -> Resul
     )?;
     let policy_id = insert_policy_tx(
         &transaction,
-        &agent_id,
-        next_revision.max(1) as u64,
-        autonomy.max(0) as u8,
-        &actor,
+        PolicyInsertContext {
+            agent_id: &agent_id,
+            revision: next_revision.max(1) as u64,
+            autonomy_level: autonomy.max(0) as u8,
+            actor: &actor,
+            not_before: &now,
+            expires: &expires,
+        },
         request.policy,
-        &now,
-        &expires,
     )?;
     record_event_tx(
         &transaction,
@@ -958,13 +1002,8 @@ fn create_policy(connection: &Connection, request: CreatePolicyRequest) -> Resul
 
 fn insert_policy_tx(
     transaction: &Transaction<'_>,
-    agent_id: &str,
-    revision: u64,
-    autonomy_level: u8,
-    actor: &str,
+    context: PolicyInsertContext<'_>,
     policy: PolicyInput,
-    not_before: &str,
-    expires: &str,
 ) -> Result<String> {
     let action_type = validate_symbol(&policy.action_type, 120, "action type")?;
     let risk_class = validate_enum(&policy.risk_class, RISK_CLASSES, "risk class")?;
@@ -986,13 +1025,13 @@ fn insert_policy_tx(
             "sensitive actions always require approval"
         );
     }
-    if autonomy_level <= 1 {
+    if context.autonomy_level <= 1 {
         ensure!(
             tool_adapter == "proposal_only",
             "suggest-only agents cannot receive executable adapters"
         );
     }
-    if autonomy_level == 2 {
+    if context.autonomy_level == 2 {
         ensure!(
             approval_mode != "none",
             "approval-required agents cannot use approval-free policies"
@@ -1000,7 +1039,7 @@ fn insert_policy_tx(
     }
     if approval_mode == "none" {
         ensure!(
-            autonomy_level >= 3,
+            context.autonomy_level >= 3,
             "approval-free policy requires scoped autonomy"
         );
         ensure!(
@@ -1013,17 +1052,17 @@ fn insert_policy_tx(
         "INSERT INTO agent_execution_policies (policy_id,agent_id,policy_revision,action_type,risk_class,approval_mode,tool_adapter,max_executions,window_seconds,state,not_before_utc,expires_at_utc,created_by_user_id,created_at_utc,updated_at_utc) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'active',?10,?11,?12,?10,?10)",
         params![
             policy_id,
-            agent_id,
-            revision as i64,
+            context.agent_id,
+            context.revision as i64,
             action_type,
             risk_class,
             approval_mode,
             tool_adapter,
             i64::from(max_executions),
             i64::from(window_seconds),
-            not_before,
-            expires,
-            actor
+            context.not_before,
+            context.expires,
+            context.actor
         ],
     )?;
     Ok(policy_id)
@@ -1341,7 +1380,7 @@ pub(crate) fn agent_job_authority_is_current_tx(
     transaction: &Transaction<'_>,
     job_id: &str,
 ) -> Result<bool> {
-    let binding: Option<(String, i64, String, i64, String, String, String, String, String, String, String)> =
+    let binding: Option<AgentJobAuthorityRow> =
         transaction.query_row(
             "SELECT b.agent_id,b.agent_revision,b.assignment_id,b.assignment_revision,a.state,a.expires_at_utc,x.state,x.expires_at_utc,c.state,c.expires_at_utc,j.connection_id FROM agent_job_bindings b JOIN homeserver_agents a ON a.agent_id=b.agent_id JOIN wrapper_agent_assignments x ON x.assignment_id=b.assignment_id JOIN agent_capability_bindings c ON c.binding_id=b.binding_id JOIN wrapper_jobs j ON j.job_id=b.job_id WHERE b.job_id=?1",
             params![job_id],
@@ -2161,7 +2200,7 @@ fn proposal_authority_is_current_tx(
     transaction: &Transaction<'_>,
     proposal: &ProposalSummary,
 ) -> Result<bool> {
-    let context: Option<(String,i64,String,i64,String,i64,String,i64,String,i64,String,String,String,String)> = transaction.query_row(
+    let context: Option<ProposalAuthorityRow> = transaction.query_row(
         "SELECT a.state,a.revision,x.state,x.assignment_revision,p.state,p.policy_revision,g.state,g.grant_revision,c.lifecycle_state,c.grant_revision,w.state,j.state,j.authorization_decision_id,r.outcome FROM homeserver_agents a JOIN wrapper_agent_assignments x ON x.assignment_id=?2 AND x.agent_id=a.agent_id JOIN agent_execution_policies p ON p.policy_id=?3 AND p.agent_id=a.agent_id JOIN wrapper_capability_grants g ON g.grant_id=?4 JOIN wrapper_connections c ON c.connection_id=?5 AND c.wrapper_id=?6 JOIN wrapper_identities w ON w.wrapper_id=c.wrapper_id JOIN wrapper_jobs j ON j.job_id=?7 JOIN wrapper_authorization_receipts r ON r.decision_id=j.authorization_decision_id WHERE a.agent_id=?1",
         params![proposal.agent_id,proposal.assignment_id,proposal.policy_id,proposal.grant_id,proposal.connection_id,proposal.wrapper_id,proposal.job_id],
         |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?,row.get(9)?,row.get(10)?,row.get(11)?,row.get(12)?,row.get(13)?)),
