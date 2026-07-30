@@ -1,0 +1,80 @@
+name: Phase 14 VP3 Authority UI
+
+on:
+  push:
+    branches:
+      - feature/phase-14-vp3-activation-control-center
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase14-homeserver-${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.88.0
+          components: rustfmt, clippy
+      - name: Validate frontend and Phase 14 contract
+        run: |
+          npm ci
+          npm run check:frontend
+          npm run build
+      - name: Validate canonical Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Compile service, updater, and Control Center
+        run: cargo check -p microgifter-homeserver-service -p microgifter-homeserver-updater -p microgifter-homeserver-control-center --all-targets
+      - name: Run retained service and updater tests
+        run: cargo test -p microgifter-homeserver-service -p microgifter-homeserver-updater
+      - name: Run strict Phase 14 Clippy
+        run: cargo clippy -p microgifter-homeserver-service -p microgifter-homeserver-updater -p microgifter-homeserver-control-center --all-targets -- -D warnings -A unused-imports -A dead-code -A clippy::uninlined-format-args -A clippy::const-is-empty
+      - name: Verify activation trust boundaries
+        shell: bash
+        run: |
+          grep -q 'mod vp3_authority;' src-tauri/src/lib.rs
+          grep -q 'vp3_authority::homeserver_activate_vp3_authority' src-tauri/src/lib.rs
+          grep -q '/src/vp3-authority.js' index.html
+          grep -q 'homeserver_vp3_device_identity' src/vp3-authority.js
+          grep -q 'ACTIVATE VP3' src/vp3-authority.js
+          grep -q 'DISCONNECT VP3' src/vp3-authority.js
+          ! grep -Eq 'localStorage|sessionStorage' src/vp3-authority.js
+          ! grep -q 'device_fingerprint' src-tauri/src/vp3_authority.rs
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.88.0
+          components: rustfmt, clippy
+      - name: Validate frontend and production bundle
+        run: |
+          npm ci
+          npm run check:frontend
+          npm run build
+      - name: Validate canonical Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Compile Windows service, updater, and Control Center
+        run: cargo check -p microgifter-homeserver-service -p microgifter-homeserver-updater -p microgifter-homeserver-control-center --all-targets
+      - name: Run HomeServer service and updater tests
+        run: cargo test -p microgifter-homeserver-service -p microgifter-homeserver-updater
+      - name: Run strict Windows Phase 14 Clippy
+        run: cargo clippy -p microgifter-homeserver-service -p microgifter-homeserver-updater -p microgifter-homeserver-control-center --all-targets -- -D warnings -A unused-imports -A dead-code -A clippy::uninlined-format-args -A clippy::const-is-empty
