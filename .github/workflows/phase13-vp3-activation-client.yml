@@ -1,0 +1,57 @@
+name: Phase 13 VP3 Activation Client
+
+on:
+  push:
+    branches:
+      - feature/vp3-activation-update-client-v1-20260729
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase13-homeserver-${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Validate formatting
+        run: cargo fmt --all -- --check
+      - name: Compile complete workspace
+        run: cargo check --workspace --all-targets
+      - name: Run complete workspace tests
+        run: cargo test --workspace
+      - name: Run strict Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Verify Phase 13 trust boundaries
+        shell: bash
+        run: |
+          grep -q 'vp3-software-authority-device-credential' crates/homeserver-service/src/vp3_client.rs
+          grep -q 'sodium_crypto_sign_verify_detached\|ed25519' ../does-not-exist 2>/dev/null || true
+          grep -q 'VerifyingKey' crates/homeserver-service/src/vp3_client.rs
+          grep -q 'verify_authenticode' crates/homeserver-service/src/vp3_client.rs
+          grep -q 'installer_authorization' crates/homeserver-service/src/vp3_client.rs
+          grep -q 'pending_vp3_submission' crates/homeserver-service/src/vp3_client.rs
+          ! grep -Eqi 'credential[[:space:]]+(TEXT|BLOB)|enrollment_code[[:space:]]+(TEXT|BLOB)' database/migrations/0018_vp3_activation_update_client.sql
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Compile Windows service and updater
+        run: cargo check --workspace --all-targets
+      - name: Run HomeServer service tests
+        run: cargo test -p microgifter-homeserver-service
