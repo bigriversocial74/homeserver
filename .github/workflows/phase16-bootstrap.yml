@@ -1,0 +1,54 @@
+name: Phase 16 Bootstrap
+
+on:
+  push:
+    branches:
+      - feature/phase-16-multi-wrapper-core-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: homeserver-phase16-bootstrap-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Materialize reviewed Phase 16A source bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shas=(
+            c65d86ef2af3d4d7061e19d155e5d9131b80f754
+            1b7e0a23b4989845b9ab0dbdcd58a1b65bd4a247
+            fb44da6e313badd44acf440f5618818dfa5054aa
+            0c4dd35b54fa7e4ade326a00a28ee2fe45ab91ce
+          )
+          : > phase16-bundle.tgz
+          for sha in "${shas[@]}"; do
+            curl --fail --silent --show-error \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/blobs/${sha}" \
+              | jq -r '.content' \
+              | tr -d '\n' \
+              | base64 --decode >> phase16-bundle.tgz
+          done
+          printf '%s  %s\n' 'c06d12ac86c03659478713ee9d632d890f06b57e3d0d6325486a4cf97b822468' 'phase16-bundle.tgz' | sha256sum --check
+          tar --extract --gzip --file phase16-bundle.tgz
+          rm phase16-bundle.tgz .github/workflows/phase16-bootstrap.yml
+      - name: Commit integrated Phase 16A implementation
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all
+          git commit -m 'Build Phase 16A shared multi-wrapper identity and pairing core'
+          git push origin HEAD:feature/phase-16-multi-wrapper-core-v1
