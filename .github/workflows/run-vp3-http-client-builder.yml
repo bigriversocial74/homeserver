@@ -48,16 +48,69 @@ jobs:
           PY
           test -s /tmp/build_vp3_client.py
           python /tmp/build_vp3_client.py
-      - name: Normalize generated validator
+      - name: Normalize generated validator and Rust integration
         run: |
           python - <<'PY'
           from pathlib import Path
-          path = Path('scripts/validate-vp3-network-client.py')
-          text = path.read_text()
+
+          validator = Path('scripts/validate-vp3-network-client.py')
+          text = validator.read_text()
           marker = "    'sodium',\n"
           if marker not in text:
               raise SystemExit('False sodium validator marker was not found')
-          path.write_text(text.replace(marker, '', 1))
+          validator.write_text(text.replace(marker, '', 1))
+
+          client = Path('crates/homeserver-service/src/vp3_client.rs')
+          text = client.read_text()
+          text = text.replace('use crate::{software_authority, update, AppState};', 'use crate::{update, AppState};', 1)
+          text = text.replace('&state.connection()?', '&*state.connection()?')
+          client.write_text(text)
+
+          main = Path('crates/homeserver-service/src/main.rs')
+          text = main.read_text()
+          text = text.replace('&self.connection()?', '&*self.connection()?')
+          old = '&software_authority::manifest_url(&connection, &self.config.update_manifest_url)?,'
+          new = '&software_authority::manifest_url(&connection, &self.config.update_manifest_url)\n                .unwrap_or_else(|_| self.config.update_manifest_url.clone()),'
+          if old not in text:
+              raise SystemExit('Health snapshot manifest URL integration was not found')
+          main.write_text(text.replace(old, new, 1))
+
+          authority = Path('crates/homeserver-service/src/software_authority.rs')
+          text = authority.read_text().replace('&state.connection()?', '&*state.connection()?')
+          replacements = {
+              '''    status_snapshot(&*state.connection()?)
+        .map(Json)
+        .map_err(|error| internal_error("vp3_activation_status_failed", error))''':
+              '''    let connection = state
+        .connection()
+        .map_err(|error| internal_error("vp3_activation_database_failed", error))?;
+    status_snapshot(&connection)
+        .map(Json)
+        .map_err(|error| internal_error("vp3_activation_status_failed", error))''',
+              '''    status_snapshot(&*state.connection()?)
+        .map(Json)
+        .map_err(|error| internal_error("vp3_lease_refresh_status_failed", error))''':
+              '''    let connection = state
+        .connection()
+        .map_err(|error| internal_error("vp3_lease_refresh_database_failed", error))?;
+    status_snapshot(&connection)
+        .map(Json)
+        .map_err(|error| internal_error("vp3_lease_refresh_status_failed", error))''',
+              '''    status_snapshot(&*state.connection()?)
+        .map(Json)
+        .map_err(|error| internal_error("vp3_heartbeat_status_failed", error))''':
+              '''    let connection = state
+        .connection()
+        .map_err(|error| internal_error("vp3_heartbeat_database_failed", error))?;
+    status_snapshot(&connection)
+        .map(Json)
+        .map_err(|error| internal_error("vp3_heartbeat_status_failed", error))''',
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'VP3 authority handler integration was not found: {old}')
+              text = text.replace(old, new, 1)
+          authority.write_text(text)
           PY
       - name: Validate generated product tree
         run: |
