@@ -1,0 +1,34 @@
+name: VP3 Rust Format Repair
+
+on:
+  push:
+    branches:
+      - feature/vp3-http-client-v1-20260729
+    paths:
+      - .github/workflows/vp3-format-repair.yml
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/vp3-http-client-v1-20260729
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+      - name: Format VP3 integration
+        run: cargo fmt --all
+      - name: Commit formatted Rust sources
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/homeserver-service/src/app.rs crates/homeserver-service/src/main.rs crates/homeserver-service/src/software_authority.rs crates/homeserver-service/src/update.rs crates/homeserver-service/src/vp3_client.rs
+          if (git diff --cached --quiet) { exit 0 }
+          git commit -m "Format VP3 HomeServer client integration"
+          git push origin HEAD:feature/vp3-http-client-v1-20260729
