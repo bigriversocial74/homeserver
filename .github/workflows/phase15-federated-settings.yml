@@ -24,7 +24,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           components: rustfmt
-      - name: Refactor receipt evidence and remove redundant import
+      - name: Refactor receipt evidence and harden signed result semantics
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -53,20 +53,17 @@ struct ReceiptEvidence<'a> {
 '''
               text = text[:identity_end] + receipt_struct + text[identity_end:]
 
-          def replace_call(marker: str, replacement: str) -> str:
-              nonlocal_text = replace_call.text
-              marker_at = nonlocal_text.index(marker)
-              call_start = nonlocal_text.rfind('    record_receipt(', 0, marker_at)
+          def replace_call(current: str, marker: str, replacement: str) -> str:
+              marker_at = current.index(marker)
+              call_start = current.rfind('    record_receipt(', 0, marker_at)
               if call_start < 0:
                   raise SystemExit(f'receipt call start not found for {marker}')
-              call_end = nonlocal_text.index('    )?;', marker_at) + len('    )?;')
-              nonlocal_text = nonlocal_text[:call_start] + replacement + nonlocal_text[call_end:]
-              replace_call.text = nonlocal_text
-              return nonlocal_text
-          replace_call.text = text
+              call_end = current.index('    )?;', marker_at) + len('    )?;')
+              return current[:call_start] + replacement + current[call_end:]
 
           if 'direction: "local_update"' not in text:
               text = replace_call(
+                  text,
                   '"local_update"',
                   '''    let local_request_id = format!("LOCAL-{}", Uuid::new_v4().simple());
     record_receipt(
@@ -82,10 +79,10 @@ struct ReceiptEvidence<'a> {
         },
     )?;''',
               )
-              replace_call.text = text
 
           if 'direction: "device_sync"' not in text:
               text = replace_call(
+                  text,
                   '"device_sync"',
                   '''    record_receipt(
         &transaction,
@@ -121,6 +118,33 @@ struct ReceiptEvidence<'a> {
 }
 '''
           text = text[:helper_start] + helper + text[helper_end:]
+
+          old_conflict = '''        if conflict.reason == "revision" {
+            ensure!(
+                conflict.current_revision == setting.revision,
+                "VP3 federated settings revision conflict does not match the signed setting"
+            );
+        }
+'''
+          new_conflict = '''        if conflict.reason == "vp3_authority" {
+            ensure!(
+                setting.authority == "vp3" && !setting.editable_in_homeserver,
+                "VP3 federated settings authority conflict does not match the signed setting"
+            );
+        } else {
+            ensure!(
+                setting.authority != "vp3"
+                    && setting.editable_in_homeserver
+                    && conflict.current_revision == setting.revision,
+                "VP3 federated settings revision conflict does not match the signed setting"
+            );
+        }
+'''
+          if old_conflict in text:
+              text = text.replace(old_conflict, new_conflict, 1)
+          elif 'authority conflict does not match the signed setting' not in text:
+              raise SystemExit('signed conflict semantic anchor not found')
+
           source.write_text(text)
           PY
           cargo fmt --all
@@ -132,5 +156,5 @@ struct ReceiptEvidence<'a> {
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .github/workflows/phase15-federated-settings.yml crates/homeserver-service/src/federated_settings.rs crates/homeserver-service/src/federated_settings_signature.rs
-          git commit -m "Refactor federated settings receipt evidence"
+          git commit -m "Harden signed federated settings result semantics"
           git push origin HEAD:feature/phase-15-federated-settings-shared-control-center
