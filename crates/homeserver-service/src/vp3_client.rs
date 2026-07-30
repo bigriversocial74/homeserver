@@ -618,6 +618,10 @@ pub async fn download_and_verify_installer(
         "VP3 update is not available for download"
     );
     let authorization = load_authorization(&*state.connection()?, &record.update_id)?;
+    ensure!(
+        authorization.update_id == record.update_id,
+        "VP3 release authorization identity does not match the update record"
+    );
     verify_authorization(&authorization)?;
     ensure!(
         authorization.version == record.version,

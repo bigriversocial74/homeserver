@@ -331,6 +331,7 @@ mod tests {
             .execute_batch("CREATE TABLE schema_migrations (migration_key TEXT PRIMARY KEY);")
             .expect("schema migration table");
         initialize(&connection).expect("software authority migration");
+        vp3_client::initialize(&connection).expect("VP3 network client migration");
         let snapshot = status_snapshot(&connection).expect("authority snapshot");
         assert_eq!(snapshot.current_authority, LEGACY_AUTHORITY);
         assert_eq!(snapshot.target_authority, VP3_AUTHORITY);
