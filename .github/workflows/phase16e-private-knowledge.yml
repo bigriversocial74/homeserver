@@ -1,0 +1,44 @@
+name: Phase 16E Private Knowledge and Egress
+
+on:
+  pull_request:
+  push:
+    branches:
+      - feature/phase-16e-private-knowledge-egress
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homeserver-phase16e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Validate Phase 16E private boundaries
+        run: python scripts/validate-wrapper-privacy.py
+      - name: Validate retained frontend contracts and build
+        run: |
+          npm run check:frontend
+          npm run build
+      - name: Validate Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Compile and test HomeServer service
+        run: cargo test -p microgifter-homeserver-service
+      - name: Strict HomeServer service lint
+        run: cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings
