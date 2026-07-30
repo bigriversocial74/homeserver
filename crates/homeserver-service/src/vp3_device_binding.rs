@@ -58,7 +58,9 @@ pub async fn bind_activation_identity(
     }
 }
 
-async fn device_identity_handler(State(state): State<Arc<AppState>>) -> ApiResult<DeviceIdentitySnapshot> {
+async fn device_identity_handler(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<DeviceIdentitySnapshot> {
     local_device_fingerprint(&state)
         .map(|device_fingerprint| {
             Json(DeviceIdentitySnapshot {
@@ -79,17 +81,22 @@ async fn bind_request(state: &AppState, request: Request) -> Result<Request> {
     let mut payload: Value =
         serde_json::from_slice(&bytes).context("VP3 activation request JSON is invalid")?;
     bind_payload(&mut payload, &expected)?;
-    let encoded = serde_json::to_vec(&payload).context("VP3 activation request could not be bound")?;
+    let encoded =
+        serde_json::to_vec(&payload).context("VP3 activation request could not be bound")?;
 
     parts.headers.remove(header::CONTENT_LENGTH);
-    parts
-        .headers
-        .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    parts.headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
     Ok(Request::from_parts(parts, Body::from(encoded)))
 }
 
 fn bind_payload(payload: &mut Value, expected: &str) -> Result<()> {
-    ensure!(valid_fingerprint(expected), "local VP3 device identity is invalid");
+    ensure!(
+        valid_fingerprint(expected),
+        "local VP3 device identity is invalid"
+    );
     let object = payload
         .as_object_mut()
         .context("VP3 activation request must be a JSON object")?;
