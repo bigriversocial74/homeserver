@@ -25,26 +25,30 @@ pub fn authorize_bridge(
         return denied_decision(
             connection,
             &source,
-            None,
-            None,
-            &capability_key,
-            &operation,
-            "bridge_missing",
-            correlation_id.as_deref(),
-            None,
+            DeniedAuthorization {
+                grant_id: None,
+                bridge_id: None,
+                capability_key: &capability_key,
+                operation: &operation,
+                detail_code: "bridge_missing",
+                correlation_id: correlation_id.as_deref(),
+                grant_revision: None,
+            },
         );
     };
     if !bridge.allowed_operations.iter().any(|item| item == &operation) {
         return denied_decision(
             connection,
             &source,
-            None,
-            Some(&bridge.bridge_id),
-            &capability_key,
-            &operation,
-            "bridge_operation_not_granted",
-            correlation_id.as_deref(),
-            None,
+            DeniedAuthorization {
+                grant_id: None,
+                bridge_id: Some(&bridge.bridge_id),
+                capability_key: &capability_key,
+                operation: &operation,
+                detail_code: "bridge_operation_not_granted",
+                correlation_id: correlation_id.as_deref(),
+                grant_revision: None,
+            },
         );
     }
     let transaction = connection.unchecked_transaction()?;
@@ -81,4 +85,3 @@ pub fn authorize_bridge(
         detail_code: "bridge_authorized".to_owned(),
     })
 }
-
