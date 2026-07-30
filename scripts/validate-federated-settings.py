@@ -92,9 +92,13 @@ require("bearer_auth(credential)" in service, "VP3 sync does not use the OS-vaul
 require("Policy::none" in service or "redirect(reqwest::redirect::Policy::none())" in service, "settings sync does not reject redirects")
 require("validate_cloud_snapshot(state" in service, "signed cloud snapshot validation is not called")
 require("SignedSnapshotEvidence" in service, "signed snapshot evidence is not bound to the merge")
+for merge_field in ("generated_at", "replayed", "applied", "conflicts"):
+    require(f"{merge_field}:" in service, f"signed snapshot evidence does not bind {merge_field}")
+    require(f'"{merge_field}":' in signature, f"signed document equality does not bind {merge_field}")
 require("Ed25519" in signature and "snapshot has expired" in signature, "Ed25519 and expiration verification are incomplete")
 require("wrapper does not match its signed document" in signature, "signed document/wrapper equality is not enforced")
 require("signature verification failed" in signature, "signature failure path is missing")
+require("sync_tampering_is_rejected" in signature, "signed merge-instruction tamper test is missing")
 
 require(app.count('mod federated_settings;') == 1, "federated settings service module is not wired exactly once")
 require(app.count('mod federated_settings_signature;') == 1, "signature module is not wired exactly once")
