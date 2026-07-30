@@ -156,6 +156,19 @@ pub fn submit_job(state: &AppState, request: SubmitJobRequest) -> Result<Submitt
         .grant_id
         .clone()
         .context("job authorization did not identify a grant")?;
+    let agent_binding = if submitted_by_type == "agent" {
+        Some(wrapper_agents::validate_agent_job_submission(
+            &connection,
+            &submitted_by_id,
+            &connection_id,
+            &grant_id,
+            &capability_key,
+            &operation,
+            &job_type,
+        )?)
+    } else {
+        None
+    };
     let connection_authority_revision =
         current_connection_authority_revision(&connection, &connection_id)?;
     let constraints = job_grant_constraints(
@@ -244,6 +257,9 @@ pub fn submit_job(state: &AppState, request: SubmitJobRequest) -> Result<Submitt
             now_text
         ],
     )?;
+    if let Some(binding) = agent_binding.as_ref() {
+        wrapper_agents::bind_agent_job_tx(&transaction, &job_id, binding)?;
+    }
     let job = job_record_by_id_tx(&transaction, &job_id)?;
     record_job_event(
         &transaction,

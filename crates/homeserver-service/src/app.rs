@@ -42,6 +42,9 @@ mod wrapper_grants;
 #[path = "app/wrapper_jobs.rs"]
 mod wrapper_jobs;
 
+#[path = "app/wrapper_agents.rs"]
+mod wrapper_agents;
+
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
     mcp_runtime, microgifter_connection, model_center, openrouter_provider, operational_data,
@@ -82,6 +85,7 @@ pub async fn run(
     wrapper_core::initialize(&connection)?;
     wrapper_grants::initialize(&connection)?;
     wrapper_jobs::initialize(&connection)?;
+    wrapper_agents::initialize(&connection)?;
     operational_data::initialize(&connection)?;
     knowledge_vault::initialize(&connection, &config)?;
     document_extraction::initialize(&connection)?;
@@ -188,6 +192,7 @@ pub async fn run(
             .merge(wrapper_core::router(state.clone()))
             .merge(wrapper_grants::router(state.clone()))
             .merge(wrapper_jobs::router(state.clone()))
+            .merge(wrapper_agents::router(state.clone()))
             .merge(knowledge_vault::router(state.clone()))
             .merge(model_center::router(state.clone()))
             .merge(openrouter_provider::router(state.clone()))
@@ -254,6 +259,9 @@ async fn run_backup_scheduler(state: Arc<AppState>, mut shutdown: watch::Receive
                         }
                         if let Err(error) = wrapper_jobs::maintain_history(&connection) {
                             warn!(?error, "scheduled wrapper job retention failed");
+                        }
+                        if let Err(error) = wrapper_agents::maintain_history(&connection) {
+                            warn!(?error, "scheduled wrapper agent retention failed");
                         }
                     }
                     scheduled_state.create_automatic_backup_if_due()
