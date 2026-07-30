@@ -42,6 +42,7 @@ require("homeserver_vp3_device_identity" in client, "Control Center does not loa
 require("homeserver_activate_vp3_authority" in client, "Control Center cannot activate VP3 authority.")
 require("credential" in client and "enrollmentCode" in client, "One-time activation fields are missing.")
 require("localStorage" not in client and "sessionStorage" not in client, "Activation secrets are persisted in browser storage.")
+require("MutationObserver" in client and "#vp3-authority-section" in client, "VP3 controls do not remount after the main shell refreshes.")
 require("deviceFingerprint" not in client and "device_fingerprint" not in commands, "Activation adapter accepts a caller-controlled fingerprint.")
 require("device-identity" in commands, "Tauri adapter cannot retrieve local device identity.")
 require("bind_activation_identity" in binding, "Service activation binding middleware is missing.")
