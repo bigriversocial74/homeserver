@@ -1,0 +1,82 @@
+name: Phase 14 Wire Activation UI
+
+on:
+  push:
+    branches:
+      - feature/phase-14-vp3-activation-control-center
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-14-vp3-activation-control-center
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.88.0
+          components: rustfmt
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - name: Wire VP3 authority module into Control Center
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          main = Path('src/main.js')
+          source = main.read_text()
+          marker = 'import "./openrouter-provider.js";\n'
+          addition = marker + 'import "./vp3-authority.js";\n'
+          if 'import "./vp3-authority.js";' not in source:
+              if marker not in source:
+                  raise SystemExit('main.js import marker missing')
+              source = source.replace(marker, addition, 1)
+          main.write_text(source)
+
+          lib = Path('src-tauri/src/lib.rs')
+          source = lib.read_text()
+          module_marker = 'mod openrouter;\n'
+          if 'mod vp3_authority;' not in source:
+              if module_marker not in source:
+                  raise SystemExit('lib.rs module marker missing')
+              source = source.replace(module_marker, module_marker + 'mod vp3_authority;\n', 1)
+
+          command_marker = '            openrouter::homeserver_disconnect_openrouter,\n'
+          commands = command_marker + '''            vp3_authority::homeserver_vp3_authority_status,
+            vp3_authority::homeserver_vp3_device_identity,
+            vp3_authority::homeserver_activate_vp3_authority,
+            vp3_authority::homeserver_vp3_heartbeat,
+            vp3_authority::homeserver_vp3_refresh_lease,
+            vp3_authority::homeserver_vp3_check_update,
+            vp3_authority::homeserver_vp3_download_update,
+            vp3_authority::homeserver_vp3_submit_receipts,
+            vp3_authority::homeserver_disconnect_vp3_authority,
+'''
+          if 'vp3_authority::homeserver_vp3_authority_status' not in source:
+              if command_marker not in source:
+                  raise SystemExit('lib.rs command marker missing')
+              source = source.replace(command_marker, commands, 1)
+          lib.write_text(source)
+          PY
+          cargo fmt --all
+          npm ci
+          npm run check:frontend
+      - name: Commit Phase 14 Control Center wiring
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/main.js src-tauri/src/lib.rs
+          git commit -m "Wire VP3 authority activation into Control Center"
+          git push origin HEAD:feature/phase-14-vp3-activation-control-center
