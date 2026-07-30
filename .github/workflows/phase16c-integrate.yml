@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/phase-16c-shared-jobs-events-receipts
+  pull_request:
 
 permissions:
   contents: write
