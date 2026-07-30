@@ -4,10 +4,10 @@ mod mcp;
 mod model;
 mod ollama_install;
 mod openrouter;
-mod vp3_authority;
 mod operational;
 mod review_intelligence;
 mod vault;
+mod vp3_authority;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use futures_util::StreamExt;
