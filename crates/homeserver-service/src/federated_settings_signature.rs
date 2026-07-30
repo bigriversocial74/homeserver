@@ -108,7 +108,6 @@ pub(super) fn verify(evidence: SignedSnapshotEvidence<'_>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine as _;
     use ed25519_dalek::{Signer, SigningKey};
 
     #[test]
