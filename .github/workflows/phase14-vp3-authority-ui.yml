@@ -34,12 +34,12 @@ jobs:
           npm run build
       - name: Validate canonical Rust formatting
         run: cargo fmt --all -- --check
-      - name: Compile service, updater, and Control Center
-        run: cargo check -p microgifter-homeserver-service -p microgifter-homeserver-updater -p microgifter-homeserver-control-center --all-targets
+      - name: Compile portable service and updater crates
+        run: cargo check -p microgifter-homeserver-service -p microgifter-homeserver-updater --all-targets
       - name: Run retained service and updater tests
         run: cargo test -p microgifter-homeserver-service -p microgifter-homeserver-updater
-      - name: Run strict Phase 14 Clippy
-        run: cargo clippy -p microgifter-homeserver-service -p microgifter-homeserver-updater -p microgifter-homeserver-control-center --all-targets -- -D warnings -A unused-imports -A dead-code -A clippy::uninlined-format-args -A clippy::const-is-empty
+      - name: Run strict portable Phase 14 Clippy
+        run: cargo clippy -p microgifter-homeserver-service -p microgifter-homeserver-updater --all-targets -- -D warnings -A unused-imports -A dead-code -A clippy::uninlined-format-args -A clippy::const-is-empty
       - name: Verify activation trust boundaries
         shell: bash
         run: |
