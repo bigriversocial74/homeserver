@@ -73,6 +73,7 @@ jobs:
           rm -f .github/workflows/build-vp3-http-client-v1.yml
           rm -f .github/workflows/run-vp3-http-client-builder.yml
           rm -f .github/workflows/vp3-builder-bootstrap.yml
+          rm -f .github/workflows/vp3-network-client-contract.yml
           rm -f .vp3-builder-bootstrap .vp3-heavy-builder-started
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
