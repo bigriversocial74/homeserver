@@ -25,11 +25,6 @@ pub struct AppConfig {
     pub update_rollback_dir: PathBuf,
     pub update_installed_dir: PathBuf,
     pub update_manifest_url: String,
-    pub vp3_base_url: String,
-    pub vp3_lease_public_key_base64: String,
-    pub vp3_lease_key_id: String,
-    pub vp3_release_public_key_base64: String,
-    pub vp3_release_key_id: String,
     pub server_name: String,
 }
 
@@ -88,7 +83,6 @@ impl AppConfig {
         let vp3_base_url = std::env::var("MG_HOMESERVER_VP3_BASE_URL")
             .unwrap_or_else(|_| DEFAULT_VP3_BASE_URL.to_owned());
         validate_https_url(&vp3_base_url, "VP3 software authority")?;
-        let vp3_base_url = vp3_base_url.trim_end_matches('/').to_owned();
 
         Ok(Self {
             database_path: data_dir.join("homeserver.sqlite3"),
@@ -104,19 +98,33 @@ impl AppConfig {
             update_rollback_dir,
             update_installed_dir,
             update_manifest_url,
-            vp3_base_url,
-            vp3_lease_public_key_base64: std::env::var("MG_HOMESERVER_VP3_LEASE_PUBLIC_KEY_BASE64")
-                .unwrap_or_default(),
-            vp3_lease_key_id: std::env::var("MG_HOMESERVER_VP3_LEASE_KEY_ID")
-                .unwrap_or_else(|_| "homeserver-lease-ed25519-v1".to_owned()),
-            vp3_release_public_key_base64: std::env::var(
-                "MG_HOMESERVER_VP3_RELEASE_PUBLIC_KEY_BASE64",
-            )
-            .unwrap_or_default(),
-            vp3_release_key_id: std::env::var("MG_HOMESERVER_VP3_RELEASE_KEY_ID")
-                .unwrap_or_else(|_| "release-ed25519-v1".to_owned()),
             server_name,
         })
+    }
+
+    pub fn vp3_base_url(&self) -> Result<String> {
+        let value = std::env::var("MG_HOMESERVER_VP3_BASE_URL")
+            .unwrap_or_else(|_| DEFAULT_VP3_BASE_URL.to_owned());
+        validate_https_url(&value, "VP3 software authority")?;
+        Ok(value.trim_end_matches('/').to_owned())
+    }
+
+    pub fn vp3_lease_public_key_base64(&self) -> String {
+        std::env::var("MG_HOMESERVER_VP3_LEASE_PUBLIC_KEY_BASE64").unwrap_or_default()
+    }
+
+    pub fn vp3_lease_key_id(&self) -> String {
+        std::env::var("MG_HOMESERVER_VP3_LEASE_KEY_ID")
+            .unwrap_or_else(|_| "homeserver-lease-ed25519-v1".to_owned())
+    }
+
+    pub fn vp3_release_public_key_base64(&self) -> String {
+        std::env::var("MG_HOMESERVER_VP3_RELEASE_PUBLIC_KEY_BASE64").unwrap_or_default()
+    }
+
+    pub fn vp3_release_key_id(&self) -> String {
+        std::env::var("MG_HOMESERVER_VP3_RELEASE_KEY_ID")
+            .unwrap_or_else(|_| "release-ed25519-v1".to_owned())
     }
 
     pub fn pending_restore_plan_path(&self) -> PathBuf {

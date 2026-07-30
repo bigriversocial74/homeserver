@@ -26,7 +26,7 @@ use sha2::{Digest, Sha256};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::watch;
-use tracing::{info, warn};
+use tracing::warn;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
@@ -345,11 +345,12 @@ async fn disconnect_handler(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ConfirmationRequest>,
 ) -> ApiResult<Vp3ClientSnapshot> {
-    ensure!(
-        request.confirmation == "DISCONNECT VP3",
-        "type DISCONNECT VP3 to remove local VP3 software authority"
-    )
-    .map_err(|error| action_error("vp3_disconnect_confirmation_required", error))?;
+    if request.confirmation != "DISCONNECT VP3" {
+        return Err(action_error(
+            "vp3_disconnect_confirmation_required",
+            "type DISCONNECT VP3 to remove local VP3 software authority",
+        ));
+    }
     disconnect(&state)
         .and_then(|_| snapshot(&state))
         .map(Json)
@@ -423,11 +424,11 @@ async fn activate(state: &AppState, mut request: ActivateVp3Request) -> Result<(
         "VP3 enrollment code is invalid"
     );
     configured_verifying_key(
-        &state.config.vp3_lease_public_key_base64,
+        &state.config.vp3_lease_public_key_base64(),
         "VP3 lease public key",
     )?;
     configured_verifying_key(
-        &state.config.vp3_release_public_key_base64,
+        &state.config.vp3_release_public_key_base64(),
         "VP3 release public key",
     )?;
 
@@ -607,14 +608,14 @@ fn verify_lease(
     lease: LeaseEnvelope,
 ) -> Result<VerifiedLease> {
     ensure!(
-        lease.key_id == state.config.vp3_lease_key_id,
+        lease.key_id == state.config.vp3_lease_key_id(),
         "VP3 entitlement lease signing key is not trusted"
     );
     let document = URL_SAFE_NO_PAD
         .decode(&lease.document)
         .context("VP3 entitlement lease document encoding is invalid")?;
     verify_ed25519(
-        &state.config.vp3_lease_public_key_base64,
+        &state.config.vp3_lease_public_key_base64(),
         &document,
         &lease.signature,
         "VP3 entitlement lease",
@@ -696,19 +697,27 @@ fn persist_lease(state: &AppState, lease: &VerifiedLease) -> Result<()> {
 async fn check_for_update(state: &AppState) -> Result<UpdateActionResult> {
     refresh_lease_if_needed(state).await?;
     heartbeat(state).await?;
-    update_store::begin_check(&state.connection()?)?;
+    {
+        let connection = state.connection()?;
+        update_store::begin_check(&connection)?;
+    }
     let response = fetch_manifest(state).await?;
+    let manifest_url = format!(
+        "{}/api/homeserver/v1/manifest.php",
+        state.config.vp3_base_url()?
+    );
     if !response.available {
-        update_store::record_current(&state.connection()?)?;
-        return Ok(UpdateActionResult {
-            status: update_store::status(
-                &state.connection()?,
-                &format!(
-                    "{}/api/homeserver/v1/manifest.php",
-                    state.config.vp3_base_url
-                ),
+        let status = {
+            let connection = state.connection()?;
+            update_store::record_current(&connection)?;
+            update_store::status(
+                &connection,
+                &manifest_url,
                 state.config.update_plan_path().exists(),
-            )?,
+            )?
+        };
+        return Ok(UpdateActionResult {
+            status,
             message: "HomeServer is current under VP3 software authority.".to_owned(),
             restart_required: false,
         });
@@ -717,16 +726,17 @@ async fn check_for_update(state: &AppState) -> Result<UpdateActionResult> {
     let current = Version::parse(env!("CARGO_PKG_VERSION"))?;
     let target = Version::parse(&release.version)?;
     if target <= current {
-        update_store::record_current(&state.connection()?)?;
-        return Ok(UpdateActionResult {
-            status: update_store::status(
-                &state.connection()?,
-                &format!(
-                    "{}/api/homeserver/v1/manifest.php",
-                    state.config.vp3_base_url
-                ),
+        let status = {
+            let connection = state.connection()?;
+            update_store::record_current(&connection)?;
+            update_store::status(
+                &connection,
+                &manifest_url,
                 state.config.update_plan_path().exists(),
-            )?,
+            )?
+        };
+        return Ok(UpdateActionResult {
+            status,
             message: "HomeServer is current under VP3 software authority.".to_owned(),
             restart_required: false,
         });
@@ -747,7 +757,7 @@ async fn check_for_update(state: &AppState) -> Result<UpdateActionResult> {
             installer: UpdateInstallerContract {
                 url: format!(
                     "{}/api/homeserver/v1/installer-download.php",
-                    state.config.vp3_base_url
+                    state.config.vp3_base_url()?
                 ),
                 file_name: release.file_name.clone(),
                 size_bytes: release.size_bytes,
@@ -757,23 +767,18 @@ async fn check_for_update(state: &AppState) -> Result<UpdateActionResult> {
         },
         signature: release.manifest_signature.clone(),
     };
-    let manifest_url = format!(
-        "{}/api/homeserver/v1/manifest.php",
-        state.config.vp3_base_url
-    );
-    update_store::save_available(
-        &state.connection()?,
-        &release.update_id,
-        &manifest_url,
-        &derived,
-    )?;
-    persist_release_binding(state, &release)?;
-    Ok(UpdateActionResult {
-        status: update_store::status(
-            &state.connection()?,
+    let status = {
+        let connection = state.connection()?;
+        update_store::save_available(&connection, &release.update_id, &manifest_url, &derived)?;
+        update_store::status(
+            &connection,
             &manifest_url,
             state.config.update_plan_path().exists(),
-        )?,
+        )?
+    };
+    persist_release_binding(state, &release)?;
+    Ok(UpdateActionResult {
+        status,
         message: format!(
             "HomeServer {} is available from verified VP3 software authority.",
             release.version
@@ -814,7 +819,7 @@ fn verify_release(state: &AppState, response: &ManifestEnvelope) -> Result<Verif
         .as_deref()
         .context("VP3 release signing key ID is missing")?;
     ensure!(
-        key_id == state.config.vp3_release_key_id,
+        key_id == state.config.vp3_release_key_id(),
         "VP3 release signing key is not trusted"
     );
     let document_encoded = response
@@ -829,7 +834,7 @@ fn verify_release(state: &AppState, response: &ManifestEnvelope) -> Result<Verif
         .decode(document_encoded)
         .context("VP3 signed release document encoding is invalid")?;
     verify_ed25519(
-        &state.config.vp3_release_public_key_base64,
+        &state.config.vp3_release_public_key_base64(),
         &document,
         signature,
         "VP3 release manifest",
@@ -1104,8 +1109,10 @@ async fn download_update(state: &AppState) -> Result<UpdateActionResult> {
         tokio::fs::remove_file(&destination).await?;
     }
     tokio::fs::rename(&temporary, &destination).await?;
-    let staged =
-        update_store::mark_staged(&state.connection()?, &stored.record.update_id, &destination)?;
+    let staged = {
+        let connection = state.connection()?;
+        update_store::mark_staged(&connection, &stored.record.update_id, &destination)?
+    };
     queue_receipt(
         state,
         &stored.record.update_id,
@@ -1115,11 +1122,17 @@ async fn download_update(state: &AppState) -> Result<UpdateActionResult> {
     )?;
     submit_pending_receipts(state).await?;
     Ok(UpdateActionResult {
-        status: update_store::status(
-            &state.connection()?,
-            &format!("{}/api/homeserver/v1/manifest.php", state.config.vp3_base_url),
+        status: {
+        let connection = state.connection()?;
+        update_store::status(
+            &connection,
+            &format!(
+                "{}/api/homeserver/v1/manifest.php",
+                state.config.vp3_base_url()?
+            ),
             state.config.update_plan_path().exists(),
-        )?,
+        )?
+    },
         message: format!("HomeServer {} was authorized by VP3, downloaded, hash-verified, and Authenticode-verified.", staged.record.version),
         restart_required: false,
     })
@@ -1345,7 +1358,7 @@ fn client(timeout: Duration) -> Result<reqwest::Client> {
 fn authority_url(state: &AppState, path: &str) -> Result<Url> {
     let base = Url::parse(&format!(
         "{}/",
-        state.config.vp3_base_url.trim_end_matches('/')
+        state.config.vp3_base_url()?.trim_end_matches('/')
     ))
     .context("VP3 base URL is invalid")?;
     let url = base
