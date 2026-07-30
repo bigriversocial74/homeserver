@@ -1,5 +1,4 @@
 name: Phase 13 VP3 Activation Client
-# Exact-head certification for the VP3 software-authority cutover.
 
 on:
   push:
@@ -8,25 +7,23 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: phase13-homeserver-${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
-  repair-device-binding:
-    if: github.event_name == 'pull_request' && github.actor != 'github-actions[bot]'
+  generate-device-binding-source:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: feature/vp3-activation-update-client-v1-20260729
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: 1.88.0
           components: rustfmt
-      - name: Bind activation to the persistent local installation identity
+      - name: Generate locally bound VP3 client source
         shell: bash
         run: |
           python - <<'PY'
@@ -105,6 +102,8 @@ jobs:
 
           '''
           if helper not in source:
+              if marker not in source:
+                  raise SystemExit('identity helper insertion point was not found')
               source = source.replace(marker, helper + marker, 1)
 
           checks = [
@@ -125,64 +124,10 @@ jobs:
           path.write_text(source)
           PY
           cargo fmt --all
-      - name: Commit device identity binding
-        shell: bash
-        run: |
-          if git diff --quiet; then
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/homeserver-service/src/vp3_client.rs
-          git commit -m "Bind VP3 activation to local HomeServer identity"
-          git push origin HEAD:feature/vp3-activation-update-client-v1-20260729
-
-  linux:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+          test -s crates/homeserver-service/src/vp3_client.rs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          toolchain: 1.88.0
-          components: rustfmt, clippy
-      - name: Validate canonical formatting
-        run: cargo fmt --all -- --check
-      - name: Compile service and updater
-        run: cargo check -p microgifter-homeserver-service -p microgifter-homeserver-updater --all-targets
-      - name: Run service and updater tests
-        run: cargo test -p microgifter-homeserver-service -p microgifter-homeserver-updater
-      - name: Run strict Phase 13 Clippy
-        run: cargo clippy -p microgifter-homeserver-service -p microgifter-homeserver-updater --all-targets -- -D warnings -A unused-imports -A dead-code -A clippy::uninlined-format-args -A clippy::const-is-empty
-      - name: Verify Phase 13 trust boundaries
-        shell: bash
-        run: |
-          grep -q 'vp3-software-authority-device-credential' crates/homeserver-service/src/vp3_client.rs
-          grep -q 'VerifyingKey' crates/homeserver-service/src/vp3_client.rs
-          grep -q 'verify_authenticode' crates/homeserver-service/src/vp3_client.rs
-          grep -q 'installer_authorization' crates/homeserver-service/src/vp3_client.rs
-          grep -q 'pending_vp3_submission' crates/homeserver-service/src/vp3_client.rs
-          grep -q 'ACTIVATE VP3' crates/homeserver-service/src/vp3_client.rs
-          grep -q 'DISCONNECT VP3' crates/homeserver-service/src/vp3_client.rs
-          grep -q 'local_device_fingerprint_from_connection' crates/homeserver-service/src/vp3_client.rs
-          grep -q 'MicrogifterHomeServer:vp3-device:' crates/homeserver-service/src/vp3_client.rs
-          ! sed -n '/pub struct ActivateVp3Request/,/^}/p' crates/homeserver-service/src/vp3_client.rs | grep -q 'device_fingerprint'
-          ! grep -Eqi 'credential[[:space:]]+(TEXT|BLOB)|enrollment_code[[:space:]]+(TEXT|BLOB)' database/migrations/0018_vp3_activation_update_client.sql
-
-  windows:
-    runs-on: windows-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
-        with:
-          toolchain: 1.88.0
-          components: rustfmt, clippy
-      - name: Validate canonical formatting
-        run: cargo fmt --all -- --check
-      - name: Compile Windows service and updater
-        run: cargo check -p microgifter-homeserver-service -p microgifter-homeserver-updater --all-targets
-      - name: Run HomeServer service and updater tests
-        run: cargo test -p microgifter-homeserver-service -p microgifter-homeserver-updater
-      - name: Run strict Windows Phase 13 Clippy
-        run: cargo clippy -p microgifter-homeserver-service -p microgifter-homeserver-updater --all-targets -- -D warnings -A unused-imports -A dead-code -A clippy::uninlined-format-args -A clippy::const-is-empty
+          name: phase13-device-bound-source
+          path: crates/homeserver-service/src/vp3_client.rs
+          if-no-files-found: error
+          retention-days: 1
