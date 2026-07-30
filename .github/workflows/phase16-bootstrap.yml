@@ -41,7 +41,7 @@ jobs:
               | tr -d '\n' \
               | base64 --decode >> phase16-bundle.tgz
           done
-          printf '%s  %s\n' 'c06d12ac86c03659478713ee9d632d890f06b57e3d0d6325486a4cf97b822468' 'phase16-bundle.tgz' | sha256sum --check
+          printf '%s  %s\n' 'a2fe223a9fbbc1596ddffc006feb0450e5196cfe39eb307fbf096f42e2b0e497' 'phase16-bundle.tgz' | sha256sum --check
           tar --extract --gzip --file phase16-bundle.tgz
           rm phase16-bundle.tgz .github/workflows/phase16-bootstrap.yml
       - name: Commit integrated Phase 16A implementation
