@@ -18,6 +18,8 @@ const ACTIVATION_PATH: &str = "/v1/software-authority/vp3/activate";
 const MAX_ACTIVATION_BODY_BYTES: usize = 64 * 1024;
 const FINGERPRINT_NAMESPACE: &str = "MicrogifterHomeServer:vp3-device:";
 
+type ApiResult<T> = std::result::Result<Json<T>, (StatusCode, Json<BindingError>)>;
+
 #[derive(Debug, Serialize)]
 struct DeviceIdentitySnapshot {
     device_fingerprint: String,
@@ -56,9 +58,7 @@ pub async fn bind_activation_identity(
     }
 }
 
-async fn device_identity_handler(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<DeviceIdentitySnapshot>, (StatusCode, Json<BindingError>)> {
+async fn device_identity_handler(State(state): State<Arc<AppState>>) -> ApiResult<DeviceIdentitySnapshot> {
     local_device_fingerprint(&state)
         .map(|device_fingerprint| {
             Json(DeviceIdentitySnapshot {
