@@ -39,6 +39,10 @@ VP3 returns a short-lived Ed25519-signed document using the dedicated HomeServer
 
 HomeServer verifies the pinned key ID, Ed25519 signature, document hash, lifetime, account/device identity, and exact wrapper/document equality before any merge.
 
+## Signed result invariants
+
+After signature verification, every applied or conflicted key must resolve to exactly one setting in the signed snapshot. Unknown keys, duplicate applied entries, duplicate conflict entries, and contradictory applied/conflict entries are rejected. Applied evidence must match the signed revision and HomeServer authority, revision conflicts must match the signed current revision, and replay responses must not contain mutation instructions.
+
 ## Merge rules
 
 1. VP3-owned values replace the local read-only mirror after signature verification.
