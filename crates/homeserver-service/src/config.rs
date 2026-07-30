@@ -105,10 +105,8 @@ impl AppConfig {
             update_installed_dir,
             update_manifest_url,
             vp3_base_url,
-            vp3_lease_public_key_base64: std::env::var(
-                "MG_HOMESERVER_VP3_LEASE_PUBLIC_KEY_BASE64",
-            )
-            .unwrap_or_default(),
+            vp3_lease_public_key_base64: std::env::var("MG_HOMESERVER_VP3_LEASE_PUBLIC_KEY_BASE64")
+                .unwrap_or_default(),
             vp3_lease_key_id: std::env::var("MG_HOMESERVER_VP3_LEASE_KEY_ID")
                 .unwrap_or_else(|_| "homeserver-lease-ed25519-v1".to_owned()),
             vp3_release_public_key_base64: std::env::var(

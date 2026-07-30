@@ -6,7 +6,9 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use base64::{engine::general_purpose::STANDARD, engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{
+    engine::general_purpose::STANDARD, engine::general_purpose::URL_SAFE_NO_PAD, Engine as _,
+};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures_util::StreamExt;
@@ -202,12 +204,13 @@ pub fn health_check(connection: &Connection) -> Result<()> {
         [],
         |row| row.get(0),
     )?;
-    ensure!(singleton_count == 1, "VP3 activation client state is unavailable");
-    let _: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM vp3_update_bindings",
-        [],
-        |row| row.get(0),
-    )?;
+    ensure!(
+        singleton_count == 1,
+        "VP3 activation client state is unavailable"
+    );
+    let _: i64 = connection.query_row("SELECT COUNT(*) FROM vp3_update_bindings", [], |row| {
+        row.get(0)
+    })?;
     Ok(())
 }
 
@@ -222,10 +225,19 @@ pub fn maintain_history(connection: &Connection) -> Result<()> {
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/software-authority/vp3", get(status_handler))
-        .route("/v1/software-authority/vp3/activate", post(activate_handler))
-        .route("/v1/software-authority/vp3/heartbeat", post(heartbeat_handler))
+        .route(
+            "/v1/software-authority/vp3/activate",
+            post(activate_handler),
+        )
+        .route(
+            "/v1/software-authority/vp3/heartbeat",
+            post(heartbeat_handler),
+        )
         .route("/v1/software-authority/vp3/lease", post(lease_handler))
-        .route("/v1/software-authority/vp3/check-update", post(check_update_handler))
+        .route(
+            "/v1/software-authority/vp3/check-update",
+            post(check_update_handler),
+        )
         .route(
             "/v1/software-authority/vp3/download-update",
             post(download_update_handler),
@@ -303,9 +315,7 @@ async fn lease_handler(State(state): State<Arc<AppState>>) -> ApiResult<Vp3Clien
         .map_err(|error| action_error("vp3_lease_refresh_failed", error))
 }
 
-async fn check_update_handler(
-    State(state): State<Arc<AppState>>,
-) -> ApiResult<UpdateActionResult> {
+async fn check_update_handler(State(state): State<Arc<AppState>>) -> ApiResult<UpdateActionResult> {
     check_for_update(&state)
         .await
         .map(Json)
@@ -390,7 +400,10 @@ fn is_active(state: &AppState) -> bool {
 }
 
 async fn activate(state: &AppState, mut request: ActivateVp3Request) -> Result<()> {
-    ensure!(request.confirmation == "ACTIVATE VP3", "type ACTIVATE VP3 to authorize the VP3 cutover");
+    ensure!(
+        request.confirmation == "ACTIVATE VP3",
+        "type ACTIVATE VP3 to authorize the VP3 cutover"
+    );
     ensure!(request.account_id > 0, "VP3 account ID is required");
     validate_public_id(&request.device_public_id, "VP3 device public ID")?;
     ensure!(
@@ -448,7 +461,10 @@ async fn activate(state: &AppState, mut request: ActivateVp3Request) -> Result<(
 
     let lease = match activation {
         Ok(activation) => {
-            ensure!(activation.status == "paired", "VP3 device activation did not reach paired status");
+            ensure!(
+                activation.status == "paired",
+                "VP3 device activation did not reach paired status"
+            );
             ensure!(
                 activation.device_public_id == request.device_public_id,
                 "VP3 activation returned a different device identity"
@@ -516,9 +532,18 @@ async fn heartbeat_with_credential(state: &AppState, credential: &str) -> Result
         }),
     )
     .await?;
-    ensure!(response.software_authority == "vp3", "VP3 heartbeat did not assert VP3 software authority");
-    ensure!(matches!(response.status.as_str(), "online" | "degraded"), "VP3 heartbeat returned an invalid device state");
-    ensure!(matches!(response.update_channel.as_str(), "stable" | "security"), "VP3 heartbeat returned an invalid update channel");
+    ensure!(
+        response.software_authority == "vp3",
+        "VP3 heartbeat did not assert VP3 software authority"
+    );
+    ensure!(
+        matches!(response.status.as_str(), "online" | "degraded"),
+        "VP3 heartbeat returned an invalid device state"
+    );
+    ensure!(
+        matches!(response.update_channel.as_str(), "stable" | "security"),
+        "VP3 heartbeat returned an invalid update channel"
+    );
     let now = Utc::now().to_rfc3339();
     let connection = state.connection()?;
     let transaction = connection.unchecked_transaction()?;
@@ -594,21 +619,45 @@ fn verify_lease(
         &lease.signature,
         "VP3 entitlement lease",
     )?;
-    let claims: Value = serde_json::from_slice(&document)
-        .context("VP3 entitlement lease claims are invalid")?;
-    ensure!(claims.get("iss").and_then(Value::as_str) == Some("vp3.me"), "VP3 entitlement lease issuer is invalid");
-    ensure!(claims.get("sub").and_then(Value::as_str) == Some(device_public_id), "VP3 entitlement lease device identity is invalid");
-    ensure!(claims.get("account_id").and_then(Value::as_i64) == Some(account_id), "VP3 entitlement lease account identity is invalid");
-    ensure!(claims.get("device_fingerprint").and_then(Value::as_str) == Some(device_fingerprint), "VP3 entitlement lease fingerprint is invalid");
-    let expires = claims.get("exp").and_then(Value::as_i64).context("VP3 entitlement lease expiration is missing")?;
-    ensure!(expires > Utc::now().timestamp(), "VP3 entitlement lease is expired");
+    let claims: Value =
+        serde_json::from_slice(&document).context("VP3 entitlement lease claims are invalid")?;
+    ensure!(
+        claims.get("iss").and_then(Value::as_str) == Some("vp3.me"),
+        "VP3 entitlement lease issuer is invalid"
+    );
+    ensure!(
+        claims.get("sub").and_then(Value::as_str) == Some(device_public_id),
+        "VP3 entitlement lease device identity is invalid"
+    );
+    ensure!(
+        claims.get("account_id").and_then(Value::as_i64) == Some(account_id),
+        "VP3 entitlement lease account identity is invalid"
+    );
+    ensure!(
+        claims.get("device_fingerprint").and_then(Value::as_str) == Some(device_fingerprint),
+        "VP3 entitlement lease fingerprint is invalid"
+    );
+    let expires = claims
+        .get("exp")
+        .and_then(Value::as_i64)
+        .context("VP3 entitlement lease expiration is missing")?;
+    ensure!(
+        expires > Utc::now().timestamp(),
+        "VP3 entitlement lease is expired"
+    );
     let response_expires = parse_database_or_rfc3339(&lease.expires_at)?;
-    ensure!(response_expires.timestamp() == expires, "VP3 entitlement lease expiration evidence does not match");
+    ensure!(
+        response_expires.timestamp() == expires,
+        "VP3 entitlement lease expiration evidence does not match"
+    );
     let update_channel = claims
         .get("update_channel")
         .and_then(Value::as_str)
         .context("VP3 entitlement lease update channel is missing")?;
-    ensure!(matches!(update_channel, "stable" | "security"), "VP3 entitlement lease update channel is invalid");
+    ensure!(
+        matches!(update_channel, "stable" | "security"),
+        "VP3 entitlement lease update channel is invalid"
+    );
     Ok(VerifiedLease {
         lease_public_id: lease.lease_public_id,
         expires_at_utc: response_expires.to_rfc3339(),
@@ -654,7 +703,10 @@ async fn check_for_update(state: &AppState) -> Result<UpdateActionResult> {
         return Ok(UpdateActionResult {
             status: update_store::status(
                 &state.connection()?,
-                &format!("{}/api/homeserver/v1/manifest.php", state.config.vp3_base_url),
+                &format!(
+                    "{}/api/homeserver/v1/manifest.php",
+                    state.config.vp3_base_url
+                ),
                 state.config.update_plan_path().exists(),
             )?,
             message: "HomeServer is current under VP3 software authority.".to_owned(),
@@ -669,7 +721,10 @@ async fn check_for_update(state: &AppState) -> Result<UpdateActionResult> {
         return Ok(UpdateActionResult {
             status: update_store::status(
                 &state.connection()?,
-                &format!("{}/api/homeserver/v1/manifest.php", state.config.vp3_base_url),
+                &format!(
+                    "{}/api/homeserver/v1/manifest.php",
+                    state.config.vp3_base_url
+                ),
                 state.config.update_plan_path().exists(),
             )?,
             message: "HomeServer is current under VP3 software authority.".to_owned(),
@@ -685,9 +740,15 @@ async fn check_for_update(state: &AppState) -> Result<UpdateActionResult> {
             version: release.version.clone(),
             minimum_version: release.minimum_version.clone(),
             published_at_utc: Utc::now(),
-            release_notes: format!("VP3 signed release notes hash: {}", release.release_notes_hash),
+            release_notes: format!(
+                "VP3 signed release notes hash: {}",
+                release.release_notes_hash
+            ),
             installer: UpdateInstallerContract {
-                url: format!("{}/api/homeserver/v1/installer-download.php", state.config.vp3_base_url),
+                url: format!(
+                    "{}/api/homeserver/v1/installer-download.php",
+                    state.config.vp3_base_url
+                ),
                 file_name: release.file_name.clone(),
                 size_bytes: release.size_bytes,
                 sha256: release.sha256.clone(),
@@ -696,7 +757,10 @@ async fn check_for_update(state: &AppState) -> Result<UpdateActionResult> {
         },
         signature: release.manifest_signature.clone(),
     };
-    let manifest_url = format!("{}/api/homeserver/v1/manifest.php", state.config.vp3_base_url);
+    let manifest_url = format!(
+        "{}/api/homeserver/v1/manifest.php",
+        state.config.vp3_base_url
+    );
     update_store::save_available(
         &state.connection()?,
         &release.update_id,
@@ -737,13 +801,33 @@ async fn fetch_manifest(state: &AppState) -> Result<ManifestEnvelope> {
 }
 
 fn verify_release(state: &AppState, response: &ManifestEnvelope) -> Result<VerifiedRelease> {
-    ensure!(response.available, "VP3 release response does not contain an update");
-    ensure!(response.signature_algorithm.as_deref() == Some("Ed25519"), "VP3 release signature algorithm is invalid");
-    let key_id = response.signing_key_id.as_deref().context("VP3 release signing key ID is missing")?;
-    ensure!(key_id == state.config.vp3_release_key_id, "VP3 release signing key is not trusted");
-    let document_encoded = response.manifest.as_deref().context("VP3 signed release document is missing")?;
-    let signature = response.signature.as_deref().context("VP3 release signature is missing")?;
-    let document = URL_SAFE_NO_PAD.decode(document_encoded).context("VP3 signed release document encoding is invalid")?;
+    ensure!(
+        response.available,
+        "VP3 release response does not contain an update"
+    );
+    ensure!(
+        response.signature_algorithm.as_deref() == Some("Ed25519"),
+        "VP3 release signature algorithm is invalid"
+    );
+    let key_id = response
+        .signing_key_id
+        .as_deref()
+        .context("VP3 release signing key ID is missing")?;
+    ensure!(
+        key_id == state.config.vp3_release_key_id,
+        "VP3 release signing key is not trusted"
+    );
+    let document_encoded = response
+        .manifest
+        .as_deref()
+        .context("VP3 signed release document is missing")?;
+    let signature = response
+        .signature
+        .as_deref()
+        .context("VP3 release signature is missing")?;
+    let document = URL_SAFE_NO_PAD
+        .decode(document_encoded)
+        .context("VP3 signed release document encoding is invalid")?;
     verify_ed25519(
         &state.config.vp3_release_public_key_base64,
         &document,
@@ -751,42 +835,130 @@ fn verify_release(state: &AppState, response: &ManifestEnvelope) -> Result<Verif
         "VP3 release manifest",
     )?;
     let hash = hex::encode(Sha256::digest(&document));
-    ensure!(response.manifest_hash.as_deref() == Some(hash.as_str()), "VP3 release manifest hash does not match the signed document");
-    let manifest: Value = serde_json::from_slice(&document).context("VP3 release manifest JSON is invalid")?;
-    ensure!(manifest.get("schema").and_then(Value::as_str) == Some("vp3.release-manifest.v1"), "VP3 release manifest schema is unsupported");
-    ensure!(manifest.get("target_type").and_then(Value::as_str) == Some("homeserver"), "VP3 release target type is invalid");
-    let release_public_id = manifest.get("release_public_id").and_then(Value::as_str).context("VP3 release identity is missing")?;
-    ensure!(response.release_public_id.as_deref() == Some(release_public_id), "VP3 release wrapper identity does not match its signed document");
-    let version = manifest.get("version").and_then(Value::as_str).context("VP3 release version is missing")?;
+    ensure!(
+        response.manifest_hash.as_deref() == Some(hash.as_str()),
+        "VP3 release manifest hash does not match the signed document"
+    );
+    let manifest: Value =
+        serde_json::from_slice(&document).context("VP3 release manifest JSON is invalid")?;
+    ensure!(
+        manifest.get("schema").and_then(Value::as_str) == Some("vp3.release-manifest.v1"),
+        "VP3 release manifest schema is unsupported"
+    );
+    ensure!(
+        manifest.get("target_type").and_then(Value::as_str) == Some("homeserver"),
+        "VP3 release target type is invalid"
+    );
+    let release_public_id = manifest
+        .get("release_public_id")
+        .and_then(Value::as_str)
+        .context("VP3 release identity is missing")?;
+    ensure!(
+        response.release_public_id.as_deref() == Some(release_public_id),
+        "VP3 release wrapper identity does not match its signed document"
+    );
+    let version = manifest
+        .get("version")
+        .and_then(Value::as_str)
+        .context("VP3 release version is missing")?;
     Version::parse(version).context("VP3 release version is invalid")?;
-    ensure!(response.version.as_deref() == Some(version), "VP3 release wrapper version does not match its signed document");
-    let channel = manifest.get("channel").and_then(Value::as_str).context("VP3 release channel is missing")?;
-    ensure!(channel == "stable", "Phase 13 accepts stable VP3 releases only");
-    ensure!(response.channel.as_deref() == Some(channel), "VP3 release wrapper channel does not match its signed document");
-    ensure!(response.update_channel == "stable", "VP3 licensed update channel does not permit this release");
-    ensure!(response.emergency_override == manifest.get("emergency_override").and_then(Value::as_bool), "VP3 release emergency policy evidence does not match");
-    let release_notes_hash = manifest.get("release_notes_hash").and_then(Value::as_str).context("VP3 release notes hash is missing")?;
-    ensure!(valid_sha256(release_notes_hash), "VP3 release notes hash is invalid");
-    let artifacts = manifest.get("artifacts").and_then(Value::as_array).context("VP3 release artifact list is missing")?;
-    let artifact = artifacts.iter().find(|artifact| {
-        artifact.get("platform").and_then(Value::as_str) == Some("windows")
-            && artifact.get("architecture").and_then(Value::as_str) == Some("x86_64")
-    }).context("VP3 release has no Windows x86_64 artifact")?;
-    let file_name = artifact.get("file_name").and_then(Value::as_str).context("VP3 release installer filename is missing")?;
-    ensure!(file_name == "Microgifter-HomeServer-Setup.exe", "VP3 release installer filename is invalid");
-    let sha256 = artifact.get("sha256").and_then(Value::as_str).context("VP3 release installer SHA-256 is missing")?.to_lowercase();
-    ensure!(valid_sha256(&sha256), "VP3 release installer SHA-256 is invalid");
-    let size_bytes = json_u64(artifact.get("size_bytes")).context("VP3 release installer size is missing")?;
-    ensure!((MIN_INSTALLER_BYTES..=MAX_INSTALLER_BYTES).contains(&size_bytes), "VP3 release installer size is outside the supported range");
-    let thumbprint = artifact.get("authenticode_thumbprint").and_then(Value::as_str).context("VP3 release Authenticode thumbprint is missing")?.to_uppercase();
-    ensure!(valid_thumbprint(&thumbprint), "VP3 release Authenticode thumbprint is invalid");
-    let compatibility = manifest.get("compatibility").cloned().unwrap_or(Value::Null);
-    let minimum_version = compatibility.get("minimum_current_version").and_then(Value::as_str).map(str::to_owned);
+    ensure!(
+        response.version.as_deref() == Some(version),
+        "VP3 release wrapper version does not match its signed document"
+    );
+    let channel = manifest
+        .get("channel")
+        .and_then(Value::as_str)
+        .context("VP3 release channel is missing")?;
+    ensure!(
+        channel == "stable",
+        "Phase 13 accepts stable VP3 releases only"
+    );
+    ensure!(
+        response.channel.as_deref() == Some(channel),
+        "VP3 release wrapper channel does not match its signed document"
+    );
+    ensure!(
+        response.update_channel == "stable",
+        "VP3 licensed update channel does not permit this release"
+    );
+    ensure!(
+        response.emergency_override == manifest.get("emergency_override").and_then(Value::as_bool),
+        "VP3 release emergency policy evidence does not match"
+    );
+    let release_notes_hash = manifest
+        .get("release_notes_hash")
+        .and_then(Value::as_str)
+        .context("VP3 release notes hash is missing")?;
+    ensure!(
+        valid_sha256(release_notes_hash),
+        "VP3 release notes hash is invalid"
+    );
+    let artifacts = manifest
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .context("VP3 release artifact list is missing")?;
+    let artifact = artifacts
+        .iter()
+        .find(|artifact| {
+            artifact.get("platform").and_then(Value::as_str) == Some("windows")
+                && artifact.get("architecture").and_then(Value::as_str) == Some("x86_64")
+        })
+        .context("VP3 release has no Windows x86_64 artifact")?;
+    let file_name = artifact
+        .get("file_name")
+        .and_then(Value::as_str)
+        .context("VP3 release installer filename is missing")?;
+    ensure!(
+        file_name == "Microgifter-HomeServer-Setup.exe",
+        "VP3 release installer filename is invalid"
+    );
+    let sha256 = artifact
+        .get("sha256")
+        .and_then(Value::as_str)
+        .context("VP3 release installer SHA-256 is missing")?
+        .to_lowercase();
+    ensure!(
+        valid_sha256(&sha256),
+        "VP3 release installer SHA-256 is invalid"
+    );
+    let size_bytes =
+        json_u64(artifact.get("size_bytes")).context("VP3 release installer size is missing")?;
+    ensure!(
+        (MIN_INSTALLER_BYTES..=MAX_INSTALLER_BYTES).contains(&size_bytes),
+        "VP3 release installer size is outside the supported range"
+    );
+    let thumbprint = artifact
+        .get("authenticode_thumbprint")
+        .and_then(Value::as_str)
+        .context("VP3 release Authenticode thumbprint is missing")?
+        .to_uppercase();
+    ensure!(
+        valid_thumbprint(&thumbprint),
+        "VP3 release Authenticode thumbprint is invalid"
+    );
+    let compatibility = manifest
+        .get("compatibility")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let minimum_version = compatibility
+        .get("minimum_current_version")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     if let Some(minimum) = minimum_version.as_deref() {
-        ensure!(Version::parse(env!("CARGO_PKG_VERSION"))? >= Version::parse(minimum)?, "VP3 release requires a newer HomeServer baseline");
+        ensure!(
+            Version::parse(env!("CARGO_PKG_VERSION"))? >= Version::parse(minimum)?,
+            "VP3 release requires a newer HomeServer baseline"
+        );
     }
-    if let Some(maximum) = compatibility.get("maximum_current_version").and_then(Value::as_str) {
-        ensure!(Version::parse(env!("CARGO_PKG_VERSION"))? <= Version::parse(maximum)?, "VP3 release does not support this HomeServer baseline");
+    if let Some(maximum) = compatibility
+        .get("maximum_current_version")
+        .and_then(Value::as_str)
+    {
+        ensure!(
+            Version::parse(env!("CARGO_PKG_VERSION"))? <= Version::parse(maximum)?,
+            "VP3 release does not support this HomeServer baseline"
+        );
     }
     Ok(VerifiedRelease {
         update_id: format!("vp3:{}:{}", release_public_id, &sha256[..16]),
@@ -839,22 +1011,52 @@ async fn download_update(state: &AppState) -> Result<UpdateActionResult> {
     let stored = {
         let connection = state.connection()?;
         let available = update_store::latest_in_state(&connection, UpdateState::Available)?;
-        software_authority::ensure_update_download_allowed(&connection, &available.record.update_id)?;
+        software_authority::ensure_update_download_allowed(
+            &connection,
+            &available.record.update_id,
+        )?;
         update_store::mark_downloading(&connection, &available.record.update_id)?
     };
     let binding = binding(state, &stored.record.update_id)?;
     let fresh = fetch_manifest(state).await?;
     let release = verify_release(state, &fresh)?;
-    ensure!(release.update_id == stored.record.update_id, "VP3 release changed before download authorization");
-    ensure!(release.release_public_id == binding.0, "VP3 release identity changed before download authorization");
-    ensure!(release.sha256 == stored.record.installer_sha256, "VP3 installer hash changed before download authorization");
-    ensure!(release.size_bytes == stored.record.installer_size_bytes, "VP3 installer size changed before download authorization");
-    ensure!(release.authenticode_thumbprint == stored.record.authenticode_thumbprint, "VP3 Authenticode signer changed before download authorization");
-    let authorization = fresh.installer_authorization.context("VP3 installer authorization is missing")?;
-    ensure!(parse_database_or_rfc3339(&authorization.expires_at)? > Utc::now(), "VP3 installer authorization is expired");
-    ensure!((32..=256).contains(&authorization.token.len()), "VP3 installer authorization token is invalid");
+    ensure!(
+        release.update_id == stored.record.update_id,
+        "VP3 release changed before download authorization"
+    );
+    ensure!(
+        release.release_public_id == binding.0,
+        "VP3 release identity changed before download authorization"
+    );
+    ensure!(
+        release.sha256 == stored.record.installer_sha256,
+        "VP3 installer hash changed before download authorization"
+    );
+    ensure!(
+        release.size_bytes == stored.record.installer_size_bytes,
+        "VP3 installer size changed before download authorization"
+    );
+    ensure!(
+        release.authenticode_thumbprint == stored.record.authenticode_thumbprint,
+        "VP3 Authenticode signer changed before download authorization"
+    );
+    let authorization = fresh
+        .installer_authorization
+        .context("VP3 installer authorization is missing")?;
+    ensure!(
+        parse_database_or_rfc3339(&authorization.expires_at)? > Utc::now(),
+        "VP3 installer authorization is expired"
+    );
+    ensure!(
+        (32..=256).contains(&authorization.token.len()),
+        "VP3 installer authorization token is invalid"
+    );
     let url = authority_url(state, &authorization.download_path)?;
-    ensure!(url.query_pairs().any(|(key, value)| key == "grant" && value == authorization.token), "VP3 installer authorization is not bound to its grant token");
+    ensure!(
+        url.query_pairs()
+            .any(|(key, value)| key == "grant" && value == authorization.token),
+        "VP3 installer authorization is not bound to its grant token"
+    );
     let destination = installer_destination(state, &stored.record.update_id, &release.file_name);
     let temporary = destination.with_extension("part");
     if temporary.exists() {
@@ -869,7 +1071,10 @@ async fn download_update(state: &AppState) -> Result<UpdateActionResult> {
         .error_for_status()
         .context("VP3-authorized HomeServer installer download was rejected")?;
     if let Some(length) = response.content_length() {
-        ensure!(length == release.size_bytes, "VP3 installer response size does not match the signed release");
+        ensure!(
+            length == release.size_bytes,
+            "VP3 installer response size does not match the signed release"
+        );
     }
     let mut output = tokio::fs::File::create(&temporary).await?;
     let mut stream = response.bytes_stream();
@@ -877,21 +1082,30 @@ async fn download_update(state: &AppState) -> Result<UpdateActionResult> {
     let mut hasher = Sha256::new();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("unable to read the VP3 installer response")?;
-        size = size.checked_add(chunk.len() as u64).context("VP3 installer size overflow")?;
-        ensure!(size <= release.size_bytes && size <= MAX_INSTALLER_BYTES, "VP3 installer exceeds the signed size");
+        size = size
+            .checked_add(chunk.len() as u64)
+            .context("VP3 installer size overflow")?;
+        ensure!(
+            size <= release.size_bytes && size <= MAX_INSTALLER_BYTES,
+            "VP3 installer exceeds the signed size"
+        );
         output.write_all(&chunk).await?;
         hasher.update(&chunk);
     }
     output.sync_all().await?;
     drop(output);
     ensure!(size == release.size_bytes, "VP3 installer is truncated");
-    ensure!(hex::encode(hasher.finalize()).eq_ignore_ascii_case(&release.sha256), "VP3 installer SHA-256 does not match the signed release");
+    ensure!(
+        hex::encode(hasher.finalize()).eq_ignore_ascii_case(&release.sha256),
+        "VP3 installer SHA-256 does not match the signed release"
+    );
     update::verify_authenticode(&temporary, &release.authenticode_thumbprint)?;
     if destination.exists() {
         tokio::fs::remove_file(&destination).await?;
     }
     tokio::fs::rename(&temporary, &destination).await?;
-    let staged = update_store::mark_staged(&state.connection()?, &stored.record.update_id, &destination)?;
+    let staged =
+        update_store::mark_staged(&state.connection()?, &stored.record.update_id, &destination)?;
     queue_receipt(
         state,
         &stored.record.update_id,
@@ -977,7 +1191,11 @@ async fn submit_pending_receipts(state: &AppState) -> Result<()> {
             }
         };
         let receipt_hash = hex::encode(Sha256::digest(
-            format!("{receipt_id}|{update_id}|{version}|{disposition}|{}", failure_code.as_deref().unwrap_or("")).as_bytes(),
+            format!(
+                "{receipt_id}|{update_id}|{version}|{disposition}|{}",
+                failure_code.as_deref().unwrap_or("")
+            )
+            .as_bytes(),
         ));
         let _: Value = post_device(
             state,
@@ -1081,18 +1299,33 @@ async fn post_device<T: DeserializeOwned>(
 async fn decode_envelope<T: DeserializeOwned>(response: reqwest::Response) -> Result<T> {
     let status = response.status();
     if let Some(length) = response.content_length() {
-        ensure!(length <= MAX_JSON_BYTES as u64, "VP3 response exceeds the size limit");
+        ensure!(
+            length <= MAX_JSON_BYTES as u64,
+            "VP3 response exceeds the size limit"
+        );
     }
-    let bytes = response.bytes().await.context("unable to read VP3 response")?;
-    ensure!(bytes.len() <= MAX_JSON_BYTES, "VP3 response exceeds the size limit");
+    let bytes = response
+        .bytes()
+        .await
+        .context("unable to read VP3 response")?;
+    ensure!(
+        bytes.len() <= MAX_JSON_BYTES,
+        "VP3 response exceeds the size limit"
+    );
     if !status.is_success() {
         let message = serde_json::from_slice::<Value>(&bytes)
             .ok()
-            .and_then(|value| value.pointer("/error/message").and_then(Value::as_str).map(str::to_owned))
+            .and_then(|value| {
+                value
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
             .unwrap_or_else(|| format!("VP3 request was rejected with HTTP {status}"));
         bail!(bounded(&message, 500));
     }
-    let envelope: Envelope<T> = serde_json::from_slice(&bytes).context("VP3 response JSON is invalid")?;
+    let envelope: Envelope<T> =
+        serde_json::from_slice(&bytes).context("VP3 response JSON is invalid")?;
     Ok(envelope.data)
 }
 
@@ -1101,32 +1334,54 @@ fn client(timeout: Duration) -> Result<reqwest::Client> {
         .connect_timeout(Duration::from_secs(10))
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::none())
-        .user_agent(format!("Microgifter-HomeServer/{} VP3-Authority/1", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!(
+            "Microgifter-HomeServer/{} VP3-Authority/1",
+            env!("CARGO_PKG_VERSION")
+        ))
         .build()
         .context("unable to create the VP3 software-authority client")
 }
 
 fn authority_url(state: &AppState, path: &str) -> Result<Url> {
-    let base = Url::parse(&format!("{}/", state.config.vp3_base_url.trim_end_matches('/')))
-        .context("VP3 base URL is invalid")?;
-    let url = base.join(path.trim_start_matches('/')).context("VP3 endpoint URL is invalid")?;
+    let base = Url::parse(&format!(
+        "{}/",
+        state.config.vp3_base_url.trim_end_matches('/')
+    ))
+    .context("VP3 base URL is invalid")?;
+    let url = base
+        .join(path.trim_start_matches('/'))
+        .context("VP3 endpoint URL is invalid")?;
     ensure!(url.scheme() == "https", "VP3 endpoint must use HTTPS");
-    ensure!(url.host_str() == base.host_str(), "VP3 endpoint escaped the configured authority host");
-    ensure!(url.username().is_empty() && url.password().is_none(), "VP3 endpoint cannot contain credentials");
+    ensure!(
+        url.host_str() == base.host_str(),
+        "VP3 endpoint escaped the configured authority host"
+    );
+    ensure!(
+        url.username().is_empty() && url.password().is_none(),
+        "VP3 endpoint cannot contain credentials"
+    );
     Ok(url)
 }
 
 fn configured_verifying_key(value: &str, label: &str) -> Result<VerifyingKey> {
-    let bytes = STANDARD.decode(value).with_context(|| format!("{label} is not valid base64"))?;
-    let bytes: [u8; 32] = bytes.try_into().map_err(|_| anyhow::anyhow!("{label} must decode to 32 bytes"))?;
+    let bytes = STANDARD
+        .decode(value)
+        .with_context(|| format!("{label} is not valid base64"))?;
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("{label} must decode to 32 bytes"))?;
     VerifyingKey::from_bytes(&bytes).with_context(|| format!("{label} is invalid"))
 }
 
 fn verify_ed25519(public_key: &str, document: &[u8], signature: &str, label: &str) -> Result<()> {
     let key = configured_verifying_key(public_key, &format!("{label} public key"))?;
-    let signature = URL_SAFE_NO_PAD.decode(signature).with_context(|| format!("{label} signature encoding is invalid"))?;
-    let signature = Signature::from_slice(&signature).with_context(|| format!("{label} signature length is invalid"))?;
-    key.verify(document, &signature).with_context(|| format!("{label} signature verification failed"))
+    let signature = URL_SAFE_NO_PAD
+        .decode(signature)
+        .with_context(|| format!("{label} signature encoding is invalid"))?;
+    let signature = Signature::from_slice(&signature)
+        .with_context(|| format!("{label} signature length is invalid"))?;
+    key.verify(document, &signature)
+        .with_context(|| format!("{label} signature verification failed"))
 }
 
 fn save_credential(credential: &str) -> Result<()> {
@@ -1212,7 +1467,11 @@ fn parse_database_or_rfc3339(value: &str) -> Result<DateTime<Utc>> {
 }
 
 fn bounded(value: &str, maximum: usize) -> String {
-    value.chars().filter(|character| !character.is_control()).take(maximum).collect()
+    value
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(maximum)
+        .collect()
 }
 
 fn action_error(code: &'static str, error: impl std::fmt::Display) -> (StatusCode, Json<ApiError>) {
@@ -1226,7 +1485,10 @@ fn action_error(code: &'static str, error: impl std::fmt::Display) -> (StatusCod
     )
 }
 
-fn internal_error(code: &'static str, error: impl std::fmt::Display) -> (StatusCode, Json<ApiError>) {
+fn internal_error(
+    code: &'static str,
+    error: impl std::fmt::Display,
+) -> (StatusCode, Json<ApiError>) {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(ApiError {
