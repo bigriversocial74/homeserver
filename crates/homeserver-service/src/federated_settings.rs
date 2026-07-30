@@ -321,9 +321,10 @@ fn snapshot_with_connection(connection: &Connection) -> Result<FederatedSettings
             value,
             local_revision: stored.as_ref().map_or(0, |item| item.local_revision),
             cloud_revision: stored.as_ref().map_or(0, |item| item.cloud_revision),
-            source_authority: stored
-                .as_ref()
-                .map_or_else(|| "default".to_owned(), |item| item.source_authority.clone()),
+            source_authority: stored.as_ref().map_or_else(
+                || "default".to_owned(),
+                |item| item.source_authority.clone(),
+            ),
             dirty,
             last_conflict_reason: stored.and_then(|item| item.last_conflict_reason),
             editable_in_vp3: definition.visible_in_vp3 && definition.authority != "homeserver",
@@ -718,8 +719,14 @@ fn stored_value(connection: &Connection, setting_key: &str) -> Result<Option<Sto
 
 fn validate_value(definition: &CatalogDefinition, value: Value) -> Result<Value> {
     match definition.value_type.as_str() {
-        "boolean" => ensure!(value.is_boolean(), "the setting value must be true or false"),
-        "integer" => ensure!(value.as_i64().is_some(), "the setting value must be an integer"),
+        "boolean" => ensure!(
+            value.is_boolean(),
+            "the setting value must be true or false"
+        ),
+        "integer" => ensure!(
+            value.as_i64().is_some(),
+            "the setting value must be an integer"
+        ),
         "string" => {
             let text = value
                 .as_str()
@@ -739,7 +746,9 @@ fn validate_value(definition: &CatalogDefinition, value: Value) -> Result<Value>
                 .context("the setting enum has no allowed values")?;
             let allowed: Vec<Value> = serde_json::from_str(allowed)?;
             ensure!(
-                allowed.iter().any(|candidate| candidate.as_str() == Some(text)),
+                allowed
+                    .iter()
+                    .any(|candidate| candidate.as_str() == Some(text)),
                 "the setting value is not permitted"
             );
         }
@@ -759,7 +768,10 @@ fn validate_setting_key(value: &str) -> Result<()> {
             }),
         "the setting key is invalid"
     );
-    ensure!(!secret_like_key(value), "secret-like settings cannot be federated");
+    ensure!(
+        !secret_like_key(value),
+        "secret-like settings cannot be federated"
+    );
     Ok(())
 }
 
