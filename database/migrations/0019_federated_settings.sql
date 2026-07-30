@@ -57,7 +57,7 @@ CREATE INDEX IF NOT EXISTS idx_federated_values_dirty
 CREATE INDEX IF NOT EXISTS idx_federated_receipts_created
   ON federated_settings_sync_receipts (created_at_utc DESC,receipt_id DESC);
 
-INSERT OR REPLACE INTO federated_setting_catalog
+INSERT INTO federated_setting_catalog
 (setting_key,label,description,category,authority,value_type,default_value_json,allowed_values_json,visible_in_vp3,visible_in_homeserver,sensitivity,updated_at_utc)
 VALUES
 ('appearance.theme','Appearance','Use the same light, dark, or system appearance across VP3 and HomeServer.','appearance','shared','enum','"system"','["system","light","dark"]',1,1,'non_secret',strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -70,7 +70,19 @@ VALUES
 ('notifications.desktop_enabled','Desktop notifications','Allow local HomeServer desktop notifications.','notifications','homeserver','boolean','true',NULL,0,1,'non_secret',strftime('%Y-%m-%dT%H:%M:%fZ','now')),
 ('privacy.telemetry_level','Operational telemetry','Choose the non-content operational telemetry level shared with VP3.','privacy','shared','enum','"essential"','["off","essential","diagnostic"]',1,1,'non_secret',strftime('%Y-%m-%dT%H:%M:%fZ','now')),
 ('commerce.default_currency','Default commerce currency','Default ISO currency for new HomeServer-created commerce applications.','commerce','shared','enum','"usd"','["usd","cad","eur","gbp","aud"]',1,1,'non_secret',strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-('commerce.receipt_email_enabled','Commerce receipt email','Enable receipt email by default for newly authorized commerce applications.','commerce','shared','boolean','true',NULL,1,1,'non_secret',strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+('commerce.receipt_email_enabled','Commerce receipt email','Enable receipt email by default for newly authorized commerce applications.','commerce','shared','boolean','true',NULL,1,1,'non_secret',strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+ON CONFLICT(setting_key) DO UPDATE SET
+  label=excluded.label,
+  description=excluded.description,
+  category=excluded.category,
+  authority=excluded.authority,
+  value_type=excluded.value_type,
+  default_value_json=excluded.default_value_json,
+  allowed_values_json=excluded.allowed_values_json,
+  visible_in_vp3=excluded.visible_in_vp3,
+  visible_in_homeserver=excluded.visible_in_homeserver,
+  sensitivity=excluded.sensitivity,
+  updated_at_utc=excluded.updated_at_utc;
 
 INSERT OR IGNORE INTO schema_migrations (migration_key)
 VALUES ('0019_federated_settings');
