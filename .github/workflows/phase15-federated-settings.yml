@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: feature/phase-15-federated-settings-shared-control-center
-          fetch-depth: 2
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           components: rustfmt
@@ -151,7 +151,7 @@ struct ReceiptEvidence<'a> {
           cargo check -p microgifter-homeserver-service --all-targets --locked
       - name: Restore permanent workflow and commit product repair
         run: |
-          git show HEAD^:.github/workflows/phase15-federated-settings.yml > .github/workflows/phase15-federated-settings.yml
+          git show 263d55f24e3508bcc4b9bb979133880e266d9545:.github/workflows/phase15-federated-settings.yml > .github/workflows/phase15-federated-settings.yml
           git rm -f .github/workflows/phase15-lint-repair.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
