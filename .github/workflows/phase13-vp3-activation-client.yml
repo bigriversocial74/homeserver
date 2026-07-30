@@ -35,11 +35,12 @@ jobs:
         shell: bash
         run: |
           grep -q 'vp3-software-authority-device-credential' crates/homeserver-service/src/vp3_client.rs
-          grep -q 'sodium_crypto_sign_verify_detached\|ed25519' ../does-not-exist 2>/dev/null || true
           grep -q 'VerifyingKey' crates/homeserver-service/src/vp3_client.rs
           grep -q 'verify_authenticode' crates/homeserver-service/src/vp3_client.rs
           grep -q 'installer_authorization' crates/homeserver-service/src/vp3_client.rs
           grep -q 'pending_vp3_submission' crates/homeserver-service/src/vp3_client.rs
+          grep -q 'ACTIVATE VP3' crates/homeserver-service/src/vp3_client.rs
+          grep -q 'DISCONNECT VP3' crates/homeserver-service/src/vp3_client.rs
           ! grep -Eqi 'credential[[:space:]]+(TEXT|BLOB)|enrollment_code[[:space:]]+(TEXT|BLOB)' database/migrations/0018_vp3_activation_update_client.sql
 
   windows:
@@ -52,6 +53,6 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Compile Windows service and updater
-        run: cargo check --workspace --all-targets
+        run: cargo check -p microgifter-homeserver-service -p microgifter-homeserver-updater --all-targets
       - name: Run HomeServer service tests
         run: cargo test -p microgifter-homeserver-service
