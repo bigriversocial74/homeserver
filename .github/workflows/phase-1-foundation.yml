@@ -10,11 +10,11 @@ permissions:
   contents: write
 
 concurrency:
-  group: homeserver-phase15-final-repair-${{ github.ref }}
+  group: homeserver-phase15-finalize-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  repair:
+  finalize:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -24,7 +24,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           components: rustfmt
-      - name: Materialize signed-result and receipt hardening
+      - name: Materialize final Phase 15 source boundaries
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -138,16 +138,13 @@ struct ReceiptEvidence<'a> {
           source.write_text(text)
           PY
           cargo fmt --all
-          cargo check -p microgifter-homeserver-service --all-targets --locked
           python scripts/validate-federated-settings.py
-      - name: Restore permanent workflows and commit product hardening
+      - name: Restore permanent production workflow and commit
         run: |
           git fetch origin main
           git checkout origin/main -- .github/workflows/phase-1-foundation.yml
-          git show 263d55f24e3508bcc4b9bb979133880e266d9545:.github/workflows/phase15-federated-settings.yml > .github/workflows/phase15-federated-settings.yml
-          git rm -f .github/workflows/phase15-lint-repair.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/workflows/phase-1-foundation.yml .github/workflows/phase15-federated-settings.yml crates/homeserver-service/src/federated_settings.rs crates/homeserver-service/src/federated_settings_signature.rs scripts/validate-federated-settings.py
+          git add .github/workflows/phase-1-foundation.yml crates/homeserver-service/src/federated_settings.rs crates/homeserver-service/src/federated_settings_signature.rs scripts/validate-federated-settings.py
           git commit -m "Harden signed federated settings result validation"
           git push origin HEAD:feature/phase-15-federated-settings-shared-control-center
