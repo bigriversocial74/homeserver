@@ -1,4 +1,5 @@
 name: Phase 13 VP3 Activation Client
+# Exact-head certification for the VP3 software-authority cutover.
 
 on:
   push:
