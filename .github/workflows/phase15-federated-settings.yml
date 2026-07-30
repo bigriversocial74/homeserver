@@ -5,156 +5,41 @@ on:
   push:
     branches:
       - feature/phase-15-federated-settings-shared-control-center
+      - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: homeserver-phase15-repair-${{ github.ref }}
+  group: homeserver-phase15-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  repair:
-    runs-on: ubuntu-latest
+  contract:
+    runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: feature/phase-15-federated-settings-shared-control-center
-          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
-          components: rustfmt
-      - name: Refactor receipt evidence and harden signed result semantics
+          components: rustfmt, clippy
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Validate Phase 15 boundaries
+        run: python scripts/validate-federated-settings.py
+      - name: Validate frontend syntax and build
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          signature = Path('crates/homeserver-service/src/federated_settings_signature.rs')
-          signature_text = signature.read_text().replace('    use base64::Engine as _;\n', '', 1)
-          signature.write_text(signature_text)
-
-          source = Path('crates/homeserver-service/src/federated_settings.rs')
-          text = source.read_text()
-
-          if 'struct ReceiptEvidence' not in text:
-              identity_start = text.index('struct DeviceIdentity {')
-              identity_end = text.index('\n}\n', identity_start) + 3
-              receipt_struct = '''
-
-struct ReceiptEvidence<'a> {
-    request_id: &'a str,
-    direction: &'a str,
-    base_revision: u64,
-    applied_revision: u64,
-    snapshot_hash: Option<&'a str>,
-    result: &'a str,
-    conflict_count: u64,
-}
-'''
-              text = text[:identity_end] + receipt_struct + text[identity_end:]
-
-          def replace_call(current: str, marker: str, replacement: str) -> str:
-              marker_at = current.index(marker)
-              call_start = current.rfind('    record_receipt(', 0, marker_at)
-              if call_start < 0:
-                  raise SystemExit(f'receipt call start not found for {marker}')
-              call_end = current.index('    )?;', marker_at) + len('    )?;')
-              return current[:call_start] + replacement + current[call_end:]
-
-          if 'direction: "local_update"' not in text:
-              text = replace_call(
-                  text,
-                  '"local_update"',
-                  '''    let local_request_id = format!("LOCAL-{}", Uuid::new_v4().simple());
-    record_receipt(
-        &transaction,
-        ReceiptEvidence {
-            request_id: &local_request_id,
-            direction: "local_update",
-            base_revision: cloud_revision,
-            applied_revision: cloud_revision,
-            snapshot_hash: None,
-            result: "applied",
-            conflict_count: 0,
-        },
-    )?;''',
-              )
-
-          if 'direction: "device_sync"' not in text:
-              text = replace_call(
-                  text,
-                  '"device_sync"',
-                  '''    record_receipt(
-        &transaction,
-        ReceiptEvidence {
-            request_id,
-            direction: "device_sync",
-            base_revision,
-            applied_revision: cloud.max_revision,
-            snapshot_hash: Some(&cloud.snapshot_hash),
-            result,
-            conflict_count: cloud.conflicts.len() as u64,
-        },
-    )?;''',
-              )
-
-          helper_start = text.index('fn record_receipt(')
-          helper_end = text.index('\nfn canonical_json(', helper_start)
-          helper = '''fn record_receipt(connection: &Connection, evidence: ReceiptEvidence<'_>) -> Result<()> {
-    connection.execute(
-        "INSERT INTO federated_settings_sync_receipts (receipt_id,request_id,direction,base_revision,applied_revision,snapshot_hash,result,conflict_count,created_at_utc) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
-        params![
-            Uuid::new_v4().to_string(),
-            evidence.request_id,
-            evidence.direction,
-            evidence.base_revision as i64,
-            evidence.applied_revision as i64,
-            evidence.snapshot_hash,
-            evidence.result,
-            evidence.conflict_count as i64,
-        ],
-    )?;
-    Ok(())
-}
-'''
-          text = text[:helper_start] + helper + text[helper_end:]
-
-          old_conflict = '''        if conflict.reason == "revision" {
-            ensure!(
-                conflict.current_revision == setting.revision,
-                "VP3 federated settings revision conflict does not match the signed setting"
-            );
-        }
-'''
-          new_conflict = '''        if conflict.reason == "vp3_authority" {
-            ensure!(
-                setting.authority == "vp3" && !setting.editable_in_homeserver,
-                "VP3 federated settings authority conflict does not match the signed setting"
-            );
-        } else {
-            ensure!(
-                setting.authority != "vp3"
-                    && setting.editable_in_homeserver
-                    && conflict.current_revision == setting.revision,
-                "VP3 federated settings revision conflict does not match the signed setting"
-            );
-        }
-'''
-          if old_conflict in text:
-              text = text.replace(old_conflict, new_conflict, 1)
-          elif 'authority conflict does not match the signed setting' not in text:
-              raise SystemExit('signed conflict semantic anchor not found')
-
-          source.write_text(text)
-          PY
-          cargo fmt --all
-          cargo check -p microgifter-homeserver-service --all-targets --locked
-      - name: Restore permanent workflow and commit product repair
-        run: |
-          git show 263d55f24e3508bcc4b9bb979133880e266d9545:.github/workflows/phase15-federated-settings.yml > .github/workflows/phase15-federated-settings.yml
-          git rm -f .github/workflows/phase15-lint-repair.yml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/workflows/phase15-federated-settings.yml crates/homeserver-service/src/federated_settings.rs crates/homeserver-service/src/federated_settings_signature.rs
-          git commit -m "Harden signed federated settings result semantics"
-          git push origin HEAD:feature/phase-15-federated-settings-shared-control-center
+          node --check src/federated-settings.js
+          npm run check:frontend
+          npm run build
+      - name: Validate Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Compile and test HomeServer service
+        run: cargo test -p microgifter-homeserver-service
+      - name: Strict HomeServer service lint
+        run: cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings
