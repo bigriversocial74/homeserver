@@ -7,6 +7,7 @@ use url::Url;
 const DEFAULT_SERVER_NAME: &str = "Microgifter HomeServer";
 const DEFAULT_UPDATE_MANIFEST_URL: &str =
     "https://updates.microgifter.com/homeserver/stable/manifest.json";
+const DEFAULT_VP3_BASE_URL: &str = "https://vp3.me";
 const MAX_SERVER_NAME_CHARS: usize = 128;
 
 #[derive(Debug, Clone)]
@@ -24,6 +25,11 @@ pub struct AppConfig {
     pub update_rollback_dir: PathBuf,
     pub update_installed_dir: PathBuf,
     pub update_manifest_url: String,
+    pub vp3_base_url: String,
+    pub vp3_lease_public_key_base64: String,
+    pub vp3_lease_key_id: String,
+    pub vp3_release_public_key_base64: String,
+    pub vp3_release_key_id: String,
     pub server_name: String,
 }
 
@@ -78,7 +84,11 @@ impl AppConfig {
         let server_name = sanitize_server_name(&raw_server_name);
         let update_manifest_url = std::env::var("MG_HOMESERVER_UPDATE_MANIFEST_URL")
             .unwrap_or_else(|_| DEFAULT_UPDATE_MANIFEST_URL.to_owned());
-        validate_update_manifest_url(&update_manifest_url)?;
+        validate_https_url(&update_manifest_url, "HomeServer update manifest")?;
+        let vp3_base_url = std::env::var("MG_HOMESERVER_VP3_BASE_URL")
+            .unwrap_or_else(|_| DEFAULT_VP3_BASE_URL.to_owned());
+        validate_https_url(&vp3_base_url, "VP3 software authority")?;
+        let vp3_base_url = vp3_base_url.trim_end_matches('/').to_owned();
 
         Ok(Self {
             database_path: data_dir.join("homeserver.sqlite3"),
@@ -94,6 +104,19 @@ impl AppConfig {
             update_rollback_dir,
             update_installed_dir,
             update_manifest_url,
+            vp3_base_url,
+            vp3_lease_public_key_base64: std::env::var(
+                "MG_HOMESERVER_VP3_LEASE_PUBLIC_KEY_BASE64",
+            )
+            .unwrap_or_default(),
+            vp3_lease_key_id: std::env::var("MG_HOMESERVER_VP3_LEASE_KEY_ID")
+                .unwrap_or_else(|_| "homeserver-lease-ed25519-v1".to_owned()),
+            vp3_release_public_key_base64: std::env::var(
+                "MG_HOMESERVER_VP3_RELEASE_PUBLIC_KEY_BASE64",
+            )
+            .unwrap_or_default(),
+            vp3_release_key_id: std::env::var("MG_HOMESERVER_VP3_RELEASE_KEY_ID")
+                .unwrap_or_else(|_| "release-ed25519-v1".to_owned()),
             server_name,
         })
     }
@@ -137,19 +160,17 @@ fn sanitize_server_name(value: &str) -> String {
     }
 }
 
-fn validate_update_manifest_url(value: &str) -> Result<()> {
-    let url = Url::parse(value).context("HomeServer update manifest URL is invalid")?;
-    ensure!(
-        url.scheme() == "https",
-        "HomeServer update manifest URL must use HTTPS"
-    );
-    ensure!(
-        url.host_str().is_some(),
-        "HomeServer update manifest host is missing"
-    );
+fn validate_https_url(value: &str, label: &str) -> Result<()> {
+    let url = Url::parse(value).with_context(|| format!("{label} URL is invalid"))?;
+    ensure!(url.scheme() == "https", "{label} URL must use HTTPS");
+    ensure!(url.host_str().is_some(), "{label} URL host is missing");
     ensure!(
         url.username().is_empty() && url.password().is_none(),
-        "HomeServer update manifest URL cannot contain credentials"
+        "{label} URL cannot contain credentials"
+    );
+    ensure!(
+        url.query().is_none() && url.fragment().is_none(),
+        "{label} base URL cannot contain a query or fragment"
     );
     Ok(())
 }
@@ -178,13 +199,11 @@ mod tests {
     }
 
     #[test]
-    fn update_manifest_must_use_https() {
-        assert!(validate_update_manifest_url(DEFAULT_UPDATE_MANIFEST_URL).is_ok());
-        assert!(
-            validate_update_manifest_url("http://updates.microgifter.com/manifest.json").is_err()
-        );
-        assert!(
-            validate_update_manifest_url("https://user:secret@example.com/manifest.json").is_err()
-        );
+    fn authority_urls_must_use_https() {
+        assert!(validate_https_url(DEFAULT_UPDATE_MANIFEST_URL, "manifest").is_ok());
+        assert!(validate_https_url(DEFAULT_VP3_BASE_URL, "VP3").is_ok());
+        assert!(validate_https_url("http://vp3.me", "VP3").is_err());
+        assert!(validate_https_url("https://user:secret@example.com", "VP3").is_err());
+        assert!(validate_https_url("https://vp3.me?override=1", "VP3").is_err());
     }
 }
