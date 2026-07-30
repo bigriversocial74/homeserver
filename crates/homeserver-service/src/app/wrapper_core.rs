@@ -17,7 +17,7 @@ use url::Url;
 use uuid::Uuid;
 
 const MIGRATION: &str =
-    include_str!("../../../database/migrations/0020_wrapper_identity_and_pairing.sql");
+    include_str!("../../../../database/migrations/0020_wrapper_identity_and_pairing.sql");
 const MIGRATION_KEY: &str = "0020_wrapper_identity_and_pairing";
 const CREDENTIAL_SERVICE: &str = "MicrogifterHomeServer";
 const MAX_CONTROL_BODY_BYTES: usize = 64 * 1024;
@@ -596,7 +596,7 @@ fn backfill_legacy_connections(connection: &Connection) -> Result<()> {
         |row| row.get(0),
     )?;
     let transaction = connection.unchecked_transaction()?;
-    let mut wrappers = HashMap::new();
+    let mut wrappers: HashMap<String, String> = HashMap::new();
     for legacy in &legacy_connections {
         let wrapper_id = if let Some(wrapper_id) = wrappers.get(&legacy.provider_key) {
             wrapper_id.clone()
@@ -740,7 +740,7 @@ fn read_legacy_connections(connection: &Connection) -> Result<Vec<LegacyConnecti
     let mut statement = connection.prepare(
         "SELECT connection_id,provider_key,display_name,cloud_base_url,device_id,public_key_base64,credential_key,state,paired_at_utc,last_success_utc FROM cloud_connections ORDER BY created_at_utc,connection_id",
     )?;
-    statement
+    let rows = statement
         .query_map([], |row| {
             Ok(LegacyConnection {
                 connection_id: row.get(0)?,
@@ -755,8 +755,8 @@ fn read_legacy_connections(connection: &Connection) -> Result<Vec<LegacyConnecti
                 last_seen_at_utc: row.get(9)?,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 fn legacy_connection_by_id(
@@ -790,7 +790,7 @@ fn read_wrappers(connection: &Connection) -> Result<Vec<WrapperIdentitySummary>>
     let mut statement = connection.prepare(
         "SELECT wrapper_id,wrapper_key,display_name,wrapper_kind,protocol_version,state,created_at_utc,updated_at_utc,revoked_at_utc FROM wrapper_identities ORDER BY display_name,wrapper_id LIMIT ?1",
     )?;
-    statement
+    let rows = statement
         .query_map(params![MAX_WRAPPERS], |row| {
             Ok(WrapperIdentitySummary {
                 wrapper_id: row.get(0)?,
@@ -804,15 +804,15 @@ fn read_wrappers(connection: &Connection) -> Result<Vec<WrapperIdentitySummary>>
                 revoked_at_utc: row.get(8)?,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 fn read_connections(connection: &Connection) -> Result<Vec<WrapperConnectionSummary>> {
     let mut statement = connection.prepare(
         "SELECT connection_id,wrapper_id,remote_connection_id,remote_origin,contract_version,lifecycle_state,credential_reference,grant_revision,legacy_provider_key,legacy_connection_id,paired_at_utc,last_seen_at_utc,revoked_at_utc,created_at_utc,updated_at_utc FROM wrapper_connections ORDER BY updated_at_utc DESC,connection_id DESC LIMIT ?1",
     )?;
-    statement
+    let rows = statement
         .query_map(params![MAX_CONNECTIONS], |row| {
             let grant_revision: i64 = row.get(7)?;
             Ok(WrapperConnectionSummary {
@@ -833,15 +833,15 @@ fn read_connections(connection: &Connection) -> Result<Vec<WrapperConnectionSumm
                 updated_at_utc: row.get(14)?,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 fn read_devices(connection: &Connection) -> Result<Vec<WrapperDeviceSummary>> {
     let mut statement = connection.prepare(
         "SELECT wrapper_device_id,wrapper_id,connection_id,device_public_id,installation_id,public_key_base64,credential_reference,state,last_seen_at_utc,created_at_utc,updated_at_utc,revoked_at_utc FROM wrapper_devices ORDER BY updated_at_utc DESC,wrapper_device_id DESC LIMIT ?1",
     )?;
-    statement
+    let rows = statement
         .query_map(params![MAX_DEVICES], |row| {
             Ok(WrapperDeviceSummary {
                 wrapper_device_id: row.get(0)?,
@@ -858,15 +858,15 @@ fn read_devices(connection: &Connection) -> Result<Vec<WrapperDeviceSummary>> {
                 revoked_at_utc: row.get(11)?,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 fn read_pairing_attempts(connection: &Connection) -> Result<Vec<WrapperPairingAttemptSummary>> {
     let mut statement = connection.prepare(
         "SELECT attempt_id,wrapper_id,request_id,remote_origin,device_display_name,requested_capabilities_json,state,expires_at_utc,result_connection_id,error_code,created_at_utc,completed_at_utc,updated_at_utc FROM wrapper_pairing_attempts ORDER BY created_at_utc DESC,attempt_id DESC LIMIT 250",
     )?;
-    statement
+    let rows = statement
         .query_map([], |row| {
             let capabilities_json: String = row.get(5)?;
             let requested_capabilities =
@@ -887,8 +887,8 @@ fn read_pairing_attempts(connection: &Connection) -> Result<Vec<WrapperPairingAt
                 updated_at_utc: row.get(12)?,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 fn wrapper_by_key(
