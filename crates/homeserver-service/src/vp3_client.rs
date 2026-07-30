@@ -1378,7 +1378,7 @@ fn record_authority_error(state: &AppState, code: &str, error: anyhow::Error) ->
 
 fn record_runtime_error(state: &AppState, error: &anyhow::Error) {
     if let Ok(connection) = state.connection() {
-        let expired = connection.query_row("SELECT vp3_lease_expires_at_utc FROM homeserver_software_authority WHERE singleton_id=1", [], |row| row.get::<_, Option<String>>(0)).ok().flatten().and_then(|value| parse_remote_time(&value).ok()).is_none_or(|expires| expires <= Utc::now());
+        let expired = connection.query_row("SELECT vp3_lease_expires_at_utc FROM homeserver_software_authority WHERE singleton_id=1", [], |row| row.get::<_, Option<String>>(0)).ok().flatten().and_then(|value| parse_remote_time(&value).ok()).map_or(true, |expires| expires <= Utc::now());
         let _ = connection.execute("UPDATE homeserver_software_authority SET cutover_state=CASE WHEN ?1=1 THEN 'error' ELSE cutover_state END,update_eligible=CASE WHEN ?1=1 THEN 0 ELSE update_eligible END,last_error_code=?2,updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE singleton_id=1", params![if expired {1} else {0}, bounded_error(error)]);
     }
 }
