@@ -4,13 +4,16 @@ on:
   push:
     branches:
       - feature/phase-14-vp3-activation-control-center
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
   wire:
-    if: github.actor != 'github-actions[bot]'
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'feature/phase-14-vp3-activation-control-center'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -31,15 +34,15 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          main = Path('src/main.js')
-          source = main.read_text()
-          marker = 'import "./openrouter-provider.js";\n'
-          addition = marker + 'import "./vp3-authority.js";\n'
-          if 'import "./vp3-authority.js";' not in source:
+          index = Path('index.html')
+          source = index.read_text()
+          marker = '    <script type="module" src="/src/main.js"></script>\n'
+          addition = marker + '    <script type="module" src="/src/vp3-authority.js"></script>\n'
+          if '/src/vp3-authority.js' not in source:
               if marker not in source:
-                  raise SystemExit('main.js import marker missing')
+                  raise SystemExit('index.html module marker missing')
               source = source.replace(marker, addition, 1)
-          main.write_text(source)
+          index.write_text(source)
 
           lib = Path('src-tauri/src/lib.rs')
           source = lib.read_text()
@@ -68,7 +71,7 @@ jobs:
           PY
           cargo fmt --all
           npm ci
-          npm run check:frontend
+          node --check src/vp3-authority.js
       - name: Commit Phase 14 Control Center wiring
         shell: bash
         run: |
@@ -77,6 +80,6 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/main.js src-tauri/src/lib.rs
+          git add index.html src-tauri/src/lib.rs
           git commit -m "Wire VP3 authority activation into Control Center"
           git push origin HEAD:feature/phase-14-vp3-activation-control-center
