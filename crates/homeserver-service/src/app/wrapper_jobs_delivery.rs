@@ -61,7 +61,7 @@ pub fn acknowledge_delivery(
         matches!(state.as_str(), "pending" | "in_flight"),
         "wrapper delivery is not awaiting acknowledgement"
     );
-    ensure!(stored_hash == receipt_hash, "delivery receipt hash does not match");
+    ensure!(stored_hash == receipt_hash, "receipt_hash does not match");
     let now = now_utc();
     transaction.execute(
         "UPDATE wrapper_job_deliveries SET state='acknowledged',acknowledged_at_utc=?1,updated_at_utc=?1 WHERE delivery_id=?2 AND connection_id=?3",
