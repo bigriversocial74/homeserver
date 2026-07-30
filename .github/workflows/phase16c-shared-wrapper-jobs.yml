@@ -8,13 +8,41 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: homeserver-phase16c-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  format_repair:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/phase-16c-shared-jobs-events-receipts'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          ref: feature/phase-16c-shared-jobs-events-receipts
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+      - name: Apply canonical Rust formatting
+        run: cargo fmt --all
+      - name: Commit formatter-only repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates
+          if git diff --cached --quiet; then
+            echo 'Rust source is already formatted.'
+            exit 0
+          fi
+          git commit -m 'Apply canonical Rust formatting to Phase 16C'
+          git push origin HEAD:feature/phase-16c-shared-jobs-events-receipts
+
   contract:
     runs-on: windows-latest
     timeout-minutes: 55
