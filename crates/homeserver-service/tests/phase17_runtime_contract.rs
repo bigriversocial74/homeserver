@@ -120,7 +120,7 @@ fn phase17_migration_seeds_only_closed_world_tools() {
 }
 
 #[test]
-fn phase17_events_and_receipts_are_immutable() {
+fn phase17_events_receipts_and_audit_records_are_immutable() {
     let connection = initialize_contract_database();
     connection
         .execute_batch(
@@ -168,6 +168,18 @@ fn phase17_events_and_receipts_are_immutable() {
                'agent.runtime_step_started','success','worker','runtime','test','{}',
                'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
                '2026-01-01T00:00:00.000Z'
+             );
+             INSERT INTO agent_runtime_audit_records (
+               audit_record_id,plan_id,step_id,job_id,agent_id,input_hash,label,
+               created_at_utc
+             ) VALUES (
+               'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+               '66666666-6666-4666-8666-666666666666',
+               '88888888-8888-4888-8888-888888888888',
+               '55555555-5555-4555-8555-555555555555',
+               '44444444-4444-4444-8444-444444444444',
+               'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+               'Audit evidence','2026-01-01T00:00:00.000Z'
              );",
         )
         .expect("insert runtime evidence fixtures");
@@ -203,6 +215,12 @@ fn phase17_events_and_receipts_are_immutable() {
         .execute(
             "UPDATE agent_runtime_receipts SET result_code='changed' WHERE receipt_id=?1",
             params!["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"],
+        )
+        .is_err());
+    assert!(connection
+        .execute(
+            "UPDATE agent_runtime_audit_records SET label='changed' WHERE audit_record_id=?1",
+            params!["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"],
         )
         .is_err());
 }
