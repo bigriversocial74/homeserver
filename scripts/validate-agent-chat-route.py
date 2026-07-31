@@ -6,6 +6,7 @@ main = (root / "src" / "main.js").read_text(encoding="utf-8")
 chat = (root / "src" / "homeserver-agent-chat.js").read_text(encoding="utf-8")
 css = (root / "src" / "homeserver-agent-chat.css").read_text(encoding="utf-8")
 legacy = (root / "src" / "agent-workspace.js").read_text(encoding="utf-8")
+durable = (root / "src" / "durable-activity-ui.js").read_text(encoding="utf-8")
 observer_modules = {
     "Operational Data": (root / "src" / "operational-data.js").read_text(encoding="utf-8"),
     "Review Intelligence": (root / "src" / "review-intelligence.js").read_text(encoding="utf-8"),
@@ -42,6 +43,15 @@ required_css = [
     'padding:34px max(30px,calc((100% - 980px)/2)) 230px',
     '.hs-chat-composer{position:absolute',
 ]
+required_durable = [
+    'window.addEventListener("homeserver:rendered", queueInject)',
+    'const host = document.querySelector(".hs-chat-stream")',
+    'if (!current && !host) return false',
+    'current.outerHTML = markup',
+    'host.insertAdjacentHTML("afterbegin", markup)',
+    'loadError = String(error?.message || error || "activity history unavailable")',
+    'if (!injected && isAgentPage() && attempt < 20)',
+]
 for value in required_main:
     if value not in main:
         raise SystemExit(f"Missing resilient Agent Chat shell contract: {value}")
@@ -51,13 +61,22 @@ for value in required_chat:
 for value in required_css:
     if value not in css:
         raise SystemExit(f"Missing Agent Chat layout contract: {value}")
+for value in required_durable:
+    if value not in durable:
+        raise SystemExit(f"Missing durable Agent activity lifecycle contract: {value}")
 
 if '/src/agent-workspace.js' in index:
     raise SystemExit("Legacy Agent Workspace is still loaded beside Agent Chat")
+if '/src/durable-activity-ui.js' not in index:
+    raise SystemExit("Durable Agent activity UI is not loaded")
 if 'const legacyAgentWorkspaceDisabled = true;' not in legacy:
     raise SystemExit("Legacy Agent Workspace is not deterministically disabled")
 if 'MutationObserver' in legacy:
     raise SystemExit("Legacy Agent Workspace observer remains")
+if 'MutationObserver' in durable:
+    raise SystemExit("Durable Agent activity still races the Agent route through an app-wide observer")
+if 'current.hasAttribute("data-durable-activity-card")' in durable:
+    raise SystemExit("Durable Agent activity still refuses to repaint an existing card")
 
 for name, source in observer_modules.items():
     if 'MutationObserver' in source:
@@ -85,4 +104,4 @@ if 'window.setTimeout(() => mount(true), 0)' in chat:
 if 'event.target.closest("[data-page]")' in main:
     raise SystemExit("Competing delegated Control Center router remains")
 
-print("HomeServer uses one coalesced Agent route lifecycle with no duplicate hash owner or app-wide observer network.")
+print("HomeServer uses one coalesced Agent route lifecycle with a repaintable durable activity card and no duplicate app-wide observer network.")
