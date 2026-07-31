@@ -13,6 +13,8 @@ on:
       - scripts/validate-evidence-archive.py
       - src-tauri/Cargo.toml
       - src-tauri/src/lib.rs
+      - src-tauri/src/ollama_install.rs
+      - src-tauri/src/runtime.rs
       - docs/phase-21-tamper-evident-evidence-archive.md
 
 permissions:
@@ -77,9 +79,9 @@ jobs:
         run: cargo test -p microgifter-homeserver-service
       - name: Test Phase 21 archive contract
         run: cargo test -p microgifter-homeserver-service --test phase21_evidence_archive_contract
-      - name: Prepare CI-only Control Center sidecar placeholders
+      - name: Prepare CI-only Control Center resources
         run: |
-          mkdir -p src-tauri/resources
+          mkdir -p src-tauri/resources src-tauri/icons
           : > "$RUNNER_TEMP/phase21-created-resource-placeholders"
           for resource in \
             src-tauri/resources/microgifter-homeserver-service.exe \
@@ -91,6 +93,34 @@ jobs:
               printf '%s\n' "$resource" >> "$RUNNER_TEMP/phase21-created-resource-placeholders"
             fi
           done
+          if [ ! -e src-tauri/icons/icon.png ]; then
+            python - <<'PY'
+          import struct
+          import zlib
+          from pathlib import Path
+
+          def chunk(kind: bytes, payload: bytes) -> bytes:
+              return (
+                  struct.pack(">I", len(payload))
+                  + kind
+                  + payload
+                  + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+              )
+
+          width = 32
+          height = 32
+          row = b"\x00" + (b"\x00\x00\x00\x00" * width)
+          pixels = row * height
+          png = (
+              b"\x89PNG\r\n\x1a\n"
+              + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+              + chunk(b"IDAT", zlib.compress(pixels, 9))
+              + chunk(b"IEND", b"")
+          )
+          Path("src-tauri/icons/icon.png").write_bytes(png)
+          PY
+            printf '%s\n' src-tauri/icons/icon.png >> "$RUNNER_TEMP/phase21-created-resource-placeholders"
+          fi
       - name: Compile Control Center desktop
         shell: bash
         run: |
@@ -110,16 +140,16 @@ jobs:
           raw_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
           ansi = re.compile(r"\x1b\[[0-9;]*m")
           lines = [ansi.sub("", line) for line in raw_lines]
-          hits = [index for index, line in enumerate(lines) if "error[E0433]" in line]
+          hits = [index for index, line in enumerate(lines) if line.startswith("error")]
           if hits:
-              for block, index in enumerate(hits[:2], start=1):
-                  print(f"--- E0433 block {block} ---")
+              for block, index in enumerate(hits[:4], start=1):
+                  print(f"--- compiler error block {block} ---")
                   start = max(0, index - 4)
                   end = min(len(lines), index + 22)
                   for line_number in range(start, end):
                       print(f"{line_number + 1}:{lines[line_number]}")
           else:
-              print("No E0433 marker found; printing final 120 compiler lines.")
+              print("No compiler error marker found; printing final 120 compiler lines.")
               start = max(0, len(lines) - 120)
               for line_number in range(start, len(lines)):
                   print(f"{line_number + 1}:{lines[line_number]}")
