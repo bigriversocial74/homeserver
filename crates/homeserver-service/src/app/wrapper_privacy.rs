@@ -936,41 +936,43 @@ fn snapshot(state: &AppState, connection_id: Option<&str>) -> Result<PrivacySnap
 }
 fn read_data_classes(c: &Connection) -> Result<Vec<DataClassSummary>> {
     let mut s=c.prepare("SELECT class_key,description,sensitivity_tier,wrapper_egress_mode,default_retention_days,state FROM data_classification_catalog ORDER BY class_key")?;
-    s.query_map([], |r| {
-        let d: i64 = r.get(4)?;
-        Ok(DataClassSummary {
-            class_key: r.get(0)?,
-            description: r.get(1)?,
-            sensitivity_tier: r.get(2)?,
-            wrapper_egress_mode: r.get(3)?,
-            default_retention_days: d.max(0) as u32,
-            state: r.get(5)?,
-        })
-    })?
-    .collect::<rusqlite::Result<Vec<_>>>()
-    .map_err(Into::into)
+    let rows = s
+        .query_map([], |r| {
+            let d: i64 = r.get(4)?;
+            Ok(DataClassSummary {
+                class_key: r.get(0)?,
+                description: r.get(1)?,
+                sensitivity_tier: r.get(2)?,
+                wrapper_egress_mode: r.get(3)?,
+                default_retention_days: d.max(0) as u32,
+                state: r.get(5)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 fn read_resources(c: &Connection) -> Result<Vec<PrivateResourceSummary>> {
     let mut s=c.prepare("SELECT r.resource_id,r.resource_namespace,r.resource_type,r.local_source_id,r.local_display_name,r.source_hash,r.state,r.resource_revision,c.class_key,c.classification_revision,r.updated_at_utc FROM private_resource_catalog r JOIN private_resource_classifications c ON c.resource_id=r.resource_id AND c.state='active' ORDER BY r.updated_at_utc DESC,r.resource_id LIMIT 500")?;
-    s.query_map([], |r| {
-        let rr: i64 = r.get(7)?;
-        let cr: i64 = r.get(9)?;
-        Ok(PrivateResourceSummary {
-            resource_id: r.get(0)?,
-            resource_namespace: r.get(1)?,
-            resource_type: r.get(2)?,
-            local_source_id: r.get(3)?,
-            local_display_name: r.get(4)?,
-            source_hash: r.get(5)?,
-            state: r.get(6)?,
-            resource_revision: rr.max(0) as u64,
-            class_key: r.get(8)?,
-            classification_revision: cr.max(0) as u64,
-            updated_at_utc: r.get(10)?,
-        })
-    })?
-    .collect::<rusqlite::Result<Vec<_>>>()
-    .map_err(Into::into)
+    let rows = s
+        .query_map([], |r| {
+            let rr: i64 = r.get(7)?;
+            let cr: i64 = r.get(9)?;
+            Ok(PrivateResourceSummary {
+                resource_id: r.get(0)?,
+                resource_namespace: r.get(1)?,
+                resource_type: r.get(2)?,
+                local_source_id: r.get(3)?,
+                local_display_name: r.get(4)?,
+                source_hash: r.get(5)?,
+                state: r.get(6)?,
+                resource_revision: rr.max(0) as u64,
+                class_key: r.get(8)?,
+                classification_revision: cr.max(0) as u64,
+                updated_at_utc: r.get(10)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 fn read_selectors(c: &Connection, connection_id: Option<&str>) -> Result<Vec<SelectorSummary>> {
     let sql = if connection_id.is_some() {
@@ -1469,7 +1471,7 @@ fn scan_for_egress(
             ensure!(map.len() <= 200, "egress object is too large");
             let mut out = Map::new();
             for (key, item) in map {
-                let norm = key.to_ascii_lowercase().replace('-', '_');
+                let norm = key.to_ascii_lowercase().replace('-', "_");
                 let child_path = format!("{path}.{key}");
                 if is_private_key(&norm) {
                     if matches!(
@@ -1504,7 +1506,7 @@ fn scan_for_egress(
                 if denied.is_none() {
                     denied = child.denied_category
                 }
-                out.insert(key.clone(), child.value)
+                out.insert(key.clone(), child.value);
             }
             Value::Object(out)
         }
@@ -1628,9 +1630,10 @@ fn classification_set_hash_tx(tx: &Transaction<'_>, selector: &str) -> Result<St
 }
 fn selector_resource_ids(c: &Connection, selector: &str) -> Result<Vec<String>> {
     let mut s=c.prepare("SELECT resource_id FROM private_selector_resources WHERE selector_id=?1 ORDER BY resource_id")?;
-    s.query_map(params![selector], |r| r.get(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+    let rows = s
+        .query_map(params![selector], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 fn validate_remote_model(s: &SelectorAuthority, provider: Option<&str>) -> Result<()> {
     match s.remote_model_mode.as_str() {
