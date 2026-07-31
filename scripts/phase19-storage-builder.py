@@ -114,7 +114,7 @@ assertion_anchor = '''        "DELETE FROM agent_schedule_audit_events WHERE aud
 assertion_patch = '''        "DELETE FROM agent_schedule_audit_events WHERE audit_event_id='99999999-9999-4999-8999-999999999999'",
         "UPDATE agent_schedule_definitions SET authority_hash='dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' WHERE schedule_id='11111111-1111-4111-8111-111111111111'",
         "DELETE FROM agent_schedule_definitions WHERE schedule_id='11111111-1111-4111-8111-111111111111'",
-        "UPDATE agent_schedule_private_templates SET template_json='{\"changed\":true}' WHERE schedule_id='11111111-1111-4111-8111-111111111111'",
+        r#"UPDATE agent_schedule_private_templates SET template_json='{"changed":true}' WHERE schedule_id='11111111-1111-4111-8111-111111111111'"#,
         "DELETE FROM agent_schedule_private_templates WHERE schedule_id='11111111-1111-4111-8111-111111111111'",
         "UPDATE agent_schedule_runs SET result_code='changed' WHERE run_id='77777777-7777-4777-8777-777777777777'",
         "DELETE FROM agent_schedule_runs WHERE run_id='77777777-7777-4777-8777-777777777777'",
