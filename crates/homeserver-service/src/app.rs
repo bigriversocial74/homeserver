@@ -48,6 +48,9 @@ mod wrapper_agents;
 #[path = "app/wrapper_privacy.rs"]
 mod wrapper_privacy;
 
+#[path = "app/wrapper_runtime.rs"]
+mod wrapper_runtime;
+
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
     mcp_runtime, microgifter_connection, model_center, openrouter_provider, operational_data,
@@ -93,6 +96,7 @@ pub async fn run(
     knowledge_vault::initialize(&connection, &config)?;
     wrapper_privacy::initialize(&connection)?;
     wrapper_privacy::maintain_history(&connection)?;
+    wrapper_runtime::initialize(&connection)?;
     document_extraction::initialize(&connection)?;
     model_center::initialize(&connection)?;
     openrouter_provider::initialize(&connection)?;
@@ -166,6 +170,8 @@ pub async fn run(
     let vp3_authority_worker = tokio::spawn(vp3_client::run(state.clone(), shutdown.clone()));
     let pod_provider_worker =
         tokio::spawn(pod_provider_runtime::run(state.clone(), shutdown.clone()));
+    let agent_tool_runtime_worker =
+        tokio::spawn(wrapper_runtime::run(state.clone(), shutdown.clone()));
     let review_intelligence_worker = tokio::spawn(run_review_intelligence_scheduler(
         state.clone(),
         shutdown.clone(),
@@ -199,6 +205,7 @@ pub async fn run(
             .merge(wrapper_jobs::router(state.clone()))
             .merge(wrapper_agents::router(state.clone()))
             .merge(wrapper_privacy::router(state.clone()))
+            .merge(wrapper_runtime::router(state.clone()))
             .merge(knowledge_vault::router(state.clone()))
             .merge(model_center::router(state.clone()))
             .merge(openrouter_provider::router(state.clone()))
@@ -225,6 +232,7 @@ pub async fn run(
     microgifter_connection_worker.abort();
     vp3_authority_worker.abort();
     pod_provider_worker.abort();
+    agent_tool_runtime_worker.abort();
     review_intelligence_worker.abort();
     result?;
     Ok(())
@@ -268,6 +276,9 @@ async fn run_backup_scheduler(state: Arc<AppState>, mut shutdown: watch::Receive
                         }
                         if let Err(error) = wrapper_agents::maintain_history(&connection) {
                             warn!(?error, "scheduled wrapper agent retention failed");
+                        }
+                        if let Err(error) = wrapper_runtime::maintain_history(&connection) {
+                            warn!(?error, "scheduled agent tool runtime retention failed");
                         }
                     }
                     scheduled_state.create_automatic_backup_if_due()
