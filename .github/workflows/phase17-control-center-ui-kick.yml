@@ -1,0 +1,50 @@
+name: Phase 17 Control Center UI Kick
+
+on:
+  push:
+    branches:
+      - feature/phase-17-authorized-agent-tool-runtime
+    paths:
+      - .github/workflows/phase17-control-center-ui-kick.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-17-authorized-agent-tool-runtime
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+      - name: Apply reviewed Control Center patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          source = Path('.github/workflows/phase17-control-center-ui-once.yml').read_text(encoding='utf-8')
+          start_marker = "          python - <<'PY'\n"
+          end_marker = "          PY\n          cargo fmt --all\n"
+          start = source.index(start_marker) + len(start_marker)
+          end = source.index(end_marker, start)
+          script = dedent(source[start:end])
+          Path('/tmp/phase17_control_center.py').write_text(script, encoding='utf-8')
+          PY
+          python /tmp/phase17_control_center.py
+          cargo fmt --all
+          node --check src/agent-runtime-control-center.js
+          python scripts/validate-wrapper-runtime.py
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/phase17-control-center-ui-once.yml
+          git rm .github/workflows/phase17-control-center-ui-kick.yml
+          git add -A
+          git commit -m "Add Phase 17 Agent Runtime Control Center"
+          git push origin HEAD:feature/phase-17-authorized-agent-tool-runtime
