@@ -23,6 +23,23 @@ if text.count(scan) != 2:
     raise RuntimeError(f"unexpected checkpoint scan count: {text.count(scan)}")
 text = text.replace(scan, owned)
 
+pair_scan = """        statement
+            .query_map(params![plan_id, sequence], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };"""
+pair_owned = """        let rows = statement
+            .query_map(params![plan_id, sequence], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };"""
+if text.count(pair_scan) != 1:
+    raise RuntimeError(f"unexpected execution receipt scan count: {text.count(pair_scan)}")
+text = text.replace(pair_scan, pair_owned, 1)
+
 old = """    if transaction
         .query_row(
             "SELECT compensation_receipt_id FROM agent_supervised_compensation_receipts WHERE checkpoint_id=?1",
