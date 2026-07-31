@@ -56,12 +56,16 @@ jobs:
           python scripts/validate-wrapper-runtime.py
           npm run check:frontend
           npm run build
-      - name: Validate native archive and desktop implementation
+      - name: Validate Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Test HomeServer service
+        run: cargo test -p microgifter-homeserver-service
+      - name: Test Phase 21 archive contract
+        run: cargo test -p microgifter-homeserver-service --test phase21_evidence_archive_contract
+      - name: Compile Control Center desktop
+        run: cargo check -p microgifter-homeserver-control-center
+      - name: Strict HomeServer service lint
         run: |
-          cargo fmt --all -- --check
-          cargo test -p microgifter-homeserver-service
-          cargo test -p microgifter-homeserver-service --test phase21_evidence_archive_contract
-          cargo check -p microgifter-homeserver-control-center
           cargo clippy -p microgifter-homeserver-service --all-targets -- \
             -D warnings \
             -A clippy::needless-return \
