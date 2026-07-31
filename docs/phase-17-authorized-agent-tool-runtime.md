@@ -21,8 +21,8 @@ Every executable runtime step must retain the complete authority chain:
 2. An active scoped Phase 16B capability grant.
 3. A Phase 16C wrapper job and immutable authority snapshot.
 4. A Phase 16D HomeServer agent, wrapper assignment, capability binding, and current agent revision.
-5. An active execution policy whose action type, risk class, approval mode, and adapter match the runtime tool.
-6. A fresh Phase 16D action approval when the policy or risk class requires one.
+5. An active execution policy whose action type, risk class, approval mode, adapter, limits, and expiration match the runtime tool.
+6. A low-risk, approval-free execution policy with scoped autonomy. Sensitive and proposal-gated actions remain on the retained Phase 16D proposal lifecycle and are not executed by this first runtime.
 7. A Phase 16E selector and result-egress decision when private knowledge or private results are involved.
 
 Pairing alone grants no runtime, agent, model, tool, data, action, or cross-wrapper authority.
@@ -47,7 +47,7 @@ The initial adapters are:
 - `audit.record` — immutable local hash-and-label audit evidence;
 - `result.compose` — private local result composition followed by mandatory Phase 16E egress evaluation.
 
-There is no shell, arbitrary process, unrestricted filesystem, credential-read, wildcard-tool, or caller-supplied adapter execution.
+There is no shell, arbitrary process, unrestricted filesystem, credential-read, wildcard-tool, caller-supplied adapter execution, or sensitive action execution.
 
 ## Runtime plan lifecycle
 
@@ -56,10 +56,14 @@ A runtime plan contains one to 32 ordered steps. Each step is submitted as a nor
 - the plan agent as the job submitter;
 - an exact capability and operation;
 - wrapper and connection scope;
-- idempotency and correlation identifiers;
+- idempotency, correlation, and predecessor causation identifiers;
 - bounded expiration, attempts, result size, and execution time;
-- optional Phase 16D approval and plan hash;
+- a canonical runtime plan hash retained locally with the ordered job bindings;
 - optional Phase 16E private selector and output schema.
+
+The first step is immediately dispatchable. Later steps remain unavailable until the preceding step completes and the runtime unlocks exactly the next queued job. A second predecessor-state check fails closed if a job is ever presented out of order.
+
+The initial Phase 17 runtime rejects wrapper-job approval IDs and approval plan hashes. Sensitive actions continue through the separate, already-certified Phase 16D `action.propose` → approval → execution lifecycle.
 
 The persistent runtime worker leases one job at a time. Before execution it revalidates:
 
@@ -69,10 +73,13 @@ The persistent runtime worker leases one job at a time. Before execution it reva
 - tool catalog state;
 - agent tool restrictions;
 - policy adapter and risk-class equality;
-- autonomy level;
-- approval identity and plan hash when required.
+- scoped autonomy level;
+- low-risk approval-free policy state;
+- execution-window limits;
+- ordered predecessor completion;
+- tool timeout limits.
 
-A changed, expired, suspended, revoked, cross-wrapper, or mismatched authority fails closed.
+A changed, expired, suspended, revoked, cross-wrapper, over-limit, out-of-order, or mismatched authority fails closed.
 
 ## Private result boundary
 
@@ -87,7 +94,10 @@ The Phase 17 runtime receipt references hashes and identifiers from the Phase 16
 - Failed authority validation or adapter execution terminates the current job and plan.
 - Remaining queued or active plan jobs are cancelled through the Phase 16C cancellation contract.
 - Explicit plan cancellation requires the exact `CANCEL PLAN <plan_id>` confirmation.
-- Running attempts are marked failed after service restart and reconciled against durable wrapper-job state.
+- Running attempts are marked interrupted only during service initialization, never during snapshot reads or retention passes.
+- Durable wrapper-job states are reconciled into the narrower runtime-step state machine.
+- `waiting` jobs map back to queued runtime steps; dead-letter work maps to failure.
+- A completed wrapper job without its immutable Phase 17 receipt fails closed as `runtime_receipt_missing` after recovery.
 - Expired plans fail closed.
 - Emergency stops, agent changes, assignment changes, grant changes, policy changes, and connection-authority changes remain enforced by the retained Phase 16 reconciliation paths.
 
