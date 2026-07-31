@@ -13,12 +13,12 @@ permissions:
 
 concurrency:
   group: homeserver-phase16d-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   phase16e_integrate:
     if: (github.event_name == 'push' && github.ref == 'refs/heads/feature/phase-16e-private-knowledge-egress') || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'feature/phase-16e-private-knowledge-egress')
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -59,7 +59,7 @@ jobs:
           git push origin HEAD:feature/phase-16e-private-knowledge-egress
 
   contract:
-    if: github.event_name != 'push' || github.ref != 'refs/heads/feature/phase-16e-private-knowledge-egress'
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.ref != 'feature/phase-16e-private-knowledge-egress'
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
