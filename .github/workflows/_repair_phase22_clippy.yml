@@ -30,6 +30,33 @@ jobs:
           components: rustfmt, clippy
       - name: Apply typed lint refactor
         run: python .github/scripts/repair_phase22_clippy.py
+      - name: Apply final SSE lint idiom
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          source = Path("crates/homeserver-service/src/agent_integrations.rs")
+          value = source.read_text(encoding="utf-8")
+          old = '''            .map(str::trim)
+                      .filter(|line| !line.is_empty())
+                      .next_back()
+          '''
+          new = '''            .map(str::trim)
+                      .rfind(|line| !line.is_empty())
+          '''
+          if value.count(old) != 1:
+              raise SystemExit("SSE rfind repair target was not found exactly once")
+          source.write_text(value.replace(old, new, 1), encoding="utf-8")
+
+          validator = Path("scripts/validate-unified-agent-orchestration.py")
+          value = validator.read_text(encoding="utf-8")
+          old = '    ".next_back()",\n'
+          new = '    ".rfind(|line| !line.is_empty())",\n'
+          if value.count(old) != 1:
+              raise SystemExit("SSE validator target was not found exactly once")
+          validator.write_text(value.replace(old, new, 1), encoding="utf-8")
+          '@ | python -
       - name: Format and validate contracts
         run: |
           cargo fmt --all
