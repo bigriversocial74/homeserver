@@ -33,7 +33,7 @@ jobs:
         run: |
           set -euo pipefail
           base64 -d tools/phase16e-wrapper-privacy.rs.gz.b64 | gzip -d > crates/homeserver-service/src/app/wrapper_privacy.rs
-          base64 -d tools/phase16e-integrate.py.gz.b64 | gzip -d > /tmp/integrate_phase16e.py
+          cat tools/phase16e-integrate.part-* | base64 -d | gzip -d > /tmp/integrate_phase16e.py
           python /tmp/integrate_phase16e.py
           cargo fmt --all
           python scripts/validate-wrapper-privacy.py
