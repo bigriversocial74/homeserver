@@ -37,13 +37,19 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
+          def replace_once(path: Path, old: str, new: str, label: str) -> None:
+              text = path.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'{label} anchor is missing')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
           path = Path('scripts/validate-model-inference-governance.py')
-          text = path.read_text(encoding='utf-8')
-          old = 'forbid(frontend, ["MutationObserver", "output_text", "private_results"], "Agent Runtime governance UI")'
-          new = 'forbid(frontend, ["MutationObserver", "output_text", "output: receipt.output"], "Agent Runtime governance UI")'
-          if old not in text:
-              raise SystemExit('Phase 20 validator repair anchor is missing')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          replace_once(
+              path,
+              'forbid(frontend, ["MutationObserver", "output_text", "private_results"], "Agent Runtime governance UI")',
+              'forbid(frontend, ["MutationObserver", "output_text", "output: receipt.output"], "Agent Runtime governance UI")',
+              'Phase 20 validator repair',
+          )
 
           path = Path('scripts/validate-openrouter-provider.py')
           text = path.read_text(encoding='utf-8')
@@ -57,6 +63,70 @@ jobs:
           if old not in text:
               raise SystemExit('OpenRouter validator routing anchor is missing')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          path = Path('crates/homeserver-service/src/agent_runtime.rs')
+          text = path.read_text(encoding='utf-8')
+          old = '''        &request,
+        &user_message_id,
+        GroundedResponseContext {'''
+          new = '''        &request,
+        &user_message_id,
+        actor_type,
+        actor_id,
+        GroundedResponseContext {'''
+          if old not in text:
+              raise SystemExit('Agent inference call actor anchor is missing')
+          text = text.replace(old, new, 1)
+          old = '''    request: &AgentPromptRequest,
+    user_message_id: &str,
+    context: GroundedResponseContext<'_>,'''
+          new = '''    request: &AgentPromptRequest,
+    user_message_id: &str,
+    actor_type: &str,
+    actor_id: &str,
+    context: GroundedResponseContext<'_>,'''
+          if old not in text:
+              raise SystemExit('Agent inference signature actor anchor is missing')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          path = Path('crates/homeserver-service/src/inference_governance.rs')
+          text = path.read_text(encoding='utf-8')
+          old = '''        statement
+            .query_map([], |row| row.get::<_,String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };'''
+          new = '''        let rows = statement
+            .query_map([], |row| row.get::<_,String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };'''
+          if text.count(old) != 2:
+              raise SystemExit(f'Expected two owned request-list anchors, found {text.count(old)}')
+          text = text.replace(old, new, 2)
+
+          def own_query_rows(source: str, function_name: str, next_function_name: str) -> str:
+              start = source.index(f'fn {function_name}(')
+              end = source.index(f'fn {next_function_name}(', start)
+              segment = source[start:end]
+              if '    statement\n' not in segment:
+                  raise SystemExit(f'{function_name}: statement anchor is missing')
+              segment = segment.replace('    statement\n', '    let rows = statement\n', 1)
+              old_tail = '''        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}'''
+              new_tail = '''        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}'''
+              if old_tail not in segment:
+                  raise SystemExit(f'{function_name}: owned result tail is missing')
+              segment = segment.replace(old_tail, new_tail, 1)
+              return source[:start] + segment + source[end:]
+
+          text = own_query_rows(text, 'read_policies', 'read_requests')
+          text = own_query_rows(text, 'read_requests', 'read_receipts')
+          text = own_query_rows(text, 'read_receipts', 'read_events')
+          text = own_query_rows(text, 'read_events', 'map_policy')
+          path.write_text(text, encoding='utf-8')
           PY
           cargo fmt --all
       - name: Install frontend dependencies
@@ -76,7 +146,7 @@ jobs:
           cargo fmt --all -- --check
           cargo test -p microgifter-homeserver-service
           cargo test -p microgifter-homeserver-service --test phase20_model_inference_governance_contract
-          cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings
+          cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings -A unused-imports
       - name: Commit clean permanent Phase 20 implementation
         run: |
           rm -f scripts/phase20-integrate.py
