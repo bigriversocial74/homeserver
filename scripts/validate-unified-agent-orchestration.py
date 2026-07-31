@@ -30,6 +30,9 @@ require("crates/homeserver-service/src/agent_runtime.rs", [
     "primary interface to this HomeServer",
     "record_context_receipt",
 ])
+require("crates/homeserver-service/src/semantic_vault.rs", [
+    "pub(crate) fn snapshot(state: &AppState)",
+])
 require("src/homeserver-agent-chat.js", [
     "renderAgentGuidance",
     "renderMcpIntegrationPanel",
