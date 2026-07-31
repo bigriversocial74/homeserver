@@ -1,0 +1,251 @@
+name: Phase 16E Typed Lint Repair
+
+on:
+  push:
+    branches:
+      - feature/phase-16e-private-knowledge-egress
+    paths:
+      - .github/workflows/phase16e-lint-repair.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: homeserver-phase16e-lint-repair
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-16e-private-knowledge-egress
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt, clippy
+      - name: Apply typed Phase 16E lint repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          privacy_path = Path('crates/homeserver-service/src/app/wrapper_privacy.rs')
+          text = privacy_path.read_text(encoding='utf-8')
+
+          marker = '''#[derive(Debug, Clone)]
+          struct SelectorAuthority {'''
+          insertion = '''#[derive(Debug, Clone, Copy)]
+          pub(crate) struct PrivacySubmissionRequest<'a> {
+              pub connection_id: &'a str,
+              pub grant_id: &'a str,
+              pub grant_revision: u64,
+              pub capability_key: &'a str,
+              pub operation: &'a str,
+              pub submitted_by_type: &'a str,
+              pub submitted_by_id: &'a str,
+              pub selector_id: Option<&'a str>,
+              pub purpose: Option<&'a str>,
+              pub output_schema: Option<&'a str>,
+              pub remote_model_provider: Option<&'a str>,
+          }
+
+          type SelectorState = (String, i64, String, String, String, Option<String>, String);
+
+          #[derive(Debug, Clone, Copy)]
+          struct PrivacyIncidentEvidence<'a> {
+              wrapper: Option<&'a str>,
+              connection: Option<&'a str>,
+              job: Option<&'a str>,
+              selector: Option<&'a str>,
+              severity: &'a str,
+              category: &'a str,
+              detail: &'a str,
+              evidence: &'a str,
+          }
+
+          #[derive(Debug, Clone)]
+          struct SelectorAuthority {'''
+          if text.count(marker) != 1:
+              raise SystemExit('SelectorAuthority insertion marker mismatch')
+          text = text.replace(marker, insertion, 1)
+
+          old_signature = '''pub(crate) fn validate_job_privacy_submission(
+              connection: &Connection,
+              connection_id: &str,
+              grant_id: &str,
+              grant_revision: u64,
+              capability_key: &str,
+              operation: &str,
+              submitted_by_type: &str,
+              submitted_by_id: &str,
+              selector_id: Option<&str>,
+              purpose: Option<&str>,
+              output_schema: Option<&str>,
+              remote_model_provider: Option<&str>,
+          ) -> Result<Option<PrivacySubmissionBinding>> {
+              let knowledge = KNOWLEDGE_CAPABILITIES.contains(&capability_key);'''
+          new_signature = '''pub(crate) fn validate_job_privacy_submission(
+              connection: &Connection,
+              request: PrivacySubmissionRequest<'_>,
+          ) -> Result<Option<PrivacySubmissionBinding>> {
+              let PrivacySubmissionRequest {
+                  connection_id,
+                  grant_id,
+                  grant_revision,
+                  capability_key,
+                  operation,
+                  submitted_by_type,
+                  submitted_by_id,
+                  selector_id,
+                  purpose,
+                  output_schema,
+                  remote_model_provider,
+              } = request;
+              let knowledge = KNOWLEDGE_CAPABILITIES.contains(&capability_key);'''
+          if text.count(old_signature) != 1:
+              raise SystemExit('privacy submission signature marker mismatch')
+          text = text.replace(old_signature, new_signature, 1)
+
+          old_selector_check = '''    let selector = selector_authority(connection, &selector_id)?;
+              ensure!(
+                  selector.connection_id == connection_id,
+                  "selector belongs to a different connection"
+              );'''
+          new_selector_check = '''    let selector = selector_authority(connection, &selector_id)?;
+              let connection_wrapper_id: String = connection.query_row(
+                  "SELECT wrapper_id FROM wrapper_connections WHERE connection_id=?1",
+                  params![connection_id],
+                  |row| row.get(0),
+              )?;
+              ensure!(
+                  selector.wrapper_id == connection_wrapper_id,
+                  "selector belongs to a different wrapper"
+              );
+              ensure!(
+                  selector.connection_id == connection_id,
+                  "selector belongs to a different connection"
+              );'''
+          if text.count(old_selector_check) != 1:
+              raise SystemExit('selector wrapper check marker mismatch')
+          text = text.replace(old_selector_check, new_selector_check, 1)
+
+          complex_prefix = 'let selector:Option<(String,i64,String,String,String,Option<String>,String)>=transaction.query_row'
+          if text.count(complex_prefix) != 1:
+              raise SystemExit('selector state tuple marker mismatch')
+          text = text.replace(complex_prefix, 'let selector: Option<SelectorState> = transaction.query_row', 1)
+
+          old_incident_call = '''    record_incident_tx(
+              tx,
+              None,
+              None,
+              None,
+              None,
+              "high",
+              "resource_authority_changed",
+              detail,
+              &evidence,
+          )'''
+          new_incident_call = '''    record_incident_tx(
+              tx,
+              PrivacyIncidentEvidence {
+                  wrapper: None,
+                  connection: None,
+                  job: None,
+                  selector: None,
+                  severity: "high",
+                  category: "resource_authority_changed",
+                  detail,
+                  evidence: &evidence,
+              },
+          )'''
+          if text.count(old_incident_call) != 1:
+              raise SystemExit('privacy incident call marker mismatch')
+          text = text.replace(old_incident_call, new_incident_call, 1)
+
+          old_incident_signature = '''fn record_incident_tx(
+              tx: &Transaction<'_>,
+              wrapper: Option<&str>,
+              connection: Option<&str>,
+              job: Option<&str>,
+              selector: Option<&str>,
+              severity: &str,
+              category: &str,
+              detail: &str,
+              evidence: &str,
+          ) -> Result<()> {
+              tx.execute'''
+          new_incident_signature = '''fn record_incident_tx(
+              tx: &Transaction<'_>,
+              incident: PrivacyIncidentEvidence<'_>,
+          ) -> Result<()> {
+              let PrivacyIncidentEvidence {
+                  wrapper,
+                  connection,
+                  job,
+                  selector,
+                  severity,
+                  category,
+                  detail,
+                  evidence,
+              } = incident;
+              tx.execute'''
+          if text.count(old_incident_signature) != 1:
+              raise SystemExit('privacy incident signature marker mismatch')
+          text = text.replace(old_incident_signature, new_incident_signature, 1)
+          privacy_path.write_text(text, encoding='utf-8')
+
+          submit_path = Path('crates/homeserver-service/src/app/wrapper_jobs_submit.rs')
+          submit = submit_path.read_text(encoding='utf-8')
+          old_call = '''    let privacy_binding = wrapper_privacy::validate_job_privacy_submission(
+              &connection,
+              &connection_id,
+              &grant_id,
+              authorization.grant_revision,
+              &capability_key,
+              &operation,
+              &submitted_by_type,
+              &submitted_by_id,
+              request.private_selector_id.as_deref(),
+              request.purpose.as_deref(),
+              request.output_schema.as_deref(),
+              request.remote_model_provider.as_deref(),
+          )?;'''
+          new_call = '''    let privacy_binding = wrapper_privacy::validate_job_privacy_submission(
+              &connection,
+              wrapper_privacy::PrivacySubmissionRequest {
+                  connection_id: &connection_id,
+                  grant_id: &grant_id,
+                  grant_revision: authorization.grant_revision,
+                  capability_key: &capability_key,
+                  operation: &operation,
+                  submitted_by_type: &submitted_by_type,
+                  submitted_by_id: &submitted_by_id,
+                  selector_id: request.private_selector_id.as_deref(),
+                  purpose: request.purpose.as_deref(),
+                  output_schema: request.output_schema.as_deref(),
+                  remote_model_provider: request.remote_model_provider.as_deref(),
+              },
+          )?;'''
+          if submit.count(old_call) != 1:
+              raise SystemExit('privacy submission call marker mismatch')
+          submit_path.write_text(submit.replace(old_call, new_call, 1), encoding='utf-8')
+          PY
+          cargo fmt --all
+          python scripts/validate-wrapper-privacy.py
+          cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings
+      - name: Commit clean typed repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/phase16e-lint-repair.yml
+          git add crates/homeserver-service/src/app/wrapper_privacy.rs \
+            crates/homeserver-service/src/app/wrapper_jobs_submit.rs
+          git diff --cached --check
+          git commit -m 'Refine Phase 16E privacy authority types'
+          git push origin HEAD:feature/phase-16e-private-knowledge-egress
