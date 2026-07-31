@@ -2,6 +2,7 @@
 from pathlib import Path
 import json
 import re
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -135,4 +136,5 @@ if scripts.get("preinstall") != "python scripts/phase20-builder-trigger.txt":
 scripts.pop("preinstall", None)
 package_path.write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
 
-print("Phase 20 native repair applied and temporary preinstall hook removed.")
+subprocess.run(["cargo", "fmt", "--all"], cwd=ROOT, check=True)
+print("Phase 20 native repair applied, formatted, and temporary preinstall hook removed.")
