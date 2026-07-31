@@ -92,7 +92,19 @@ jobs:
             fi
           done
       - name: Compile Control Center desktop
-        run: cargo check -p microgifter-homeserver-control-center
+        shell: bash
+        run: |
+          set +e
+          cargo check -p microgifter-homeserver-control-center > "$RUNNER_TEMP/control-center-check.log" 2>&1
+          status=$?
+          if [ "$status" -eq 0 ]; then
+            echo "Control Center desktop compilation passed."
+          else
+            echo "::group::Control Center compiler diagnostic"
+            grep -n -A30 -B8 -E 'error(\[E[0-9]+\])?:|could not compile' "$RUNNER_TEMP/control-center-check.log" | tail -n 240 || true
+            echo "::endgroup::"
+          fi
+          exit "$status"
       - name: Strict HomeServer service lint
         run: |
           cargo clippy -p microgifter-homeserver-service --all-targets -- \
