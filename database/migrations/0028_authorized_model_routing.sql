@@ -301,10 +301,10 @@ INSERT OR IGNORE INTO model_routing_policies (
 ) VALUES (
   '00000000-0000-4000-8000-000000000020',
   'local_control_center','local_control_center','agent_workspace',
-  lower(hex(sha3('agent_workspace',256))),
+  '6428a32c45677cf7ec4f6d2384fc81b5a62372106031a537bd4d313410e7d0c6',
   '["public","safe_receipt","security_metadata","wrapper_owned","shared_approved","private_derived","private_source"]',
   '["ollama"]','[]',0,'deny',1,30000,1024,86400,10000,10000000,0,1,
-  lower(hex(sha3('homeserver.phase20.local-control.default.v1',256))),
+  '113e81b53bfb95b1d9496660cca07b44865aafdbf8c54e57076515600be10a51',
   'active','system','Default local-only inference policy. Remote providers require an explicit policy.',
   strftime('%Y-%m-%dT%H:%M:%fZ','now'),'2099-12-31T23:59:59.999Z',
   strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now')

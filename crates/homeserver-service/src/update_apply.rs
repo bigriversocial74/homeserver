@@ -6,11 +6,12 @@ use microgifter_homeserver_core::{
     UpdateApplicationPlan, UpdateRecord, SERVICE_NAME, UPDATE_MANIFEST_SCHEMA_VERSION,
 };
 use sha2::{Digest, Sha256};
+#[cfg(windows)]
+use std::process::Command;
 use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
-    process::Command,
 };
 use uuid::Uuid;
 

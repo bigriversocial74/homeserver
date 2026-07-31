@@ -185,7 +185,7 @@ def main() -> int:
         ],
         "Agent Runtime governance UI",
     )
-    forbid(frontend, ["MutationObserver", "output_text", "private_results"], "Agent Runtime governance UI")
+    forbid(frontend, ["MutationObserver", "output_text", "output: receipt.output"], "Agent Runtime governance UI")
 
     require(package, ["validate-model-inference-governance.py"], "frontend validation registration")
     require(

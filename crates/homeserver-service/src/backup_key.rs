@@ -1,12 +1,14 @@
 use crate::config::AppConfig;
 use anyhow::{ensure, Context, Result};
 use rand::{rngs::OsRng, RngCore};
+#[cfg(any(windows, test))]
 use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
 };
+#[cfg(windows)]
 use zeroize::Zeroize;
 
 const BACKUP_KEY_BYTES: usize = 32;
@@ -100,6 +102,7 @@ fn recover_interrupted_replace(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(windows, test))]
 fn entropy(installation_id: &str) -> [u8; 32] {
     Sha256::digest(format!("MicrogifterHomeServerBackup:{installation_id}").as_bytes()).into()
 }

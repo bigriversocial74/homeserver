@@ -12,10 +12,11 @@ use microgifter_homeserver_core::{
 };
 use semver::Version;
 use sha2::{Digest, Sha256};
+#[cfg(windows)]
+use std::process::Command;
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
     time::Duration,
 };
 use tokio::io::AsyncWriteExt;

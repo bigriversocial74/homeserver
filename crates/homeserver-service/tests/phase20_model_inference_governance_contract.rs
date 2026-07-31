@@ -16,7 +16,9 @@ fn database() -> Connection {
              CREATE TABLE private_resource_selectors (selector_id TEXT PRIMARY KEY);",
         )
         .expect("prerequisite schema");
-    connection.execute_batch(MIGRATION).expect("Phase 20 migration");
+    connection
+        .execute_batch(MIGRATION)
+        .expect("Phase 20 migration");
     connection
 }
 

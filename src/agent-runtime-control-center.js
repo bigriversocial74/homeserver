@@ -10,6 +10,7 @@ const runtimeState = {
   authority: null,
   orchestration: null,
   scheduling: null,
+  governance: null,
   busy: false,
   error: null,
   lastLoadedAt: 0,
@@ -250,6 +251,32 @@ function renderReceipts() {
   return `<div class="runtime-receipt-list">${receipts.slice(0, 30).map((receipt) => `<div><span class="runtime-receipt-icon">${icon(receipt.outcome === "success" ? "check" : "warning", 17)}</span><p><strong>${escapeHtml(receipt.tool_key)}</strong><small>${escapeHtml(humanize(receipt.result_code))} · ${escapeHtml(relativeDate(receipt.completed_at_utc))}</small></p>${statusBadge(receipt.outcome)}<code title="Runtime receipt hash">${escapeHtml(compactHash(receipt.runtime_receipt_hash))}</code></div>`).join("")}</div>`;
 }
 
+
+function renderModelGovernance() {
+  const governance = runtimeState.governance || {};
+  const policies = values(governance.policies);
+  const requests = values(governance.requests);
+  const receipts = values(governance.receipts);
+  const activeRequests = requests.filter((request) => ["reserved", "running"].includes(request.state));
+  const boundarySafe = governance.private_prompts_exposed === false
+    && governance.private_results_exposed === false
+    && governance.silent_remote_fallback_allowed === false
+    && governance.provider_can_grant_authority === false;
+  return `<section class="panel runtime-model-governance ${boundarySafe ? "safe" : "unsafe"}">
+    <div class="panel-title"><div>${icon("cpu", 18)}<div><h2>Model Inference Governance</h2><p>Exact policy, provider, model, privacy, fallback, and budget authority for every inference.</p></div></div><div class="runtime-model-actions"><span>${policies.filter((policy) => policy.state === "active").length} active policies</span><button class="button secondary" type="button" data-model-policy-create>Create policy</button></div></div>
+    <div class="runtime-safety-grid">
+      ${safetyItem("Private prompts", governance.private_prompts_exposed === false ? "Hash-only snapshots" : "Exposure detected", governance.private_prompts_exposed === false)}
+      ${safetyItem("Private results", governance.private_results_exposed === false ? "Local private table" : "Exposure detected", governance.private_results_exposed === false)}
+      ${safetyItem("Silent remote fallback", governance.silent_remote_fallback_allowed === false ? "Prohibited" : "Allowed", governance.silent_remote_fallback_allowed === false)}
+      ${safetyItem("Provider authority", governance.provider_can_grant_authority === false ? "None" : "Detected", governance.provider_can_grant_authority === false)}
+    </div>
+    <div class="runtime-model-grid">
+      <div><h3>Routing policies</h3>${policies.length ? policies.slice(0, 20).map((policy) => `<article class="runtime-model-policy"><header><div><strong>${escapeHtml(policy.purpose)}</strong><small>revision ${Number(policy.policy_revision || 0)} · ${escapeHtml(humanize(policy.subject_type))}</small></div>${statusBadge(policy.state)}</header><p>${escapeHtml(values(policy.provider_order).join(" → ") || "No providers")} · ${escapeHtml(humanize(policy.remote_context_mode))}${policy.allow_fallback ? " · fallback enabled" : " · no fallback"}</p><dl><div><dt>Input</dt><dd>${Number(policy.max_input_chars || 0)} chars</dd></div><div><dt>Output</dt><dd>${Number(policy.max_output_tokens || 0)} tokens</dd></div><div><dt>Requests</dt><dd>${Number(policy.max_requests || 0)} / ${escapeHtml(humanize(String(policy.window_seconds || 0)))}s</dd></div><div><dt>Authority</dt><dd class="mono">${escapeHtml(compactHash(policy.policy_hash))}</dd></div></dl>${policy.state === "active" ? `<button class="button danger" type="button" data-model-policy-revoke="${escapeHtml(policy.policy_id)}">Revoke</button>` : ""}</article>`).join("") : `<div class="runtime-empty compact"><strong>No routing policies</strong><p>Inference fails closed until an exact policy exists.</p></div>`}</div>
+      <div><h3>Requests and receipts</h3>${activeRequests.map((request) => `<article class="runtime-model-request"><header><strong>${escapeHtml(humanize(request.data_classification))}</strong>${statusBadge(request.state)}</header><p>${escapeHtml(values(request.provider_order).join(" → "))} · ${escapeHtml(request.selected_model || request.requested_model || "model pending")}</p><code>${escapeHtml(compactHash(request.authority_hash))}</code><button class="button danger" type="button" data-model-inference-cancel="${escapeHtml(request.request_id)}">Cancel</button></article>`).join("")}${receipts.slice(0, 20).map((receipt) => `<article class="runtime-model-receipt"><header><strong>${escapeHtml(receipt.model_id || "No model selected")}</strong>${statusBadge(receipt.outcome)}</header><p>${escapeHtml(receipt.provider_key || "no provider")} · ${escapeHtml(humanize(receipt.result_code))} · ${Number(receipt.total_tokens || 0)} tokens</p><code title="Inference receipt hash">${escapeHtml(compactHash(receipt.receipt_hash))}</code></article>`).join("")}${!activeRequests.length && !receipts.length ? `<div class="runtime-empty compact"><strong>No governed inference evidence</strong><p>Policies are ready; completed or failed inference receipts will appear here.</p></div>` : ""}</div>
+    </div>
+  </section>`;
+}
+
 function renderRuntimePage() {
   if (!isRuntimeRoute()) return;
   ensureRuntimeNavigation();
@@ -275,6 +302,7 @@ function renderRuntimePage() {
         ${metric("logs", "Receipts", String(receipts.length), `${tools.length} cataloged tools`, "teal")}
       </section>
       ${renderSafetyBoundary(runtime)}
+      ${renderModelGovernance()}
       ${renderSupervisedCheckpoints(orchestration)}
       ${renderSchedules(scheduling)}
       <section class="runtime-primary-grid"><article class="panel runtime-plans-panel"><div class="panel-title"><div>${icon("activity", 18)}<div><h2>Runtime Plans</h2><p>Ordered low-risk work submitted through the Phase 16C job contract.</p></div></div><span>${values(runtime.plans).length} plans</span></div>${renderPlans()}</article><article class="panel runtime-tools-panel"><div class="panel-title"><div>${icon("apps", 18)}<div><h2>Tool Catalog</h2><p>HomeServer-owned, versioned, risk-classified adapters.</p></div></div><span>${tools.length} tools</span></div>${renderTools()}</article></section>
@@ -295,11 +323,13 @@ async function refreshRuntime(quiet = false) {
     invoke("homeserver_agent_authority"),
     invoke("homeserver_action_orchestration"),
     invoke("homeserver_agent_schedules"),
+    invoke("homeserver_model_governance"),
   ]);
   if (results[0].status === "fulfilled") runtimeState.runtime = results[0].value;
   if (results[1].status === "fulfilled") runtimeState.authority = results[1].value;
   if (results[2].status === "fulfilled") runtimeState.orchestration = results[2].value;
   if (results[3].status === "fulfilled") runtimeState.scheduling = results[3].value;
+  if (results[4].status === "fulfilled") runtimeState.governance = results[4].value;
   const errors = results.filter((result) => result.status === "rejected").map((result) => String(result.reason));
   runtimeState.error = errors.length ? errors.join(" · ") : null;
   runtimeState.lastLoadedAt = Date.now();
@@ -318,6 +348,7 @@ async function runOneCycle() {
     runtimeState.scheduling = await invoke("homeserver_run_agent_scheduler_once");
     runtimeState.runtime = await invoke("homeserver_agent_runtime");
     runtimeState.authority = await invoke("homeserver_agent_authority");
+    runtimeState.governance = await invoke("homeserver_model_governance");
     runtimeState.lastLoadedAt = Date.now();
   } catch (error) {
     runtimeState.error = String(error);
@@ -407,8 +438,116 @@ async function rollbackSupervisedCheckpoint(button) {
   }
 }
 
+
+async function createModelPolicy() {
+  if (runtimeState.busy) return;
+  const subjectType = window.prompt("Policy subject: local_control_center or agent_assignment", "local_control_center");
+  if (!subjectType) return;
+  let agentId = null;
+  let assignmentId = null;
+  if (subjectType === "agent_assignment") {
+    agentId = window.prompt("Agent ID:");
+    assignmentId = window.prompt("Assignment ID:");
+    if (!agentId || !assignmentId) return;
+  }
+  const purpose = window.prompt("Exact inference purpose:", "agent_workspace");
+  if (!purpose) return;
+  const providers = window.prompt("Ordered providers, comma separated:", "ollama");
+  if (!providers) return;
+  const providerOrder = providers.split(",").map((value) => value.trim()).filter(Boolean);
+  const remote = providerOrder.includes("openrouter");
+  const budget = remote ? Number(window.prompt("Maximum spend in micro-USD for the policy window:", "1000000")) : 0;
+  const policy = {
+    subject_type: subjectType,
+    agent_id: agentId,
+    assignment_id: assignmentId,
+    purpose,
+    allowed_data_classes: ["public", "safe_receipt", "security_metadata", "private_derived"],
+    provider_order: providerOrder,
+    allowed_models: [],
+    allow_fallback: providerOrder.length > 1,
+    remote_context_mode: remote ? "public_only" : "deny",
+    require_zdr: true,
+    max_input_chars: 30000,
+    max_output_tokens: 1024,
+    window_seconds: 86400,
+    max_requests: 10000,
+    max_total_tokens: 10000000,
+    max_spend_microusd: Number.isFinite(budget) ? Math.max(0, budget) : 0,
+    reason: "Created from Agent Runtime Control Center",
+    expires_minutes: 525600,
+  };
+  runtimeState.busy = true;
+  renderRuntimePage();
+  try {
+    runtimeState.governance = await invoke("homeserver_create_model_policy", { policy });
+    runtimeState.lastLoadedAt = Date.now();
+  } catch (error) {
+    runtimeState.error = String(error);
+  } finally {
+    runtimeState.busy = false;
+    renderRuntimePage();
+  }
+}
+
+async function revokeModelPolicy(button) {
+  if (runtimeState.busy) return;
+  const policyId = button.dataset.modelPolicyRevoke || "";
+  const confirmation = window.prompt(`Type REVOKE MODEL POLICY ${policyId} to revoke this policy:`);
+  if (confirmation !== `REVOKE MODEL POLICY ${policyId}`) return;
+  const reason = window.prompt("Reason for revocation:", "Revoked from Agent Runtime Control Center");
+  if (!reason?.trim()) return;
+  runtimeState.busy = true;
+  renderRuntimePage();
+  try {
+    runtimeState.governance = await invoke("homeserver_revoke_model_policy", { policyId, confirmation, reason: reason.trim() });
+  } catch (error) {
+    runtimeState.error = String(error);
+  } finally {
+    runtimeState.busy = false;
+    renderRuntimePage();
+  }
+}
+
+async function cancelModelInference(button) {
+  if (runtimeState.busy) return;
+  const requestId = button.dataset.modelInferenceCancel || "";
+  const confirmation = window.prompt(`Type CANCEL INFERENCE ${requestId} to cancel this request:`);
+  if (confirmation !== `CANCEL INFERENCE ${requestId}`) return;
+  const reason = window.prompt("Reason for cancellation:", "Cancelled from Agent Runtime Control Center");
+  if (!reason?.trim()) return;
+  runtimeState.busy = true;
+  renderRuntimePage();
+  try {
+    runtimeState.governance = await invoke("homeserver_cancel_model_inference", { requestId, confirmation, reason: reason.trim() });
+  } catch (error) {
+    runtimeState.error = String(error);
+  } finally {
+    runtimeState.busy = false;
+    renderRuntimePage();
+  }
+}
+
 document.addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) return;
+  const createPolicy = event.target.closest("[data-model-policy-create]");
+  if (createPolicy) {
+    event.preventDefault();
+    void createModelPolicy();
+    return;
+  }
+  const revokePolicy = event.target.closest("[data-model-policy-revoke]");
+  if (revokePolicy) {
+    event.preventDefault();
+    void revokeModelPolicy(revokePolicy);
+    return;
+  }
+  const cancelInference = event.target.closest("[data-model-inference-cancel]");
+  if (cancelInference) {
+    event.preventDefault();
+    void cancelModelInference(cancelInference);
+    return;
+  }
   const routeButton = event.target.closest("[data-agent-runtime-route]");
   if (routeButton) {
     event.preventDefault();

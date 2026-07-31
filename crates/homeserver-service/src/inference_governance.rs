@@ -75,6 +75,28 @@ pub struct RoutingPolicySummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InferenceRequestSummary {
+    pub request_id: String,
+    pub subject_type: String,
+    pub subject_id: String,
+    pub policy_id: String,
+    pub policy_revision: u64,
+    pub purpose_hash: String,
+    pub data_classification: String,
+    pub provider_order: Vec<String>,
+    pub requested_model: Option<String>,
+    pub authority_hash: String,
+    pub state: String,
+    pub selected_provider: Option<String>,
+    pub selected_model: Option<String>,
+    pub attempt_count: u32,
+    pub failure_code: Option<String>,
+    pub created_at_utc: String,
+    pub started_at_utc: Option<String>,
+    pub completed_at_utc: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InferenceReceiptSummary {
     pub receipt_id: String,
     pub request_id: String,
@@ -124,6 +146,7 @@ pub struct InferenceEventSummary {
 pub struct InferenceGovernanceSnapshot {
     pub schema: String,
     pub policies: Vec<RoutingPolicySummary>,
+    pub requests: Vec<InferenceRequestSummary>,
     pub receipts: Vec<InferenceReceiptSummary>,
     pub events: Vec<InferenceEventSummary>,
     pub providers: Vec<String>,
@@ -366,7 +389,10 @@ pub fn maintain_history(connection: &Connection) -> Result<()> {
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/models/governance", get(snapshot_handler))
-        .route("/v1/models/governance/policies", post(create_policy_handler))
+        .route(
+            "/v1/models/governance/policies",
+            post(create_policy_handler),
+        )
         .route(
             "/v1/models/governance/policies/revoke",
             post(revoke_policy_handler),
@@ -442,7 +468,12 @@ where
 {
     tokio::task::spawn_blocking(task)
         .await
-        .map_err(|error| api_error(code, anyhow::anyhow!("model governance task failed: {error}")))?
+        .map_err(|error| {
+            api_error(
+                code,
+                anyhow::anyhow!("model governance task failed: {error}"),
+            )
+        })?
         .map(Json)
         .map_err(|error| api_error(code, error))
 }
@@ -450,11 +481,13 @@ where
 pub fn snapshot(state: &AppState) -> Result<InferenceGovernanceSnapshot> {
     let connection = state.connection()?;
     let policies = read_policies(&connection)?;
+    let requests = read_requests(&connection)?;
     let receipts = read_receipts(&connection)?;
     let events = read_events(&connection)?;
     Ok(InferenceGovernanceSnapshot {
         schema: "homeserver.model-inference-governance.v1".to_owned(),
         policies,
+        requests,
         receipts,
         events,
         providers: PROVIDERS.iter().map(|value| (*value).to_owned()).collect(),
@@ -526,7 +559,14 @@ pub async fn infer(
             } else {
                 None
             };
-            (policy, authority, authority_hash, existing.0, request_hash, result)
+            (
+                policy,
+                authority,
+                authority_hash,
+                existing.0,
+                request_hash,
+                result,
+            )
         } else {
             reserve_request(
                 &connection,
@@ -548,16 +588,17 @@ pub async fn infer(
     let mut last_error: Option<anyhow::Error> = None;
     for (index, provider) in provider_order.iter().enumerate() {
         let sequence = (index + 1) as u32;
-        let model = match resolve_model(state.clone(), provider, request.model.as_deref(), &policy).await {
-            Ok(model) => model,
-            Err(error) => {
-                last_error = Some(error);
-                if !policy.allow_fallback {
-                    break;
+        let model =
+            match resolve_model(state.clone(), provider, request.model.as_deref(), &policy).await {
+                Ok(model) => model,
+                Err(error) => {
+                    last_error = Some(error);
+                    if !policy.allow_fallback {
+                        break;
+                    }
+                    continue;
                 }
-                continue;
-            }
-        };
+            };
         let result = attempt_provider(
             state.clone(),
             &request,
@@ -582,7 +623,8 @@ pub async fn infer(
         }
     }
 
-    let error = last_error.unwrap_or_else(|| anyhow::anyhow!("no authorized model provider was available"));
+    let error =
+        last_error.unwrap_or_else(|| anyhow::anyhow!("no authorized model provider was available"));
     let failure_code = public_failure_code(&error);
     {
         let connection = state.connection()?;
@@ -667,7 +709,9 @@ async fn attempt_provider(
             state.clone(),
             model.to_owned(),
             request.prompt.clone(),
-            request.max_output_tokens.unwrap_or(policy.max_output_tokens),
+            request
+                .max_output_tokens
+                .unwrap_or(policy.max_output_tokens),
         )
         .await
         .map(|output| ProviderOutcome {
@@ -683,7 +727,9 @@ async fn attempt_provider(
             state.clone(),
             model,
             &request.prompt,
-            request.max_output_tokens.unwrap_or(policy.max_output_tokens),
+            request
+                .max_output_tokens
+                .unwrap_or(policy.max_output_tokens),
             request_id,
         )
         .await
@@ -706,7 +752,7 @@ async fn attempt_provider(
             validate_remote_context(&connection, request, policy, provider)?;
             ensure_request_running(&connection, request_id)?;
             ensure!(
-                result.output.as_bytes().len() <= MAX_PRIVATE_OUTPUT_BYTES,
+                result.output.len() <= MAX_PRIVATE_OUTPUT_BYTES,
                 "model output exceeds the private result limit"
             );
             let window_usage = policy_usage(&connection, policy)?;
@@ -790,7 +836,7 @@ fn complete_success(
     )?;
     transaction.execute(
         "INSERT INTO model_inference_private_results (request_id,classification,output_text,output_bytes,output_hash,created_at_utc) VALUES (?1,'private',?2,?3,?4,?5)",
-        params![request_id,output,output.as_bytes().len() as i64,output_hash,completed_at],
+        params![request_id,output,output.len() as i64,output_hash,completed_at],
     )?;
     transaction.execute(
         "UPDATE model_inference_requests SET state='completed',selected_provider=?1,selected_model=?2,result_hash=?3,completed_at_utc=?4 WHERE request_id=?5 AND state='running'",
@@ -905,6 +951,7 @@ fn finish_failed_request(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn reserve_request(
     connection: &Connection,
     request: &GovernedInferenceRequest,
@@ -923,9 +970,18 @@ fn reserve_request(
     Option<GovernedInferenceResult>,
 )> {
     let usage = policy_usage(connection, policy)?;
-    ensure!(usage.0 < policy.max_requests, "model inference request budget has been reached");
-    ensure!(usage.1 < policy.max_total_tokens, "model inference token budget has been reached");
-    ensure!(usage.2 < policy.max_spend_microusd || policy.max_spend_microusd == 0, "model inference spending budget has been reached");
+    ensure!(
+        usage.0 < policy.max_requests,
+        "model inference request budget has been reached"
+    );
+    ensure!(
+        usage.1 < policy.max_total_tokens,
+        "model inference token budget has been reached"
+    );
+    ensure!(
+        usage.2 < policy.max_spend_microusd || policy.max_spend_microusd == 0,
+        "model inference spending budget has been reached"
+    );
     let request_id = Uuid::new_v4().to_string();
     let now = now_utc();
     let transaction = connection.unchecked_transaction()?;
@@ -1018,58 +1074,109 @@ fn create_policy(state: &AppState, request: CreateRoutingPolicyRequest) -> Resul
             remote_context_mode != "deny",
             "OpenRouter requires an explicit remote context mode"
         );
+        ensure!(
+            request.max_spend_microusd > 0,
+            "OpenRouter policies require a positive bounded spending budget"
+        );
     } else {
         ensure!(
             remote_context_mode == "deny",
             "local-only policies must deny remote context"
         );
     }
-    ensure!((1..=30_000).contains(&request.max_input_chars), "policy input limit is invalid");
-    ensure!((16..=4_096).contains(&request.max_output_tokens), "policy output limit is invalid");
-    ensure!((60..=2_592_000).contains(&request.window_seconds), "policy window is invalid");
-    ensure!((1..=1_000_000).contains(&request.max_requests), "policy request budget is invalid");
-    ensure!((16..=1_000_000_000).contains(&request.max_total_tokens), "policy token budget is invalid");
-    ensure!(request.max_spend_microusd <= 1_000_000_000_000, "policy spending budget is invalid");
-    ensure!((1..=525_600).contains(&request.expires_minutes), "policy expiration is invalid");
+    ensure!(
+        (1..=30_000).contains(&request.max_input_chars),
+        "policy input limit is invalid"
+    );
+    ensure!(
+        (16..=4_096).contains(&request.max_output_tokens),
+        "policy output limit is invalid"
+    );
+    ensure!(
+        (60..=2_592_000).contains(&request.window_seconds),
+        "policy window is invalid"
+    );
+    ensure!(
+        (1..=1_000_000).contains(&request.max_requests),
+        "policy request budget is invalid"
+    );
+    ensure!(
+        (16..=1_000_000_000).contains(&request.max_total_tokens),
+        "policy token budget is invalid"
+    );
+    ensure!(
+        request.max_spend_microusd <= 1_000_000_000_000,
+        "policy spending budget is invalid"
+    );
+    ensure!(
+        (1..=525_600).contains(&request.expires_minutes),
+        "policy expiration is invalid"
+    );
 
     let connection = state.connection()?;
     let now = Utc::now();
     let expires = now + Duration::minutes(i64::from(request.expires_minutes));
-    let (subject_id, agent_id, agent_revision, assignment_id, assignment_revision, wrapper_id, connection_id, connection_authority_revision) =
-        if subject_type == "local_control_center" {
-            ensure!(request.agent_id.is_none() && request.assignment_id.is_none(), "local policy cannot bind an agent assignment");
-            (
-                "local_control_center".to_owned(),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-        } else {
-            let agent_id = validate_uuid(request.agent_id.as_deref().context("agent policy requires agent_id")?, "agent ID")?;
-            let assignment_id = validate_uuid(request.assignment_id.as_deref().context("agent policy requires assignment_id")?, "assignment ID")?;
-            let row = connection.query_row(
+    let (
+        subject_id,
+        agent_id,
+        agent_revision,
+        assignment_id,
+        assignment_revision,
+        wrapper_id,
+        connection_id,
+        connection_authority_revision,
+    ) = if subject_type == "local_control_center" {
+        ensure!(
+            request.agent_id.is_none() && request.assignment_id.is_none(),
+            "local policy cannot bind an agent assignment"
+        );
+        (
+            "local_control_center".to_owned(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+    } else {
+        let agent_id = validate_uuid(
+            request
+                .agent_id
+                .as_deref()
+                .context("agent policy requires agent_id")?,
+            "agent ID",
+        )?;
+        let assignment_id = validate_uuid(
+            request
+                .assignment_id
+                .as_deref()
+                .context("agent policy requires assignment_id")?,
+            "assignment ID",
+        )?;
+        let row = connection.query_row(
                 "SELECT a.revision,x.assignment_revision,x.wrapper_id,x.connection_id,c.grant_revision FROM homeserver_agents a JOIN wrapper_agent_assignments x ON x.agent_id=a.agent_id JOIN wrapper_connections c ON c.connection_id=x.connection_id AND c.wrapper_id=x.wrapper_id WHERE a.agent_id=?1 AND a.state='active' AND a.expires_at_utc>?3 AND x.assignment_id=?2 AND x.state='active' AND x.expires_at_utc>?3 AND c.lifecycle_state='active'",
                 params![agent_id,assignment_id,now_utc()],
                 |row| Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,i64>(4)?)),
             ).context("active agent assignment was not found")?;
-            ensure_no_emergency_stop(&connection, &agent_id, &row.2, &row.3)?;
-            (
-                assignment_id.clone(),
-                Some(agent_id),
-                Some(positive_u64(row.0)),
-                Some(assignment_id),
-                Some(positive_u64(row.1)),
-                Some(row.2),
-                Some(row.3),
-                Some(nonnegative_u64(row.4)),
-            )
-        };
+        ensure_no_emergency_stop(&connection, &agent_id, &row.2, &row.3)?;
+        (
+            assignment_id.clone(),
+            Some(agent_id),
+            Some(positive_u64(row.0)),
+            Some(assignment_id),
+            Some(positive_u64(row.1)),
+            Some(row.2),
+            Some(row.3),
+            Some(nonnegative_u64(row.4)),
+        )
+    };
     if remote_context_mode == "approved_selector" {
-        ensure!(subject_type == "agent_assignment", "approved-selector remote context requires an agent assignment");
+        ensure!(
+            subject_type == "agent_assignment",
+            "approved-selector remote context requires an agent assignment"
+        );
     }
     let purpose_hash = hash_text(&purpose);
     let previous_revision: i64 = connection.query_row(
@@ -1213,7 +1320,10 @@ fn cancel_request(state: &AppState, request: CancelInferenceRequest) -> Result<(
     Ok(())
 }
 
-fn select_policy(connection: &Connection, request: &GovernedInferenceRequest) -> Result<PolicyRecord> {
+fn select_policy(
+    connection: &Connection,
+    request: &GovernedInferenceRequest,
+) -> Result<PolicyRecord> {
     let (subject_type, subject_id) = match (&request.agent_id, &request.assignment_id) {
         (Some(_), Some(assignment_id)) => ("agent_assignment", assignment_id.as_str()),
         (None, None) => ("local_control_center", "local_control_center"),
@@ -1277,7 +1387,10 @@ fn revalidate_authority(
         params![policy.policy_id,policy.policy_revision as i64,policy.policy_hash,now],
         |row| row.get(0),
     )?;
-    ensure!(active_policy == 1, "model routing policy changed or expired");
+    ensure!(
+        active_policy == 1,
+        "model routing policy changed or expired"
+    );
     ensure!(
         authority.policy_id == policy.policy_id
             && authority.policy_revision == policy.policy_revision
@@ -1287,15 +1400,37 @@ fn revalidate_authority(
         "captured inference authority no longer matches the request"
     );
     if policy.subject_type == "local_control_center" {
-        ensure!(request.actor_type == "local_user" || request.actor_type == "system", "local inference policy requires a trusted local actor");
-        ensure!(request.agent_id.is_none() && request.assignment_id.is_none(), "local inference cannot claim agent authority");
+        ensure!(
+            request.actor_type == "local_user" || request.actor_type == "system",
+            "local inference policy requires a trusted local actor"
+        );
+        ensure!(
+            request.agent_id.is_none() && request.assignment_id.is_none(),
+            "local inference cannot claim agent authority"
+        );
         return Ok(());
     }
-    let agent_id = policy.agent_id.as_deref().context("agent policy is missing agent ID")?;
-    let assignment_id = policy.assignment_id.as_deref().context("agent policy is missing assignment ID")?;
-    let wrapper_id = policy.wrapper_id.as_deref().context("agent policy is missing wrapper ID")?;
-    let connection_id = policy.connection_id.as_deref().context("agent policy is missing connection ID")?;
-    ensure!(request.agent_id.as_deref() == Some(agent_id) && request.assignment_id.as_deref() == Some(assignment_id), "request agent assignment does not match policy authority");
+    let agent_id = policy
+        .agent_id
+        .as_deref()
+        .context("agent policy is missing agent ID")?;
+    let assignment_id = policy
+        .assignment_id
+        .as_deref()
+        .context("agent policy is missing assignment ID")?;
+    let wrapper_id = policy
+        .wrapper_id
+        .as_deref()
+        .context("agent policy is missing wrapper ID")?;
+    let connection_id = policy
+        .connection_id
+        .as_deref()
+        .context("agent policy is missing connection ID")?;
+    ensure!(
+        request.agent_id.as_deref() == Some(agent_id)
+            && request.assignment_id.as_deref() == Some(assignment_id),
+        "request agent assignment does not match policy authority"
+    );
     let count: i64 = connection.query_row(
         "SELECT COUNT(*) FROM homeserver_agents a JOIN wrapper_agent_assignments x ON x.agent_id=a.agent_id JOIN wrapper_connections c ON c.connection_id=x.connection_id AND c.wrapper_id=x.wrapper_id WHERE a.agent_id=?1 AND a.revision=?2 AND a.state='active' AND a.expires_at_utc>?8 AND x.assignment_id=?3 AND x.assignment_revision=?4 AND x.state='active' AND x.expires_at_utc>?8 AND c.wrapper_id=?5 AND c.connection_id=?6 AND c.grant_revision=?7 AND c.lifecycle_state='active'",
         params![
@@ -1310,7 +1445,10 @@ fn revalidate_authority(
         ],
         |row| row.get(0),
     )?;
-    ensure!(count == 1, "agent, assignment, wrapper, or connection authority changed");
+    ensure!(
+        count == 1,
+        "agent, assignment, wrapper, or connection authority changed"
+    );
     ensure_no_emergency_stop(connection, agent_id, wrapper_id, connection_id)?;
     enforce_agent_model_restrictions(connection, agent_id, policy)?;
     Ok(())
@@ -1326,18 +1464,42 @@ fn validate_remote_context(
         return Ok(());
     }
     ensure!(provider == "openrouter", "remote provider is unsupported");
-    ensure!(policy.remote_context_mode != "deny", "remote model context is denied by policy");
-    let provider_snapshot = openrouter_provider::snapshot_from_connection_for_governance(connection)?;
-    ensure!(provider_snapshot.enabled && provider_snapshot.allow_remote_context && provider_snapshot.api_key_configured, "OpenRouter is not ready for governed inference");
+    ensure!(
+        policy.remote_context_mode != "deny",
+        "remote model context is denied by policy"
+    );
+    let provider_snapshot =
+        openrouter_provider::snapshot_from_connection_for_governance(connection)?;
+    ensure!(
+        provider_snapshot.enabled
+            && provider_snapshot.allow_remote_context
+            && provider_snapshot.api_key_configured,
+        "OpenRouter is not ready for governed inference"
+    );
     if policy.require_zdr {
-        ensure!(provider_snapshot.zdr_only, "policy requires zero-data-retention routing");
+        ensure!(
+            provider_snapshot.zdr_only,
+            "policy requires zero-data-retention routing"
+        );
     }
     if PUBLIC_REMOTE_CLASSES.contains(&request.data_classification.as_str()) {
-        ensure!(matches!(policy.remote_context_mode.as_str(), "public_only" | "approved_selector"), "public remote context is not allowed by policy");
+        ensure!(
+            matches!(
+                policy.remote_context_mode.as_str(),
+                "public_only" | "approved_selector"
+            ),
+            "public remote context is not allowed by policy"
+        );
         return Ok(());
     }
-    ensure!(policy.remote_context_mode == "approved_selector", "private remote context requires an approved Phase 16E selector");
-    ensure!(request.data_classification != "private_source", "raw private source content may not be sent to a remote model");
+    ensure!(
+        policy.remote_context_mode == "approved_selector",
+        "private remote context requires an approved Phase 16E selector"
+    );
+    ensure!(
+        request.data_classification != "private_source",
+        "raw private source content may not be sent to a remote model"
+    );
     let selector_id = validate_uuid(
         request
             .privacy_selector_id
@@ -1358,7 +1520,10 @@ fn validate_remote_context(
         ],
         |row| row.get(0),
     )?;
-    ensure!(count == 1, "Phase 16E selector does not authorize this remote model context");
+    ensure!(
+        count == 1,
+        "Phase 16E selector does not authorize this remote model context"
+    );
     Ok(())
 }
 
@@ -1372,20 +1537,39 @@ fn enforce_agent_model_restrictions(
         params![agent_id],
         |row| row.get(0),
     )?;
-    let restrictions: Value = serde_json::from_str(&restrictions_json).unwrap_or_else(|_| json!({}));
+    let restrictions: Value =
+        serde_json::from_str(&restrictions_json).unwrap_or_else(|_| json!({}));
     if let Some(providers) = restrictions.get("providers").and_then(Value::as_array) {
-        let allowed = providers.iter().filter_map(Value::as_str).collect::<BTreeSet<_>>();
+        let allowed = providers
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<BTreeSet<_>>();
         for provider in &policy.provider_order {
-            ensure!(allowed.contains(provider.as_str()), "agent model restrictions deny a policy provider");
+            ensure!(
+                allowed.contains(provider.as_str()),
+                "agent model restrictions deny a policy provider"
+            );
         }
     }
     if restrictions.get("remote_context").and_then(Value::as_bool) == Some(false) {
-        ensure!(!policy.provider_order.iter().any(|provider| provider == "openrouter"), "agent model restrictions deny remote context");
+        ensure!(
+            !policy
+                .provider_order
+                .iter()
+                .any(|provider| provider == "openrouter"),
+            "agent model restrictions deny remote context"
+        );
     }
     if let Some(models) = restrictions.get("models").and_then(Value::as_array) {
-        let allowed = models.iter().filter_map(Value::as_str).collect::<BTreeSet<_>>();
+        let allowed = models
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<BTreeSet<_>>();
         for model in &policy.allowed_models {
-            ensure!(allowed.contains(model.as_str()), "agent model restrictions deny a policy model");
+            ensure!(
+                allowed.contains(model.as_str()),
+                "agent model restrictions deny a policy model"
+            );
         }
     }
     Ok(())
@@ -1402,7 +1586,10 @@ fn ensure_no_emergency_stop(
         params![agent_id,wrapper_id,connection_id,now_utc()],
         |row| row.get(0),
     )?;
-    ensure!(active == 0, "model inference is blocked by an active emergency stop");
+    ensure!(
+        active == 0,
+        "model inference is blocked by an active emergency stop"
+    );
     Ok(())
 }
 
@@ -1415,29 +1602,57 @@ async fn resolve_model(
     match provider {
         "ollama" => {
             let snapshot = model_center::snapshot(state).await?;
-            ensure!(snapshot.runtime.state == "running", "Ollama runtime is not running");
+            ensure!(
+                snapshot.runtime.state == "running",
+                "Ollama runtime is not running"
+            );
             let default = snapshot
                 .settings
                 .default_chat_model
                 .clone()
-                .or_else(|| snapshot.installed_models.first().map(|model| model.name.clone()))
+                .or_else(|| {
+                    snapshot
+                        .installed_models
+                        .first()
+                        .map(|model| model.name.clone())
+                })
                 .context("no local chat model is installed")?;
             let requested = requested_model
-                .and_then(|value| value.strip_prefix("ollama:").or_else(|| if value.starts_with("openrouter:") { None } else { Some(value) }))
+                .and_then(|value| {
+                    value.strip_prefix("ollama:").or_else(|| {
+                        if value.starts_with("openrouter:") {
+                            None
+                        } else {
+                            Some(value)
+                        }
+                    })
+                })
                 .map(str::trim)
                 .filter(|value| !value.is_empty());
             let model = requested.unwrap_or(&default).to_owned();
-            ensure!(snapshot.installed_models.iter().any(|installed| installed.name == model), "requested local model is not installed");
+            ensure!(
+                snapshot
+                    .installed_models
+                    .iter()
+                    .any(|installed| installed.name == model),
+                "requested local model is not installed"
+            );
             enforce_allowed_model(policy, provider, &model, &default, requested.is_some())?;
             Ok(model)
         }
         "openrouter" => {
             let provider_state = state.clone();
-            let snapshot = tokio::task::spawn_blocking(move || openrouter_provider::snapshot(&provider_state))
-                .await
-                .context("OpenRouter snapshot task failed")??;
-            ensure!(snapshot.enabled && snapshot.allow_remote_context && snapshot.api_key_configured, "OpenRouter is not ready");
-            let default = snapshot.default_model.context("OpenRouter default model is not configured")?;
+            let snapshot =
+                tokio::task::spawn_blocking(move || openrouter_provider::snapshot(&provider_state))
+                    .await
+                    .context("OpenRouter snapshot task failed")??;
+            ensure!(
+                snapshot.enabled && snapshot.allow_remote_context && snapshot.api_key_configured,
+                "OpenRouter is not ready"
+            );
+            let default = snapshot
+                .default_model
+                .context("OpenRouter default model is not configured")?;
             let requested = requested_model
                 .and_then(|value| value.strip_prefix("openrouter:"))
                 .map(str::trim)
@@ -1459,10 +1674,19 @@ fn enforce_allowed_model(
 ) -> Result<()> {
     let qualified = format!("{provider}:{model}");
     if policy.allowed_models.is_empty() {
-        ensure!(model == provider_default, "policy allows only the configured provider default model");
-        ensure!(!was_explicit || model == provider_default, "explicit model is not allowed by policy");
+        ensure!(
+            model == provider_default,
+            "policy allows only the configured provider default model"
+        );
+        ensure!(
+            !was_explicit || model == provider_default,
+            "explicit model is not allowed by policy"
+        );
     } else {
-        ensure!(policy.allowed_models.contains(&qualified), "model is not allowed by policy");
+        ensure!(
+            policy.allowed_models.contains(&qualified),
+            "model is not allowed by policy"
+        );
     }
     Ok(())
 }
@@ -1474,21 +1698,33 @@ fn effective_provider_order(
     let mut providers = policy.provider_order.clone();
     if let Some(preference) = request.provider_preference.as_deref() {
         let preference = choice(preference, PROVIDERS, "provider preference")?;
-        ensure!(providers.contains(&preference), "preferred provider is not allowed by policy");
+        ensure!(
+            providers.contains(&preference),
+            "preferred provider is not allowed by policy"
+        );
         providers.retain(|provider| provider == &preference);
     } else if let Some(model) = request.model.as_deref() {
         if model.starts_with("openrouter:") {
-            ensure!(providers.iter().any(|provider| provider == "openrouter"), "OpenRouter model is not allowed by policy");
+            ensure!(
+                providers.iter().any(|provider| provider == "openrouter"),
+                "OpenRouter model is not allowed by policy"
+            );
             providers.retain(|provider| provider == "openrouter");
         } else if model.starts_with("ollama:") {
-            ensure!(providers.iter().any(|provider| provider == "ollama"), "Ollama model is not allowed by policy");
+            ensure!(
+                providers.iter().any(|provider| provider == "ollama"),
+                "Ollama model is not allowed by policy"
+            );
             providers.retain(|provider| provider == "ollama");
         }
     }
     if !policy.allow_fallback {
         providers.truncate(1);
     }
-    ensure!(!providers.is_empty(), "no authorized model provider remains");
+    ensure!(
+        !providers.is_empty(),
+        "no authorized model provider remains"
+    );
     Ok(providers)
 }
 
@@ -1504,21 +1740,47 @@ fn policy_usage(connection: &Connection, policy: &PolicyRecord) -> Result<(u64, 
         params![policy.policy_id,timestamp(start)],
         |row| row.get(0),
     )?;
-    Ok(((requests + active).max(0) as u64,tokens.max(0) as u64,spend.max(0) as u64))
+    Ok((
+        (requests + active).max(0) as u64,
+        tokens.max(0) as u64,
+        spend.max(0) as u64,
+    ))
 }
 
 fn normalize_inference_request(request: &mut GovernedInferenceRequest) -> Result<()> {
     request.actor_type = choice(&request.actor_type, ACTOR_TYPES, "inference actor type")?;
     request.actor_id = bounded_text(&request.actor_id, 1, 180, "inference actor ID")?;
     request.purpose = bounded_text(&request.purpose, 1, 500, "inference purpose")?;
-    request.data_classification = bounded_text(&request.data_classification, 1, 80, "data classification")?;
-    request.idempotency_key = bounded_text(&request.idempotency_key, 16, 240, "inference idempotency key")?;
+    request.data_classification =
+        bounded_text(&request.data_classification, 1, 80, "data classification")?;
+    request.idempotency_key = bounded_text(
+        &request.idempotency_key,
+        16,
+        240,
+        "inference idempotency key",
+    )?;
     request.context_hash = bounded_hash(&request.context_hash, "inference context hash")?;
     request.prompt = bounded_text(&request.prompt, 1, 30_000, "inference prompt")?;
-    request.agent_id = request.agent_id.as_deref().map(|value| validate_uuid(value, "agent ID")).transpose()?;
-    request.assignment_id = request.assignment_id.as_deref().map(|value| validate_uuid(value, "assignment ID")).transpose()?;
-    request.policy_id = request.policy_id.as_deref().map(|value| validate_uuid(value, "policy ID")).transpose()?;
-    request.privacy_selector_id = request.privacy_selector_id.as_deref().map(|value| validate_uuid(value, "privacy selector ID")).transpose()?;
+    request.agent_id = request
+        .agent_id
+        .as_deref()
+        .map(|value| validate_uuid(value, "agent ID"))
+        .transpose()?;
+    request.assignment_id = request
+        .assignment_id
+        .as_deref()
+        .map(|value| validate_uuid(value, "assignment ID"))
+        .transpose()?;
+    request.policy_id = request
+        .policy_id
+        .as_deref()
+        .map(|value| validate_uuid(value, "policy ID"))
+        .transpose()?;
+    request.privacy_selector_id = request
+        .privacy_selector_id
+        .as_deref()
+        .map(|value| validate_uuid(value, "privacy selector ID"))
+        .transpose()?;
     if let Some(provider) = request.provider_preference.as_deref() {
         request.provider_preference = Some(choice(provider, PROVIDERS, "provider preference")?);
     }
@@ -1526,28 +1788,43 @@ fn normalize_inference_request(request: &mut GovernedInferenceRequest) -> Result
         request.model = Some(bounded_text(model, 1, 240, "model ID")?);
     }
     if let Some(tokens) = request.max_output_tokens {
-        ensure!((16..=4_096).contains(&tokens), "requested output-token limit is invalid");
+        ensure!(
+            (16..=4_096).contains(&tokens),
+            "requested output-token limit is invalid"
+        );
     }
     Ok(())
 }
 
 fn normalize_classes(values: &[String]) -> Result<Vec<String>> {
-    ensure!(!values.is_empty() && values.len() <= 16, "policy data classes are invalid");
+    ensure!(
+        !values.is_empty() && values.len() <= 16,
+        "policy data classes are invalid"
+    );
     let mut set = BTreeSet::new();
     for value in values {
         let value = bounded_text(value, 1, 80, "data classification")?;
-        ensure!(!NEVER_MODEL_CLASSES.contains(&value.as_str()), "secret data may not be authorized for model inference");
+        ensure!(
+            !NEVER_MODEL_CLASSES.contains(&value.as_str()),
+            "secret data may not be authorized for model inference"
+        );
         set.insert(value);
     }
     Ok(set.into_iter().collect())
 }
 
 fn normalize_providers(values: &[String]) -> Result<Vec<String>> {
-    ensure!(!values.is_empty() && values.len() <= PROVIDERS.len(), "policy provider order is invalid");
+    ensure!(
+        !values.is_empty() && values.len() <= PROVIDERS.len(),
+        "policy provider order is invalid"
+    );
     let mut result = Vec::new();
     for value in values {
         let provider = choice(value, PROVIDERS, "model provider")?;
-        ensure!(!result.contains(&provider), "policy provider order contains duplicates");
+        ensure!(
+            !result.contains(&provider),
+            "policy provider order contains duplicates"
+        );
         result.push(provider);
     }
     Ok(result)
@@ -1558,15 +1835,23 @@ fn normalize_models(values: &[String], providers: &[String]) -> Result<Vec<Strin
     let mut set = BTreeSet::new();
     for value in values {
         let model = bounded_text(value, 3, 240, "allowed model")?;
-        let (provider, model_id) = model.split_once(':').context("allowed models must be provider-qualified")?;
-        ensure!(providers.iter().any(|candidate| candidate == provider), "allowed model provider is not in policy order");
+        let (provider, model_id) = model
+            .split_once(':')
+            .context("allowed models must be provider-qualified")?;
+        ensure!(
+            providers.iter().any(|candidate| candidate == provider),
+            "allowed model provider is not in policy order"
+        );
         ensure!(!model_id.trim().is_empty(), "allowed model ID is empty");
         set.insert(model);
     }
     Ok(set.into_iter().collect())
 }
 
-fn existing_request(connection: &Connection, idempotency_key: &str) -> Result<Option<(String, String, String)>> {
+fn existing_request(
+    connection: &Connection,
+    idempotency_key: &str,
+) -> Result<Option<(String, String, String)>> {
     connection
         .query_row(
             "SELECT request_id,request_hash,state FROM model_inference_requests WHERE idempotency_key=?1",
@@ -1583,11 +1868,17 @@ fn ensure_request_running(connection: &Connection, request_id: &str) -> Result<(
         params![request_id],
         |row| row.get(0),
     )?;
-    ensure!(matches!(state.as_str(), "reserved" | "running"), "inference request is no longer executable");
+    ensure!(
+        matches!(state.as_str(), "reserved" | "running"),
+        "inference request is no longer executable"
+    );
     Ok(())
 }
 
-fn load_completed_result(connection: &Connection, request_id: &str) -> Result<GovernedInferenceResult> {
+fn load_completed_result(
+    connection: &Connection,
+    request_id: &str,
+) -> Result<GovernedInferenceResult> {
     connection.query_row(
         "SELECT r.receipt_id,r.provider_key,r.model_id,p.output_text,p.output_hash,r.prompt_tokens,r.completion_tokens,r.total_tokens,r.reported_cost_microusd,r.policy_id,r.policy_revision,r.authority_hash FROM model_inference_receipts r JOIN model_inference_private_results p ON p.request_id=r.request_id WHERE r.request_id=?1 AND r.outcome='completed'",
         params![request_id],
@@ -1616,9 +1907,10 @@ fn reconcile_interrupted(connection: &Connection) -> Result<()> {
         let mut statement = connection.prepare(
             "SELECT request_id FROM model_inference_requests WHERE state IN ('reserved','running') ORDER BY created_at_utc,request_id",
         )?;
-        statement
-            .query_map([], |row| row.get::<_,String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
     };
     for request_id in request_ids {
         let transaction = connection.unchecked_transaction()?;
@@ -1641,9 +1933,10 @@ fn finalize_unreceipted_terminal_requests_tx(transaction: &Transaction<'_>) -> R
         let mut statement = transaction.prepare(
             "SELECT r.request_id FROM model_inference_requests r LEFT JOIN model_inference_receipts x ON x.request_id=r.request_id WHERE r.state IN ('failed','cancelled','interrupted') AND x.request_id IS NULL ORDER BY r.created_at_utc,r.request_id",
         )?;
-        statement
-            .query_map([], |row| row.get::<_,String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
     };
     for request_id in request_ids {
         finalize_one_terminal_request_tx(transaction, &request_id)?;
@@ -1708,7 +2001,7 @@ fn write_receipt_tx(
         .query_row(
             "SELECT receipt_id FROM model_inference_receipts WHERE request_id=?1",
             params![request_id],
-            |row| row.get::<_,String>(0),
+            |row| row.get::<_, String>(0),
         )
         .optional()?
     {
@@ -1744,49 +2037,108 @@ fn read_policies(connection: &Connection) -> Result<Vec<RoutingPolicySummary>> {
     let mut statement = connection.prepare(
         "SELECT policy_id,subject_type,subject_id,agent_id,agent_revision,assignment_id,assignment_revision,wrapper_id,connection_id,connection_authority_revision,purpose,purpose_hash,allowed_data_classes_json,provider_order_json,allowed_models_json,allow_fallback,remote_context_mode,require_zdr,max_input_chars,max_output_tokens,window_seconds,max_requests,max_total_tokens,max_spend_microusd,policy_revision,policy_hash,state,created_by_user_id,reason,not_before_utc,expires_at_utc,created_at_utc,updated_at_utc FROM model_routing_policies ORDER BY updated_at_utc DESC,policy_revision DESC,policy_id DESC LIMIT 500",
     )?;
-    statement
+    let rows = statement
         .query_map([], map_policy)?
         .map(|row| row.map(policy_summary))
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+fn read_requests(connection: &Connection) -> Result<Vec<InferenceRequestSummary>> {
+    let mut statement = connection.prepare(
+        "SELECT request_id,subject_type,subject_id,policy_id,policy_revision,purpose_hash,data_classification,provider_order_json,requested_model,authority_hash,state,selected_provider,selected_model,attempt_count,failure_code,created_at_utc,started_at_utc,completed_at_utc FROM model_inference_requests ORDER BY created_at_utc DESC,request_id DESC LIMIT 500",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            let providers: String = row.get(7)?;
+            Ok(InferenceRequestSummary {
+                request_id: row.get(0)?,
+                subject_type: row.get(1)?,
+                subject_id: row.get(2)?,
+                policy_id: row.get(3)?,
+                policy_revision: positive_u64(row.get(4)?),
+                purpose_hash: row.get(5)?,
+                data_classification: row.get(6)?,
+                provider_order: serde_json::from_str(&providers).unwrap_or_default(),
+                requested_model: row.get(8)?,
+                authority_hash: row.get(9)?,
+                state: row.get(10)?,
+                selected_provider: row.get(11)?,
+                selected_model: row.get(12)?,
+                attempt_count: row.get::<_, i64>(13)?.max(0) as u32,
+                failure_code: row.get(14)?,
+                created_at_utc: row.get(15)?,
+                started_at_utc: row.get(16)?,
+                completed_at_utc: row.get(17)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 fn read_receipts(connection: &Connection) -> Result<Vec<InferenceReceiptSummary>> {
     let mut statement = connection.prepare(
         "SELECT receipt_id,request_id,subject_type,subject_id,agent_id,assignment_id,wrapper_id,connection_id,policy_id,policy_revision,purpose_hash,data_classification,provider_key,model_id,outcome,result_code,request_hash,authority_hash,prompt_hash,context_hash,result_hash,prompt_tokens,completion_tokens,total_tokens,reported_cost_microusd,receipt_hash,completed_at_utc FROM model_inference_receipts ORDER BY completed_at_utc DESC,receipt_id DESC LIMIT 500",
     )?;
-    statement
+    let rows = statement
         .query_map([], |row| {
             Ok(InferenceReceiptSummary {
-                receipt_id: row.get(0)?,request_id: row.get(1)?,subject_type: row.get(2)?,subject_id: row.get(3)?,
-                agent_id: row.get(4)?,assignment_id: row.get(5)?,wrapper_id: row.get(6)?,connection_id: row.get(7)?,
-                policy_id: row.get(8)?,policy_revision: positive_u64(row.get(9)?),purpose_hash: row.get(10)?,
-                data_classification: row.get(11)?,provider_key: row.get(12)?,model_id: row.get(13)?,outcome: row.get(14)?,
-                result_code: row.get(15)?,request_hash: row.get(16)?,authority_hash: row.get(17)?,prompt_hash: row.get(18)?,
-                context_hash: row.get(19)?,result_hash: row.get(20)?,prompt_tokens: nonnegative_u64(row.get(21)?),
-                completion_tokens: nonnegative_u64(row.get(22)?),total_tokens: nonnegative_u64(row.get(23)?),
-                reported_cost_microusd: nonnegative_u64(row.get(24)?),receipt_hash: row.get(25)?,completed_at_utc: row.get(26)?,
+                receipt_id: row.get(0)?,
+                request_id: row.get(1)?,
+                subject_type: row.get(2)?,
+                subject_id: row.get(3)?,
+                agent_id: row.get(4)?,
+                assignment_id: row.get(5)?,
+                wrapper_id: row.get(6)?,
+                connection_id: row.get(7)?,
+                policy_id: row.get(8)?,
+                policy_revision: positive_u64(row.get(9)?),
+                purpose_hash: row.get(10)?,
+                data_classification: row.get(11)?,
+                provider_key: row.get(12)?,
+                model_id: row.get(13)?,
+                outcome: row.get(14)?,
+                result_code: row.get(15)?,
+                request_hash: row.get(16)?,
+                authority_hash: row.get(17)?,
+                prompt_hash: row.get(18)?,
+                context_hash: row.get(19)?,
+                result_hash: row.get(20)?,
+                prompt_tokens: nonnegative_u64(row.get(21)?),
+                completion_tokens: nonnegative_u64(row.get(22)?),
+                total_tokens: nonnegative_u64(row.get(23)?),
+                reported_cost_microusd: nonnegative_u64(row.get(24)?),
+                receipt_hash: row.get(25)?,
+                completed_at_utc: row.get(26)?,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 fn read_events(connection: &Connection) -> Result<Vec<InferenceEventSummary>> {
     let mut statement = connection.prepare(
         "SELECT event_id,request_id,policy_id,event_type,outcome,actor_type,actor_id,detail_code,metadata_json,event_hash,created_at_utc FROM model_inference_events ORDER BY created_at_utc DESC,event_id DESC LIMIT 500",
     )?;
-    statement
+    let rows = statement
         .query_map([], |row| {
             let metadata: String = row.get(8)?;
             Ok(InferenceEventSummary {
-                event_id: row.get(0)?,request_id: row.get(1)?,policy_id: row.get(2)?,event_type: row.get(3)?,
-                outcome: row.get(4)?,actor_type: row.get(5)?,actor_id: row.get(6)?,detail_code: row.get(7)?,
-                metadata: serde_json::from_str(&metadata).unwrap_or_else(|_| json!({})),event_hash: row.get(9)?,created_at_utc: row.get(10)?,
+                event_id: row.get(0)?,
+                request_id: row.get(1)?,
+                policy_id: row.get(2)?,
+                event_type: row.get(3)?,
+                outcome: row.get(4)?,
+                actor_type: row.get(5)?,
+                actor_id: row.get(6)?,
+                detail_code: row.get(7)?,
+                metadata: serde_json::from_str(&metadata).unwrap_or_else(|_| json!({})),
+                event_hash: row.get(9)?,
+                created_at_utc: row.get(10)?,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 fn map_policy(row: &Row<'_>) -> rusqlite::Result<PolicyRecord> {
@@ -1794,32 +2146,76 @@ fn map_policy(row: &Row<'_>) -> rusqlite::Result<PolicyRecord> {
     let providers: String = row.get(13)?;
     let models: String = row.get(14)?;
     Ok(PolicyRecord {
-        policy_id: row.get(0)?,subject_type: row.get(1)?,subject_id: row.get(2)?,agent_id: row.get(3)?,
-        agent_revision: row.get::<_,Option<i64>>(4)?.map(positive_u64),assignment_id: row.get(5)?,
-        assignment_revision: row.get::<_,Option<i64>>(6)?.map(positive_u64),wrapper_id: row.get(7)?,connection_id: row.get(8)?,
-        connection_authority_revision: row.get::<_,Option<i64>>(9)?.map(nonnegative_u64),purpose: row.get(10)?,purpose_hash: row.get(11)?,
-        allowed_data_classes: serde_json::from_str(&classes).unwrap_or_default(),provider_order: serde_json::from_str(&providers).unwrap_or_default(),
-        allowed_models: serde_json::from_str(&models).unwrap_or_default(),allow_fallback: row.get::<_,i64>(15)? == 1,
-        remote_context_mode: row.get(16)?,require_zdr: row.get::<_,i64>(17)? == 1,max_input_chars: row.get::<_,i64>(18)?.max(1) as u32,
-        max_output_tokens: row.get::<_,i64>(19)?.clamp(16,4096) as u32,window_seconds: row.get::<_,i64>(20)?.max(60) as u32,
-        max_requests: nonnegative_u64(row.get(21)?),max_total_tokens: nonnegative_u64(row.get(22)?),max_spend_microusd: nonnegative_u64(row.get(23)?),
-        policy_revision: positive_u64(row.get(24)?),policy_hash: row.get(25)?,state: row.get(26)?,created_by_user_id: row.get(27)?,
-        reason: row.get(28)?,not_before_utc: row.get(29)?,expires_at_utc: row.get(30)?,created_at_utc: row.get(31)?,updated_at_utc: row.get(32)?,
+        policy_id: row.get(0)?,
+        subject_type: row.get(1)?,
+        subject_id: row.get(2)?,
+        agent_id: row.get(3)?,
+        agent_revision: row.get::<_, Option<i64>>(4)?.map(positive_u64),
+        assignment_id: row.get(5)?,
+        assignment_revision: row.get::<_, Option<i64>>(6)?.map(positive_u64),
+        wrapper_id: row.get(7)?,
+        connection_id: row.get(8)?,
+        connection_authority_revision: row.get::<_, Option<i64>>(9)?.map(nonnegative_u64),
+        purpose: row.get(10)?,
+        purpose_hash: row.get(11)?,
+        allowed_data_classes: serde_json::from_str(&classes).unwrap_or_default(),
+        provider_order: serde_json::from_str(&providers).unwrap_or_default(),
+        allowed_models: serde_json::from_str(&models).unwrap_or_default(),
+        allow_fallback: row.get::<_, i64>(15)? == 1,
+        remote_context_mode: row.get(16)?,
+        require_zdr: row.get::<_, i64>(17)? == 1,
+        max_input_chars: row.get::<_, i64>(18)?.max(1) as u32,
+        max_output_tokens: row.get::<_, i64>(19)?.clamp(16, 4096) as u32,
+        window_seconds: row.get::<_, i64>(20)?.max(60) as u32,
+        max_requests: nonnegative_u64(row.get(21)?),
+        max_total_tokens: nonnegative_u64(row.get(22)?),
+        max_spend_microusd: nonnegative_u64(row.get(23)?),
+        policy_revision: positive_u64(row.get(24)?),
+        policy_hash: row.get(25)?,
+        state: row.get(26)?,
+        created_by_user_id: row.get(27)?,
+        reason: row.get(28)?,
+        not_before_utc: row.get(29)?,
+        expires_at_utc: row.get(30)?,
+        created_at_utc: row.get(31)?,
+        updated_at_utc: row.get(32)?,
     })
 }
 
 fn policy_summary(policy: PolicyRecord) -> RoutingPolicySummary {
     RoutingPolicySummary {
-        policy_id: policy.policy_id,subject_type: policy.subject_type,subject_id: policy.subject_id,agent_id: policy.agent_id,
-        agent_revision: policy.agent_revision,assignment_id: policy.assignment_id,assignment_revision: policy.assignment_revision,
-        wrapper_id: policy.wrapper_id,connection_id: policy.connection_id,connection_authority_revision: policy.connection_authority_revision,
-        purpose: policy.purpose,allowed_data_classes: policy.allowed_data_classes,provider_order: policy.provider_order,
-        allowed_models: policy.allowed_models,allow_fallback: policy.allow_fallback,remote_context_mode: policy.remote_context_mode,
-        require_zdr: policy.require_zdr,max_input_chars: policy.max_input_chars,max_output_tokens: policy.max_output_tokens,
-        window_seconds: policy.window_seconds,max_requests: policy.max_requests,max_total_tokens: policy.max_total_tokens,
-        max_spend_microusd: policy.max_spend_microusd,policy_revision: policy.policy_revision,policy_hash: policy.policy_hash,
-        state: policy.state,created_by_user_id: policy.created_by_user_id,reason: policy.reason,not_before_utc: policy.not_before_utc,
-        expires_at_utc: policy.expires_at_utc,created_at_utc: policy.created_at_utc,updated_at_utc: policy.updated_at_utc,
+        policy_id: policy.policy_id,
+        subject_type: policy.subject_type,
+        subject_id: policy.subject_id,
+        agent_id: policy.agent_id,
+        agent_revision: policy.agent_revision,
+        assignment_id: policy.assignment_id,
+        assignment_revision: policy.assignment_revision,
+        wrapper_id: policy.wrapper_id,
+        connection_id: policy.connection_id,
+        connection_authority_revision: policy.connection_authority_revision,
+        purpose: policy.purpose,
+        allowed_data_classes: policy.allowed_data_classes,
+        provider_order: policy.provider_order,
+        allowed_models: policy.allowed_models,
+        allow_fallback: policy.allow_fallback,
+        remote_context_mode: policy.remote_context_mode,
+        require_zdr: policy.require_zdr,
+        max_input_chars: policy.max_input_chars,
+        max_output_tokens: policy.max_output_tokens,
+        window_seconds: policy.window_seconds,
+        max_requests: policy.max_requests,
+        max_total_tokens: policy.max_total_tokens,
+        max_spend_microusd: policy.max_spend_microusd,
+        policy_revision: policy.policy_revision,
+        policy_hash: policy.policy_hash,
+        state: policy.state,
+        created_by_user_id: policy.created_by_user_id,
+        reason: policy.reason,
+        not_before_utc: policy.not_before_utc,
+        expires_at_utc: policy.expires_at_utc,
+        created_at_utc: policy.created_at_utc,
+        updated_at_utc: policy.updated_at_utc,
     }
 }
 
@@ -1836,7 +2232,17 @@ fn record_event(
     metadata: Value,
 ) -> Result<()> {
     let transaction = connection.unchecked_transaction()?;
-    record_event_tx(&transaction,request_id,policy_id,event_type,outcome,actor_type,actor_id,detail_code,metadata)?;
+    record_event_tx(
+        &transaction,
+        request_id,
+        policy_id,
+        event_type,
+        outcome,
+        actor_type,
+        actor_id,
+        detail_code,
+        metadata,
+    )?;
     transaction.commit()?;
     Ok(())
 }
@@ -1858,7 +2264,7 @@ fn record_event_tx(
     let document = json!({
         "schema":"homeserver.model-inference-event.v1","event_id":event_id,"request_id":request_id,"policy_id":policy_id,
         "event_type":event_type,"outcome":outcome,"actor_type":actor_type,"actor_id":actor_id,
-        "detail_code":detail_code,"metadata":metadata,"created_at_utc":created_at
+        "detail_code":detail_code,"metadata":metadata.clone(),"created_at_utc":created_at
     });
     let event_hash = hash_json(&document)?;
     transaction.execute(
@@ -1871,14 +2277,23 @@ fn record_event_tx(
 fn bounded_text(value: &str, minimum: usize, maximum: usize, label: &str) -> Result<String> {
     let value = value.trim();
     let count = value.chars().count();
-    ensure!(count >= minimum && count <= maximum, "{label} length is invalid");
-    ensure!(!value.contains('\0'), "{label} contains an invalid character");
+    ensure!(
+        count >= minimum && count <= maximum,
+        "{label} length is invalid"
+    );
+    ensure!(
+        !value.contains('\0'),
+        "{label} contains an invalid character"
+    );
     Ok(value.to_owned())
 }
 
 fn bounded_hash(value: &str, label: &str) -> Result<String> {
     let value = value.trim().to_ascii_lowercase();
-    ensure!(value.len() == 64 && value.chars().all(|character| character.is_ascii_hexdigit()), "{label} is invalid");
+    ensure!(
+        value.len() == 64 && value.chars().all(|character| character.is_ascii_hexdigit()),
+        "{label} is invalid"
+    );
     Ok(value)
 }
 
@@ -1892,12 +2307,6 @@ fn validate_uuid(value: &str, label: &str) -> Result<String> {
     Uuid::parse_str(value)
         .with_context(|| format!("{label} is invalid"))
         .map(|value| value.to_string())
-}
-
-fn parse_utc(value: &str, label: &str) -> Result<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(value)
-        .with_context(|| format!("{label} is invalid"))
-        .map(|value| value.with_timezone(&Utc))
 }
 
 fn timestamp(value: DateTime<Utc>) -> String {
@@ -1949,7 +2358,11 @@ fn public_failure_code(error: &anyhow::Error) -> String {
 fn api_error(code: &'static str, error: anyhow::Error) -> (StatusCode, Json<ApiError>) {
     (
         StatusCode::BAD_REQUEST,
-        Json(ApiError { ok: false, error: code, message: error.to_string() }),
+        Json(ApiError {
+            ok: false,
+            error: code,
+            message: error.to_string(),
+        }),
     )
 }
 
@@ -1959,7 +2372,10 @@ mod tests {
 
     #[test]
     fn provider_order_is_explicit_and_deduplicated() {
-        assert_eq!(normalize_providers(&["ollama".to_owned()]).unwrap(), vec!["ollama"]);
+        assert_eq!(
+            normalize_providers(&["ollama".to_owned()]).unwrap(),
+            vec!["ollama"]
+        );
         assert!(normalize_providers(&["ollama".to_owned(), "ollama".to_owned()]).is_err());
     }
 
@@ -1971,6 +2387,8 @@ mod tests {
     #[test]
     fn hashes_are_lowercase_sha256() {
         assert_eq!(hash_text("phase20").len(), 64);
-        assert!(hash_text("phase20").chars().all(|character| character.is_ascii_hexdigit()));
+        assert!(hash_text("phase20")
+            .chars()
+            .all(|character| character.is_ascii_hexdigit()));
     }
 }

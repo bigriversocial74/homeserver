@@ -293,6 +293,8 @@ async fn test_provider(
         &request.prompt,
         "manual_test",
         true,
+        true,
+        None,
     )
     .await
     .map(Json)
@@ -317,6 +319,12 @@ async fn disconnect_provider(
 pub fn snapshot(state: &AppState) -> Result<OpenRouterSettingsSnapshot> {
     let connection = state.connection()?;
     snapshot_from_connection(&connection)
+}
+
+pub(crate) fn snapshot_from_connection_for_governance(
+    connection: &Connection,
+) -> Result<OpenRouterSettingsSnapshot> {
+    snapshot_from_connection(connection)
 }
 
 fn snapshot_from_connection(connection: &Connection) -> Result<OpenRouterSettingsSnapshot> {
@@ -429,29 +437,30 @@ fn disconnect(state: &AppState) -> Result<OpenRouterSettingsSnapshot> {
     snapshot_from_connection(&connection)
 }
 
-pub async fn generate_agent_response(
+pub async fn generate_governed_response(
     state: Arc<AppState>,
-    requested_model: Option<&str>,
+    model: &str,
     prompt: &str,
-) -> Result<Option<OpenRouterCompletionResult>> {
-    let settings = {
-        let connection = state.connection()?;
-        load_settings(&connection)?
-    };
-    let explicit_remote_model = requested_model
-        .and_then(|value| value.strip_prefix("openrouter:"))
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if explicit_remote_model.is_none() && (!settings.enabled || !settings.allow_remote_context) {
-        return Ok(None);
-    }
-    if requested_model.is_some() && explicit_remote_model.is_none() {
-        return Ok(None);
-    }
+    max_output_tokens: u32,
+    request_id: &str,
+) -> Result<OpenRouterCompletionResult> {
+    ensure!(
+        (16..=4096).contains(&max_output_tokens),
+        "governed OpenRouter output-token limit is invalid"
+    );
+    Uuid::parse_str(request_id).context("governed inference request ID is invalid")?;
+    let model = normalize_model_id(model)?;
     let prompt = sanitize_prompt(prompt, MAX_AGENT_PROMPT_CHARS)?;
-    complete(state, explicit_remote_model, &prompt, "agent_prompt", true)
-        .await
-        .map(Some)
+    complete(
+        state,
+        Some(&model),
+        &prompt,
+        "agent_prompt",
+        true,
+        false,
+        Some(max_output_tokens),
+    )
+    .await
 }
 
 async fn fetch_catalog(state: &AppState) -> Result<OpenRouterCatalogSnapshot> {
@@ -505,6 +514,8 @@ async fn complete(
     prompt: &str,
     request_kind: &str,
     require_remote_context: bool,
+    allow_configured_fallbacks: bool,
+    max_output_tokens_override: Option<u32>,
 ) -> Result<OpenRouterCompletionResult> {
     let started = std::time::Instant::now();
     let (settings, monthly_request_count, monthly_spend_microusd) = {
@@ -543,7 +554,10 @@ async fn complete(
     let request_id = Uuid::new_v4().to_string();
 
     let mut body = Map::new();
-    if settings.allow_provider_fallbacks && !settings.fallback_models.is_empty() {
+    if allow_configured_fallbacks
+        && settings.allow_provider_fallbacks
+        && !settings.fallback_models.is_empty()
+    {
         let mut models = vec![Value::String(primary_model.clone())];
         models.extend(
             settings
@@ -556,6 +570,9 @@ async fn complete(
     } else {
         body.insert("model".to_owned(), Value::String(primary_model.clone()));
     }
+    let max_output_tokens = max_output_tokens_override
+        .unwrap_or(settings.max_output_tokens)
+        .clamp(16, settings.max_output_tokens);
     body.insert(
         "messages".to_owned(),
         json!([
@@ -569,7 +586,7 @@ async fn complete(
     body.insert("stream".to_owned(), Value::Bool(false));
     body.insert(
         "max_tokens".to_owned(),
-        Value::Number(settings.max_output_tokens.into()),
+        Value::Number(max_output_tokens.into()),
     );
     body.insert(
         "provider".to_owned(),

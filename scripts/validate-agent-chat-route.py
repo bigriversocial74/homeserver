@@ -29,6 +29,10 @@ required_chat = [
     'function applyShellHealth(detail)',
     'runtime.classList.toggle("warn"',
     'Model runtime offline',
+    'function scheduleMount(force = false)',
+    'void refreshAll({ initial: true })',
+    'const generation = ++refreshGeneration',
+    'window.addEventListener("homeserver-agent-route", () => scheduleMount())',
 ]
 required_css = [
     'html.agent-chat-mode',
@@ -74,7 +78,11 @@ if 'Model Center unavailable:' in main and 'activePage === "models"' not in main
     raise SystemExit("Model Center failure is still global")
 if 'if (isAgentPage()) mount(true);' in chat:
     raise SystemExit("Background shell health still remounts Agent Chat")
+if 'window.addEventListener("hashchange"' in chat:
+    raise SystemExit("Agent Chat still competes with the shell hash router")
+if 'window.setTimeout(() => mount(true), 0)' in chat:
+    raise SystemExit("Agent Chat still force-mounts through duplicate timer paths")
 if 'event.target.closest("[data-page]")' in main:
     raise SystemExit("Competing delegated Control Center router remains")
 
-print("HomeServer uses one explicit render lifecycle with no app-wide observer network.")
+print("HomeServer uses one coalesced Agent route lifecycle with no duplicate hash owner or app-wide observer network.")

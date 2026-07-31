@@ -17,6 +17,8 @@ let connectFormOpen = false;
 let historyQuery = "";
 let notice = null;
 let initialized = false;
+let refreshGeneration = 0;
+let mountScheduled = false;
 let shellHealth = { service: "online", models: "unknown" };
 
 function escapeHtml(value) {
@@ -272,18 +274,29 @@ function mount(force = false) {
   if (!isAgentPage()) return;
   const host = document.querySelector('[data-homeserver-agent-host="true"]');
   if (!host) return;
-  if (!force && host.querySelector('[data-homeserver-chat-mounted="true"]')) return;
+  const initialLoad = !initialized && !loading;
+  if (initialLoad) {
+    initialized = true;
+    loading = true;
+  }
+  if (!force && !initialLoad && host.querySelector('[data-homeserver-chat-mounted="true"]')) return;
   host.innerHTML = renderPage();
   bindEvents();
-  if (!initialized && !loading) {
-    initialized = true;
-    void refreshAll();
-  }
+  if (initialLoad) void refreshAll({ initial: true });
   window.setTimeout(() => {
     const stream = document.querySelector("#hs-chat-stream");
     if (stream) stream.scrollTop = stream.scrollHeight;
     autoSizeComposer();
   }, 0);
+}
+
+function scheduleMount(force = false) {
+  if (mountScheduled) return;
+  mountScheduled = true;
+  window.requestAnimationFrame(() => {
+    mountScheduled = false;
+    mount(force);
+  });
 }
 
 function bindEvents() {
@@ -359,23 +372,29 @@ function startNewChat() {
   document.querySelector("#hs-chat-input")?.focus();
 }
 
-async function refreshAll() {
+async function refreshAll(options = {}) {
+  const initial = options?.initial === true;
+  const generation = ++refreshGeneration;
   loading = true;
   notice = null;
-  mount(true);
+  if (!initial) mount(true);
   try {
     const [nextWorkspace, nextProvider] = await Promise.all([
       invoke("homeserver_agent_workspace"),
       invoke("homeserver_microgifter_status").catch(() => null),
     ]);
+    if (generation !== refreshGeneration) return;
     workspace = nextWorkspace;
     if (nextProvider) provider = nextProvider;
     ensureActiveThread();
   } catch (error) {
+    if (generation !== refreshGeneration) return;
     notice = { kind: "warning", message: `HomeServer Agent is unavailable: ${String(error)}` };
   } finally {
-    loading = false;
-    mount(true);
+    if (generation === refreshGeneration) {
+      loading = false;
+      mount(true);
+    }
   }
 }
 
@@ -513,6 +532,5 @@ function applyShellHealth(detail) {
 }
 
 window.addEventListener("homeserver-shell-health", (event) => applyShellHealth(event.detail));
-window.addEventListener("homeserver-agent-route", () => window.setTimeout(() => mount(true), 0));
-window.addEventListener("hashchange", () => window.setTimeout(() => mount(true), 0));
-window.setTimeout(() => mount(true), 0);
+window.addEventListener("homeserver-agent-route", () => scheduleMount());
+scheduleMount();

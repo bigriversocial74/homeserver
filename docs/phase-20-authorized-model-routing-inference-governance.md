@@ -72,6 +72,10 @@ HomeServer snapshots and the Control Center expose only safe metadata and hashes
 
 Reserved or running requests become interrupted on restart and receive immutable receipts. Explicit cancellation and policy revocation terminate active requests fail closed. Evidence tables do not silently delete history; retention overflow requires an archival solution.
 
+## Agent Workspace lifecycle repair
+
+Phase 20 also repairs the Agent Workspace boot path. The Control Center shell is the only hash-route owner, the Agent Chat module consumes one explicit route event, mount requests are coalesced, the first render starts directly in loading state, and stale overlapping refreshes cannot replace newer state. This removes the previous welcome/loading/content triple-render and duplicate route-driven DOM replacement.
+
 ## Local API
 
 - `GET /v1/models/governance`

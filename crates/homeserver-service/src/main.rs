@@ -6,6 +6,7 @@ mod config;
 mod database;
 mod document_extraction;
 mod http;
+mod inference_governance;
 mod knowledge_vault;
 mod mcp_runtime;
 mod microgifter_connection;
@@ -122,6 +123,17 @@ impl AppState {
             return HealthSnapshot::needs_attention(
                 &self.config.server_name,
                 "openrouter_provider_integrity_check_failed",
+            );
+        }
+
+        if let Err(error) = inference_governance::health_check(&connection) {
+            error!(
+                ?error,
+                "HomeServer model inference governance database health check failed"
+            );
+            return HealthSnapshot::needs_attention(
+                &self.config.server_name,
+                "model_inference_governance_integrity_check_failed",
             );
         }
 
@@ -283,6 +295,7 @@ impl AppState {
             software_authority::maintain_history(&connection)?;
             microgifter_connection::maintain_history(&connection)?;
             model_center::maintain_history(&connection)?;
+            inference_governance::maintain_history(&connection)?;
             operational_data::maintain_history(&connection)?;
             review_intelligence::maintain_history(&connection)?;
             agent_runtime::maintain_history(&connection)?;
