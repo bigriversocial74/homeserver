@@ -1,27 +1,19 @@
-name: Phase 18 Branch Builder
+name: Phase 18 Builder V3
 
 on:
-  push:
-    branches:
-      - feature/phase-18-supervised-action-orchestration
-    paths:
-      - .github/workflows/phase18-branch-builder.yml
   pull_request:
-    branches:
-      - main
-    paths:
-      - .github/workflows/phase18-branch-builder.yml
+    branches: [main]
+    paths: [.github/workflows/phase18-builder-v3.yml]
 
 permissions:
   contents: write
 
 concurrency:
-  group: phase18-branch-builder
+  group: phase18-builder-v3
   cancel-in-progress: true
 
 jobs:
   build:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -37,67 +29,109 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: package-lock.json
-      - name: Assemble permanent Phase 18 files
+      - name: Assemble and repair Phase 18
         shell: bash
         run: |
           python - <<'PY'
-          import base64
-          import gzip
-          import hashlib
+          import base64, gzip, hashlib
           from pathlib import Path
-
-          expected = {
-              '.phase18-part-00': (12000, 'ba55f602a8876f4b46285029973e914656fb1620a64b39350220783ba954a56b'),
-              '.phase18-part-01': (12000, '802861f6108e403eb53233971714f5b3a650b3684be858c589246f11ba60814d'),
-              '.phase18-part-02': (12000, 'bd4fb349166bcdb794debc65a92cdf9048ac2938d35b194a43b16d8b1a8c6199'),
-              '.phase18-part-03': (12000, '88dbb47541fc472b86f7a96b913b24fbf37ba792d03f0aad8c0916673e459112'),
-              '.phase18-part-04a': (2900, 'dfff6497892bdecac1e4a2f3e6272b2245efb31d472096281216c6521dd24542'),
-              '.phase18-part-04b': (2972, '8d03fc93ef3759004dc8b9e5205538f4f31a5f4364ae723e2acfd9d02f2136d4'),
-          }
-          root = Path('scripts')
-          payload_parts = []
-          for name, (expected_size, expected_sha) in expected.items():
-              path = root / name
-              data = path.read_bytes()
-              actual_sha = hashlib.sha256(data).hexdigest()
-              print(name, len(data), actual_sha)
-              if len(data) != expected_size or actual_sha != expected_sha:
-                  raise SystemExit(f'fragment integrity failure: {name}')
-              payload_parts.append(data.decode('ascii'))
-          encoded = ''.join(payload_parts)
-          compressed = base64.b64decode(encoded, validate=True)
-          builder = gzip.decompress(compressed)
-          if hashlib.sha256(builder).hexdigest() != '7657c1875fe526e6be3d8ae947200304447bf1ff3f7828f9440b811f00a69535':
-              raise SystemExit('decoded builder integrity failure')
-          (root / 'phase18-branch-builder.py').write_bytes(builder)
+          names = ['00','01','02','03','04a','04b']
+          payload = ''.join((Path('scripts') / f'.phase18-part-{name}').read_text() for name in names)
+          assert len(payload) == 53872
+          assert hashlib.sha256(payload.encode()).hexdigest() == '8bb06a07e9ac535779981ccfa5df5a48fdf19076a81fd94b8177cce1a21aca36'
+          Path('scripts/phase18-branch-builder.py').write_bytes(gzip.decompress(base64.b64decode(payload, validate=True)))
           PY
           python scripts/phase18-branch-builder.py
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('crates/homeserver-service/src/app/wrapper_agents.rs')
+          t = p.read_text()
+          old = 'fn create_proposal(connection: &Connection, request: CreateProposalRequest) -> Result<String> {'
+          new = 'pub(crate) fn create_proposal(connection: &Connection, request: CreateProposalRequest) -> Result<String> {'
+          if new not in t:
+              assert old in t
+              t = t.replace(old, new, 1)
+          p.write_text(t)
+
+          p = Path('crates/homeserver-service/src/app/wrapper_runtime.rs')
+          t = p.read_text()
+          old = 'fn create_plan(state: &AppState, request: CreateRuntimePlanRequest) -> Result<String> {'
+          new = 'pub(crate) fn create_plan(state: &AppState, request: CreateRuntimePlanRequest) -> Result<String> {'
+          if new not in t:
+              assert old in t
+              t = t.replace(old, new, 1)
+          p.write_text(t)
+
+          p = Path('crates/homeserver-service/src/app/wrapper_orchestration.rs')
+          t = p.read_text()
+          scan = '''        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };'''
+          owned = '''        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };'''
+          assert t.count(scan) == 2
+          t = t.replace(scan, owned)
+          old = '''    if transaction
+        .query_row(
+            "SELECT compensation_receipt_id FROM agent_supervised_compensation_receipts WHERE checkpoint_id=?1",
+            params![&checkpoint_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .is_some()
+    {'''
+          new = '''    let existing_compensation_receipt: Option<String> = transaction
+        .query_row(
+            "SELECT compensation_receipt_id FROM agent_supervised_compensation_receipts WHERE checkpoint_id=?1",
+            params![&checkpoint_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if existing_compensation_receipt.is_some() {'''
+          assert old in t
+          t = t.replace(old, new, 1)
+          anchor = '''fn timestamp(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+'''
+          parser = anchor + '''
+fn parse_utc(value: &str, label: &str) -> Result<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .with_context(|| format!("{label} is invalid"))
+        .map(|value| value.with_timezone(&Utc))
+}
+'''
+          assert anchor in t and 'fn parse_utc(' not in t
+          t = t.replace(anchor, parser, 1)
+          p.write_text(t)
+          PY
           cargo fmt --all
-      - name: Install frontend dependencies
-        run: npm ci
-      - name: Validate Phase 18 and retained contracts
+      - name: Validate and test
         run: |
+          npm ci
           python scripts/validate-supervised-orchestration.py
           python scripts/validate-wrapper-agents.py
           python scripts/validate-wrapper-runtime.py
           python scripts/validate-wrapper-privacy.py
           npm run check:frontend
           npm run build
-      - name: Test native service and stage lint
-        run: |
           cargo fmt --all -- --check
           cargo test -p microgifter-homeserver-service
           cargo test -p microgifter-homeserver-service --test phase18_supervised_orchestration_contract
           cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings -A dead_code -A unused_imports -A unused_variables -A unused_mut
-      - name: Commit verified Phase 18 implementation
+      - name: Commit clean implementation
         shell: bash
         run: |
-          rm -f scripts/.phase18-part-* scripts/.phase18-trigger scripts/phase18-branch-builder.py .github/workflows/phase18-branch-builder.yml
+          rm -f scripts/.phase18-* scripts/phase18-branch-builder.py docs/.phase18-staging-marker.md
+          rm -f .github/workflows/phase18-branch-builder.yml .github/workflows/phase18-builder-v2.yml .github/workflows/phase18-builder-v3.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --check
           git commit -m "Build Phase 18 supervised action orchestration"
           git push
-
-# Linux assembly gate; Windows exact-head certification remains authoritative
