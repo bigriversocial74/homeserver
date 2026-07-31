@@ -13,6 +13,7 @@ def require(path: str, needles: list[str]) -> None:
 
 require("crates/homeserver-service/src/agent_integrations.rs", [
     "oauth_callback_router",
+    "http://127.0.0.1:47831/oauth/microgifter/callback",
     "collect_mcp_grounding",
     "read_tools_may_run_automatically",
     "state_changing_tools_require_authority",
