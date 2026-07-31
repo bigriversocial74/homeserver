@@ -40,12 +40,26 @@ jobs:
           python scripts/phase20-integrate.py
           python - <<'PY'
           from pathlib import Path
+
           path = Path('scripts/validate-model-inference-governance.py')
           text = path.read_text(encoding='utf-8')
           old = 'forbid(frontend, ["MutationObserver", "output_text", "private_results"], "Agent Runtime governance UI")'
           new = 'forbid(frontend, ["MutationObserver", "output_text", "output: receipt.output"], "Agent Runtime governance UI")'
           if old not in text:
               raise SystemExit('Phase 20 validator repair anchor is missing')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          path = Path('scripts/validate-openrouter-provider.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'agent = read("crates/homeserver-service/src/agent_runtime.rs")\napp = read('
+          new = 'agent = read("crates/homeserver-service/src/agent_runtime.rs")\ngovernance = read("crates/homeserver-service/src/inference_governance.rs")\napp = read('
+          if old not in text:
+              raise SystemExit('OpenRouter validator source anchor is missing')
+          text = text.replace(old, new, 1)
+          old = 'require(agent, "openrouter_provider::generate_agent_response", "Agent Workspace routing")'
+          new = 'require(agent, "inference_governance::infer", "Agent Workspace governed routing")\nrequire(governance, "openrouter_provider::generate_governed_response", "governed OpenRouter adapter")'
+          if old not in text:
+              raise SystemExit('OpenRouter validator routing anchor is missing')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
       - name: Install frontend dependencies
