@@ -105,3 +105,7 @@ Local Control Center APIs:
 8. Per-result approval is bound to the exact output hash and blocks delivery before approval.
 9. Selector revocation and source deletion invalidate pending delivery and cached projections.
 10. Exact-head contract, native tests, strict lint, installer, LocalSystem, backup, signed-update, and forced-rollback certification pass.
+
+## Certification evidence policy
+
+A source-repair run is supporting evidence, not final certification. Phase 16E remains draft and unmerged until the permanent workflows execute on the exact user-authored candidate head and all retained contract, native test, strict-lint, installer, LocalSystem, backup, signed-update, and forced-rollback gates pass.
