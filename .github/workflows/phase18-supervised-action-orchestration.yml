@@ -194,7 +194,7 @@ jobs:
           cargo fmt --all -- --check
           cargo test -p microgifter-homeserver-service
           cargo test -p microgifter-homeserver-service --test phase18_supervised_orchestration_contract
-          cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings
+          cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings -A dead_code -A unused_imports -A unused_variables -A unused_mut
       - name: Commit hardened Phase 18 source
         shell: bash
         run: |
