@@ -218,7 +218,7 @@ INSERT OR IGNORE INTO evidence_archive_policies (
   retention_count,max_package_bytes,policy_hash,created_by_user_id,reason,created_at_utc
 ) VALUES (
   '00000000-0000-4000-8000-000000000029',1,1,24,5000,30,67108864,
-  'faeef059a975afe172c0640813d05d2331a71e48224df64d138a44e837b2c84f',
+  '21bc488664102f117d7c1296383962d611aa521127368d983cbff37732939b04',
   'system','Phase 21 safe local evidence archive default',
   strftime('%Y-%m-%dT%H:%M:%fZ','now')
 );
