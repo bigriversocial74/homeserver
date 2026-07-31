@@ -77,6 +77,20 @@ jobs:
         run: cargo test -p microgifter-homeserver-service
       - name: Test Phase 21 archive contract
         run: cargo test -p microgifter-homeserver-service --test phase21_evidence_archive_contract
+      - name: Prepare CI-only Control Center sidecar placeholders
+        run: |
+          mkdir -p src-tauri/resources
+          : > "$RUNNER_TEMP/phase21-created-resource-placeholders"
+          for resource in \
+            src-tauri/resources/microgifter-homeserver-service.exe \
+            src-tauri/resources/microgifter-homeserver-updater.exe \
+            src-tauri/resources/microgifter-homeserver-mcp.exe
+          do
+            if [ ! -e "$resource" ]; then
+              printf 'Phase 21 Linux cargo-check placeholder; never packaged or committed.\n' > "$resource"
+              printf '%s\n' "$resource" >> "$RUNNER_TEMP/phase21-created-resource-placeholders"
+            fi
+          done
       - name: Compile Control Center desktop
         run: cargo check -p microgifter-homeserver-control-center
       - name: Strict HomeServer service lint
@@ -90,6 +104,11 @@ jobs:
             -A unused-imports
       - name: Commit clean permanent Phase 21 hardening
         run: |
+          if [ -f "$RUNNER_TEMP/phase21-created-resource-placeholders" ]; then
+            while IFS= read -r resource; do
+              [ -n "$resource" ] && rm -f "$resource"
+            done < "$RUNNER_TEMP/phase21-created-resource-placeholders"
+          fi
           git checkout origin/main -- .github/workflows/phase-1-foundation.yml
           rm -f scripts/phase21-hardening.py scripts/phase21-hardening-anchor-fix.py scripts/phase21-validator-fix.py
           find scripts -type d -name __pycache__ -prune -exec rm -rf {} +
