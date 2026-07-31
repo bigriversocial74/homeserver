@@ -7,6 +7,7 @@ mod ollama_install;
 mod openrouter;
 mod operational;
 mod review_intelligence;
+mod runtime;
 mod vault;
 mod vp3_authority;
 
@@ -498,6 +499,10 @@ pub fn run() {
             review_intelligence::homeserver_sync_review_dataset,
             review_intelligence::homeserver_run_review_analysis,
             review_intelligence::homeserver_record_review_recommendation_outcome,
+            runtime::homeserver_agent_runtime,
+            runtime::homeserver_agent_authority,
+            runtime::homeserver_run_agent_runtime_once,
+            runtime::homeserver_cancel_agent_runtime_plan,
             cloud::homeserver_cloud_status,
             cloud::homeserver_pair_cloud,
             cloud::homeserver_disconnect_cloud,

@@ -128,6 +128,21 @@ The snapshot exposes tool, plan, step, and receipt metadata. It explicitly repor
 - `direct_tool_bypass_allowed: false`
 - `phase16e_egress_required: true`
 
+## Control Center visibility
+
+The desktop Control Center includes an **Agent Runtime** page loaded through the existing explicit `homeserver:rendered` lifecycle. It does not add a DOM observer network.
+
+The page uses a narrow trusted Tauri bridge because browser-originated requests are intentionally rejected by the loopback API. It shows:
+
+- active HomeServer agents and wrapper assignments;
+- runtime state, active plans, ordered steps, failures, and completion progress;
+- the versioned low-risk tool catalog;
+- pending Phase 16D approvals and active emergency stops without merging those sensitive actions into the low-risk runtime;
+- immutable runtime receipt hashes linked to Phase 16C evidence;
+- explicit privacy indicators confirming that private inputs and full private results are hidden, direct tool bypass is disabled, and Phase 16E egress remains mandatory.
+
+Operators can refresh state, run one bounded runtime cycle, open the supervised Agent Control Center, and cancel an active runtime plan only after entering the exact `CANCEL PLAN <plan_id>` confirmation. No raw private job input or full result is rendered.
+
 ## Deployment
 
 Migration `0025_authorized_agent_tool_runtime.sql` is additive and is applied automatically by the HomeServer service during startup. No Microgifter, POD, or VP3 MySQL migration is required.

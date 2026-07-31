@@ -16,6 +16,11 @@ COMPLETION = ROOT / "crates/homeserver-service/src/app/wrapper_jobs_completion.r
 AGENTS = ROOT / "crates/homeserver-service/src/app/wrapper_agents.rs"
 PRIVACY = ROOT / "crates/homeserver-service/src/app/wrapper_privacy.rs"
 DOC = ROOT / "docs/phase-17-authorized-agent-tool-runtime.md"
+TAURI_RUNTIME = ROOT / "src-tauri/src/runtime.rs"
+TAURI_LIB = ROOT / "src-tauri/src/lib.rs"
+CONTROL_CENTER = ROOT / "src/agent-runtime-control-center.js"
+INDEX = ROOT / "index.html"
+PACKAGE = ROOT / "package.json"
 
 
 def require(condition: bool, message: str) -> None:
@@ -34,6 +39,11 @@ completion = COMPLETION.read_text(encoding="utf-8")
 agents = AGENTS.read_text(encoding="utf-8")
 privacy = PRIVACY.read_text(encoding="utf-8")
 doc = DOC.read_text(encoding="utf-8")
+tauri_runtime = TAURI_RUNTIME.read_text(encoding="utf-8")
+tauri_lib = TAURI_LIB.read_text(encoding="utf-8")
+control_center = CONTROL_CENTER.read_text(encoding="utf-8")
+index = INDEX.read_text(encoding="utf-8")
+package = PACKAGE.read_text(encoding="utf-8")
 job_sources = "\n".join([jobs, submit, workers, completion])
 
 required_tables = [
@@ -153,6 +163,42 @@ require(
     "evaluate_egress_tx" in privacy,
     "retained privacy egress evaluator is missing",
 )
+
+
+for bridge in [
+    "homeserver_agent_runtime",
+    "homeserver_agent_authority",
+    "homeserver_run_agent_runtime_once",
+    "homeserver_cancel_agent_runtime_plan",
+    "/v1/agent-runtime",
+    "/v1/agents",
+]:
+    require(bridge in tauri_runtime, f"missing trusted runtime bridge {bridge}")
+    require(bridge in tauri_lib or bridge.startswith("/v1/"), f"runtime bridge is not registered {bridge}")
+
+for surface in [
+    "data-agent-runtime-route",
+    "Agent Runtime",
+    "homeserver:rendered",
+    "homeserver_agent_runtime",
+    "homeserver_agent_authority",
+    "homeserver_run_agent_runtime_once",
+    "homeserver_cancel_agent_runtime_plan",
+    "Phase 16 authority boundary is intact",
+    "Private inputs",
+    "Private results",
+    "Direct tool bypass",
+    "Phase 16E egress",
+    "Runtime Plans",
+    "Approvals & Stops",
+    "Immutable Runtime Receipts",
+]:
+    require(surface in control_center, f"missing Control Center runtime surface {surface}")
+
+require("MutationObserver" not in control_center, "runtime UI reintroduced an observer network")
+require("fetch(" not in control_center, "runtime UI bypasses the trusted Tauri local client")
+require("/src/agent-runtime-control-center.js" in index, "runtime Control Center module is not loaded")
+require("node --check src/agent-runtime-control-center.js" in package, "runtime UI is not in frontend validation")
 
 for forbidden in [
     '"shell.execute"',
@@ -311,6 +357,7 @@ for phrase in [
     "Private result boundary",
     "Failure, cancellation, and restart behavior",
     "Immutable evidence",
+    "Control Center visibility",
     "10/10 certification gates",
     "explicit merge approval",
 ]:
