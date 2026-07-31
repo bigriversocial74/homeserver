@@ -11,14 +11,31 @@ Phases 16 through 20 create immutable authority decisions, approvals, execution 
 
 ## Safety boundary
 
-Source evidence is never deleted by Phase 21. The archive engine reads only a closed class of evidence tables:
+Source evidence is never deleted by Phase 21. The archive engine reads only this closed, explicitly reviewed table allowlist:
 
 - `service_events`
-- tables ending in `_events`
-- tables ending in `_receipts`
-- tables ending in `_audit_records`
+- `wrapper_events`
+- `wrapper_grant_events`
+- `wrapper_authorization_receipts`
+- `wrapper_job_events`
+- `wrapper_job_execution_receipts`
+- `agent_action_receipts`
+- `agent_lifecycle_events`
+- `private_knowledge_access_receipts`
+- `agent_runtime_receipts`
+- `agent_runtime_events`
+- `agent_runtime_audit_records`
+- `agent_supervised_action_receipts`
+- `agent_supervised_compensation_receipts`
+- `agent_supervised_action_events`
+- `agent_schedule_event_inbox`
+- `agent_schedule_receipts`
+- `agent_schedule_audit_events`
+- `model_provider_usage_receipts`
+- `model_inference_receipts`
+- `model_inference_events`
 
-The engine rejects its own archive tables and tables associated with private results, private inputs, messages, documents, payloads, credentials, secrets, tokens, and synchronization queues. Prompts, model output, document content, operational payloads, credentials, and arbitrary database tables are never included.
+A table is not admitted by a name suffix or pattern. Any future evidence table remains excluded until code review explicitly adds it to the allowlist. The engine also rejects its own archive tables and tables associated with private results, private inputs, messages, documents, payloads, credentials, secrets, tokens, and synchronization queues. Prompts, model output, document content, operational payloads, credentials, and arbitrary database tables are never included.
 
 ## Canonical evidence
 
@@ -111,7 +128,6 @@ No Microgifter, VP3, POD, or wrapper MySQL import is required.
 - strict Windows and workspace lint
 - complete HomeServer Production Quality
 - verified installer, LocalSystem security, signed update, and forced rollback
-
 
 ## Final trust hardening
 
