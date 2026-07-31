@@ -2,12 +2,15 @@ name: Phase 17 Native Repair PR
 
 on:
   pull_request:
-    paths:
-      - .github/workflows/phase17-native-repair-pr.yml
-      - crates/homeserver-service/src/app/wrapper_runtime.rs
+    types:
+      - edited
 
 permissions:
   contents: write
+
+concurrency:
+  group: homeserver-phase17-native-repair-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   repair:
