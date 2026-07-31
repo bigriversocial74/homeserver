@@ -51,6 +51,9 @@ mod wrapper_privacy;
 #[path = "app/wrapper_runtime.rs"]
 mod wrapper_runtime;
 
+#[path = "app/wrapper_runtime_policy.rs"]
+mod wrapper_runtime_policy;
+
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
     mcp_runtime, microgifter_connection, model_center, openrouter_provider, operational_data,
@@ -206,6 +209,7 @@ pub async fn run(
             .merge(wrapper_agents::router(state.clone()))
             .merge(wrapper_privacy::router(state.clone()))
             .merge(wrapper_runtime::router(state.clone()))
+            .merge(wrapper_runtime_policy::router(state.clone()))
             .merge(knowledge_vault::router(state.clone()))
             .merge(model_center::router(state.clone()))
             .merge(openrouter_provider::router(state.clone()))
