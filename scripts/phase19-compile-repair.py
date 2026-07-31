@@ -10,6 +10,29 @@ if new_privacy not in contract:
     if old_privacy not in contract:
         raise RuntimeError("Phase 19 privacy migration test anchor is missing")
     contract = contract.replace(old_privacy, new_privacy, 1)
+
+vault_constant = '''const VAULT_MIGRATION: &str =
+    include_str!("../../../database/migrations/0005_knowledge_vault.sql");
+'''
+privacy_constant = '''const PRIVACY_MIGRATION: &str =
+    include_str!("../../../database/migrations/0024_private_knowledge_boundary.sql");
+'''
+if vault_constant not in contract:
+    if privacy_constant not in contract:
+        raise RuntimeError("Phase 19 privacy constant anchor is missing")
+    contract = contract.replace(privacy_constant, vault_constant + privacy_constant, 1)
+
+migration_order = '''        AGENT_MIGRATION,
+        PRIVACY_MIGRATION,
+'''
+migration_order_with_vault = '''        AGENT_MIGRATION,
+        VAULT_MIGRATION,
+        PRIVACY_MIGRATION,
+'''
+if migration_order_with_vault not in contract:
+    if migration_order not in contract:
+        raise RuntimeError("Phase 19 migration order anchor is missing")
+    contract = contract.replace(migration_order, migration_order_with_vault, 1)
 contract_path.write_text(contract, encoding="utf-8")
 
 source_path = ROOT / "crates/homeserver-service/src/app/wrapper_scheduling.rs"
