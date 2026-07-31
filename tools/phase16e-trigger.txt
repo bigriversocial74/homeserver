@@ -1,1 +1,2 @@
-Trigger the already-present Phase 16E integration workflow on a normal source-branch push.
+Run the verified Phase 16E integration payload once.
+Trigger revision: 2026-07-31T01:20:00Z
