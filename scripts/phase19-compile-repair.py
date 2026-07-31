@@ -55,15 +55,23 @@ for function_name in ("read_schedules", "read_runs", "read_events", "read_receip
         "}"
     )
     new_tail = (
+        "        .collect::<rusqlite::Result<Vec<_>>>()?;\n"
+        "    Ok(rows)\n"
+        "}"
+    )
+    ambiguous_tail = (
         "        .collect::<rusqlite::Result<Vec<_>>>()\n"
         "        .map_err(Into::into)?;\n"
         "    Ok(rows)\n"
         "}"
     )
     if new_tail not in block:
-        if old_tail not in block:
+        if ambiguous_tail in block:
+            block = block.replace(ambiguous_tail, new_tail, 1)
+        elif old_tail in block:
+            block = block.replace(old_tail, new_tail, 1)
+        else:
             raise RuntimeError(f"missing owned-row collection anchor: {function_name}")
-        block = block.replace(old_tail, new_tail, 1)
     source = source[:start] + block + source[end:]
 
 source_path.write_text(source, encoding="utf-8")
