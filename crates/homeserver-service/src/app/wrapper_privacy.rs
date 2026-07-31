@@ -255,6 +255,35 @@ pub(crate) struct EgressEvaluation {
     pub filter_version: &'static str,
     pub approval_required: bool,
 }
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PrivacySubmissionRequest<'a> {
+    pub connection_id: &'a str,
+    pub grant_id: &'a str,
+    pub grant_revision: u64,
+    pub capability_key: &'a str,
+    pub operation: &'a str,
+    pub submitted_by_type: &'a str,
+    pub submitted_by_id: &'a str,
+    pub selector_id: Option<&'a str>,
+    pub purpose: Option<&'a str>,
+    pub output_schema: Option<&'a str>,
+    pub remote_model_provider: Option<&'a str>,
+}
+
+type SelectorState = (String, i64, String, String, String, Option<String>, String);
+
+#[derive(Debug, Clone, Copy)]
+struct PrivacyIncidentEvidence<'a> {
+    wrapper: Option<&'a str>,
+    connection: Option<&'a str>,
+    job: Option<&'a str>,
+    selector: Option<&'a str>,
+    severity: &'a str,
+    category: &'a str,
+    detail: &'a str,
+    evidence: &'a str,
+}
+
 #[derive(Debug, Clone)]
 struct SelectorAuthority {
     selector_id: String,
@@ -585,18 +614,21 @@ where
 
 pub(crate) fn validate_job_privacy_submission(
     connection: &Connection,
-    connection_id: &str,
-    grant_id: &str,
-    grant_revision: u64,
-    capability_key: &str,
-    operation: &str,
-    submitted_by_type: &str,
-    submitted_by_id: &str,
-    selector_id: Option<&str>,
-    purpose: Option<&str>,
-    output_schema: Option<&str>,
-    remote_model_provider: Option<&str>,
+    request: PrivacySubmissionRequest<'_>,
 ) -> Result<Option<PrivacySubmissionBinding>> {
+    let PrivacySubmissionRequest {
+        connection_id,
+        grant_id,
+        grant_revision,
+        capability_key,
+        operation,
+        submitted_by_type,
+        submitted_by_id,
+        selector_id,
+        purpose,
+        output_schema,
+        remote_model_provider,
+    } = request;
     let knowledge = KNOWLEDGE_CAPABILITIES.contains(&capability_key);
     if !knowledge && selector_id.is_none() {
         return Ok(None);
@@ -606,6 +638,15 @@ pub(crate) fn validate_job_privacy_submission(
         "selector ID",
     )?;
     let selector = selector_authority(connection, &selector_id)?;
+    let connection_wrapper_id: String = connection.query_row(
+        "SELECT wrapper_id FROM wrapper_connections WHERE connection_id=?1",
+        params![connection_id],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        selector.wrapper_id == connection_wrapper_id,
+        "selector belongs to a different wrapper"
+    );
     ensure!(
         selector.connection_id == connection_id,
         "selector belongs to a different connection"
@@ -686,7 +727,7 @@ pub(crate) fn job_privacy_authority_is_current_tx(
     }
     let (selector_id, revision, purpose_hash, schema, remote_provider, class_hash) =
         binding.context("privacy binding missing")?;
-    let selector:Option<(String,i64,String,String,String,Option<String>,String)>=transaction.query_row("SELECT state,selector_revision,purpose_hash,output_schema,remote_model_mode,approved_remote_provider,expires_at_utc FROM private_resource_selectors WHERE selector_id=?1",params![selector_id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?))).optional()?;
+    let selector: Option<SelectorState> = transaction.query_row("SELECT state,selector_revision,purpose_hash,output_schema,remote_model_mode,approved_remote_provider,expires_at_utc FROM private_resource_selectors WHERE selector_id=?1",params![selector_id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?))).optional()?;
     let Some((
         state,
         current_revision,
@@ -763,14 +804,16 @@ pub(crate) fn evaluate_egress_tx(
         if let Some(category) = scan.denied_category.as_deref() {
             record_incident_tx(
                 transaction,
-                Some(context.wrapper_id),
-                Some(context.connection_id),
-                Some(context.job_id),
-                Some(&selector_id),
-                "critical",
-                category,
-                "egress_content_denied",
-                &private_evidence_hash,
+                PrivacyIncidentEvidence {
+                    wrapper: Some(context.wrapper_id),
+                    connection: Some(context.connection_id),
+                    job: Some(context.job_id),
+                    selector: Some(&selector_id),
+                    severity: "critical",
+                    category,
+                    detail: "egress_content_denied",
+                    evidence: &private_evidence_hash,
+                },
             )?;
             (
                 "deny",
@@ -1585,27 +1628,29 @@ fn invalidate_resource_tx(tx: &Transaction<'_>, id: &str, detail: &str) -> Resul
     let evidence = hash_text(&format!("{id}:{detail}:{now}"));
     record_incident_tx(
         tx,
-        None,
-        None,
-        None,
-        None,
-        "high",
-        "resource_authority_changed",
-        detail,
-        &evidence,
+        PrivacyIncidentEvidence {
+            wrapper: None,
+            connection: None,
+            job: None,
+            selector: None,
+            severity: "high",
+            category: "resource_authority_changed",
+            detail,
+            evidence: &evidence,
+        },
     )
 }
-fn record_incident_tx(
-    tx: &Transaction<'_>,
-    wrapper: Option<&str>,
-    connection: Option<&str>,
-    job: Option<&str>,
-    selector: Option<&str>,
-    severity: &str,
-    category: &str,
-    detail: &str,
-    evidence: &str,
-) -> Result<()> {
+fn record_incident_tx(tx: &Transaction<'_>, incident: PrivacyIncidentEvidence<'_>) -> Result<()> {
+    let PrivacyIncidentEvidence {
+        wrapper,
+        connection,
+        job,
+        selector,
+        severity,
+        category,
+        detail,
+        evidence,
+    } = incident;
     tx.execute("INSERT INTO privacy_boundary_incidents(incident_id,wrapper_id,connection_id,job_id,selector_id,severity,category,detail_code,evidence_hash,state,detected_at_utc) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'open',?10)",params![Uuid::new_v4().to_string(),wrapper,connection,job,selector,severity,category,detail,evidence,now_utc()])?;
     Ok(())
 }

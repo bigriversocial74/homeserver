@@ -171,17 +171,19 @@ pub fn submit_job(state: &AppState, request: SubmitJobRequest) -> Result<Submitt
     };
     let privacy_binding = wrapper_privacy::validate_job_privacy_submission(
         &connection,
-        &connection_id,
-        &grant_id,
-        authorization.grant_revision,
-        &capability_key,
-        &operation,
-        &submitted_by_type,
-        &submitted_by_id,
-        request.private_selector_id.as_deref(),
-        request.purpose.as_deref(),
-        request.output_schema.as_deref(),
-        request.remote_model_provider.as_deref(),
+        wrapper_privacy::PrivacySubmissionRequest {
+            connection_id: &connection_id,
+            grant_id: &grant_id,
+            grant_revision: authorization.grant_revision,
+            capability_key: &capability_key,
+            operation: &operation,
+            submitted_by_type: &submitted_by_type,
+            submitted_by_id: &submitted_by_id,
+            selector_id: request.private_selector_id.as_deref(),
+            purpose: request.purpose.as_deref(),
+            output_schema: request.output_schema.as_deref(),
+            remote_model_provider: request.remote_model_provider.as_deref(),
+        },
     )?;
     let connection_authority_revision =
         current_connection_authority_revision(&connection, &connection_id)?;
