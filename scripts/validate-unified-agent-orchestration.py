@@ -24,6 +24,8 @@ require("crates/homeserver-service/src/agent_integrations.rs", [
     "let connection = task_state.connection()?;\n            read_integrations(&connection)",
     "crate::database::installation_id(&connection)?",
     "Ok(integration_by_id(&connection, connection_id)?.summary)",
+    "daily_brief_due(last_user_prompt_at_utc)",
+    "ChronoDuration::hours(18)",
 ])
 require("crates/homeserver-service/src/agent_runtime.rs", [
     "Knowledge Vault search failed",
