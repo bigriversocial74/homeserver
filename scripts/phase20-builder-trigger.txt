@@ -1,1 +1,135 @@
-phase20-controlled-builder-v1
+#!/usr/bin/env python3
+from pathlib import Path
+import json
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def replace_once(path: str, old: str, new: str, label: str) -> None:
+    target = ROOT / path
+    text = target.read_text(encoding="utf-8")
+    if old not in text:
+        raise SystemExit(f"{label} anchor is missing")
+    target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+# Preserve the authenticated actor on the governed Agent Workspace request.
+replace_once(
+    "crates/homeserver-service/src/agent_runtime.rs",
+    """        &request,
+        &user_message_id,
+        GroundedResponseContext {""",
+    """        &request,
+        &user_message_id,
+        actor_type,
+        actor_id,
+        GroundedResponseContext {""",
+    "Agent inference call actor",
+)
+replace_once(
+    "crates/homeserver-service/src/agent_runtime.rs",
+    """    request: &AgentPromptRequest,
+    user_message_id: &str,
+    context: GroundedResponseContext<'_>,""",
+    """    request: &AgentPromptRequest,
+    user_message_id: &str,
+    actor_type: &str,
+    actor_id: &str,
+    context: GroundedResponseContext<'_>,""",
+    "Agent inference signature actor",
+)
+
+# Convert SQLite mapped-row iterators into owned vectors before statements drop.
+path = ROOT / "crates/homeserver-service/src/inference_governance.rs"
+text = path.read_text(encoding="utf-8")
+old = """        statement
+            .query_map([], |row| row.get::<_,String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };"""
+new = """        let rows = statement
+            .query_map([], |row| row.get::<_,String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };"""
+if text.count(old) != 2:
+    raise SystemExit(f"Expected two owned request-list anchors, found {text.count(old)}")
+text = text.replace(old, new, 2)
+
+
+def own_query_rows(source: str, function_name: str, next_function_name: str) -> str:
+    start = source.index(f"fn {function_name}(")
+    end = source.index(f"fn {next_function_name}(", start)
+    segment = source[start:end]
+    if "    statement\n" not in segment:
+        raise SystemExit(f"{function_name}: statement anchor is missing")
+    segment = segment.replace("    statement\n", "    let rows = statement\n", 1)
+    old_tail = """        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}"""
+    new_tail = """        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}"""
+    if old_tail not in segment:
+        raise SystemExit(f"{function_name}: owned result tail is missing")
+    segment = segment.replace(old_tail, new_tail, 1)
+    return source[:start] + segment + source[end:]
+
+
+text = own_query_rows(text, "read_policies", "read_requests")
+text = own_query_rows(text, "read_requests", "read_receipts")
+text = own_query_rows(text, "read_receipts", "read_events")
+text = own_query_rows(text, "read_events", "map_policy")
+path.write_text(text, encoding="utf-8")
+
+# Make existing Windows-only imports explicit so strict Linux staging lint remains clean.
+replace_once(
+    "crates/homeserver-service/src/backup_key.rs",
+    "use zeroize::Zeroize;",
+    "#[cfg(windows)]\nuse zeroize::Zeroize;",
+    "backup key Windows import",
+)
+replace_once(
+    "crates/homeserver-service/src/update.rs",
+    """use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};""",
+    """use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
+#[cfg(windows)]
+use std::process::Command;""",
+    "updater Windows command import",
+)
+replace_once(
+    "crates/homeserver-service/src/update_apply.rs",
+    """use std::{
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+    process::Command,
+};""",
+    """use std::{
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+};
+#[cfg(windows)]
+use std::process::Command;""",
+    "update apply Windows command import",
+)
+
+# Remove this one-use hook from the permanent package metadata.
+package_path = ROOT / "package.json"
+package = json.loads(package_path.read_text(encoding="utf-8"))
+scripts = package.get("scripts", {})
+if scripts.get("preinstall") != "python scripts/phase20-builder-trigger.txt":
+    raise SystemExit("Phase 20 preinstall hook is missing")
+scripts.pop("preinstall", None)
+package_path.write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
+
+print("Phase 20 native repair applied and temporary preinstall hook removed.")
