@@ -29,16 +29,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          source = Path('.github/workflows/phase16e-lint-repair.yml').read_text(encoding='utf-8')
-          start = source.index("          python - <<'PY'\n") + len("          python - <<'PY'\n")
-          end = source.index("\n          PY\n", start)
-          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in source[start:end].splitlines()) + '\n'
-          runtime = Path('.phase16e-lint-repair-runtime.py')
-          runtime.write_text(script, encoding='utf-8')
-          PY
-          python .phase16e-lint-repair-runtime.py
+          python scripts/phase16e-typed-lint-repair.py
           cargo fmt --all
           python scripts/validate-wrapper-privacy.py
           cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings
@@ -48,9 +39,9 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          rm -f .phase16e-lint-repair-runtime.py
           git rm .github/workflows/phase16e-lint-repair.yml \
-            .github/workflows/phase16e-lint-repair-pr.yml
+            .github/workflows/phase16e-lint-repair-pr.yml \
+            scripts/phase16e-typed-lint-repair.py
           git add crates/homeserver-service/src/app/wrapper_privacy.rs \
             crates/homeserver-service/src/app/wrapper_jobs_submit.rs
           git diff --cached --check
