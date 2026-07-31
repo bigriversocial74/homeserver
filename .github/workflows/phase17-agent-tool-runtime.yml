@@ -11,6 +11,7 @@ on:
       - package.json
       - crates/homeserver-service/src/app.rs
       - crates/homeserver-service/src/app/wrapper_runtime.rs
+      - crates/homeserver-service/src/app/wrapper_runtime_policy.rs
       - crates/homeserver-service/src/app/wrapper_agents.rs
       - crates/homeserver-service/src/app/wrapper_jobs.rs
       - crates/homeserver-service/src/app/wrapper_jobs_*.rs
@@ -28,6 +29,7 @@ on:
       - package.json
       - crates/homeserver-service/src/app.rs
       - crates/homeserver-service/src/app/wrapper_runtime.rs
+      - crates/homeserver-service/src/app/wrapper_runtime_policy.rs
       - crates/homeserver-service/src/app/wrapper_agents.rs
       - crates/homeserver-service/src/app/wrapper_jobs.rs
       - crates/homeserver-service/src/app/wrapper_jobs_*.rs
