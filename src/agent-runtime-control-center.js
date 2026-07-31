@@ -11,6 +11,7 @@ const runtimeState = {
   orchestration: null,
   scheduling: null,
   governance: null,
+  archives: null,
   busy: false,
   error: null,
   lastLoadedAt: 0,
@@ -277,6 +278,29 @@ function renderModelGovernance() {
   </section>`;
 }
 
+
+function renderEvidenceArchives() {
+  const snapshot = runtimeState.archives || {};
+  const policy = snapshot.policy || {};
+  const archives = values(snapshot.archives);
+  const boundarySafe = snapshot.private_content_exposed === false
+    && snapshot.source_evidence_deleted === false;
+  return `<section class="panel runtime-evidence-archive ${boundarySafe ? "safe" : "unsafe"}">
+    <div class="panel-title"><div>${icon("logs", 18)}<div><h2>Tamper-evident evidence archives</h2><p>Machine-encrypted, hash-chained receipts and events with independently verifiable export.</p></div></div><div class="runtime-archive-actions"><span>${Number(snapshot.unarchived_record_count || 0)} unarchived</span><button class="button secondary" type="button" data-evidence-policy-update>Policy</button><button class="button primary" type="button" data-evidence-archive-create>Create archive</button></div></div>
+    <div class="runtime-safety-grid">
+      ${safetyItem("Private content", snapshot.private_content_exposed === false ? "Excluded" : "Exposure detected", snapshot.private_content_exposed === false)}
+      ${safetyItem("Source evidence", snapshot.source_evidence_deleted === false ? "Never deleted" : "Deletion detected", snapshot.source_evidence_deleted === false)}
+      ${safetyItem("Policy", policy.enabled ? `Revision ${Number(policy.policy_revision || 0)} active` : "Automatic archive disabled", Boolean(policy.policy_id))}
+      ${safetyItem("Schedule", policy.interval_hours ? `Every ${Number(policy.interval_hours)} hours` : "Unavailable", Boolean(policy.interval_hours))}
+    </div>
+    <div class="runtime-archive-policy"><span>Max ${Number(policy.max_records_per_archive || 0)} records</span><span>${Number(policy.retention_count || 0)} retained local packages</span><span>${Math.round(Number(policy.max_package_bytes || 0) / 1048576)} MB limit</span><code>${escapeHtml(compactHash(policy.policy_hash))}</code></div>
+    ${archives.length ? `<div class="runtime-archive-grid">${archives.slice(0, 20).map((archive) => {
+      const exportable = archive.state === "verified" && ["present", "exported"].includes(archive.storage_state);
+      return `<article class="runtime-archive-card ${statusTone(archive.state)}"><header><div><span>Archive ${Number(archive.archive_sequence || 0)}</span><h3>${escapeHtml(archive.file_name)}</h3></div>${statusBadge(archive.state)}</header><p>${Number(archive.record_count || 0)} records across ${Number(archive.table_count || 0)} evidence tables · ${escapeHtml(humanize(archive.storage_state))}</p><dl><div><dt>Chain</dt><dd class="mono">${escapeHtml(compactHash(archive.chain_root_hash))}</dd></div><div><dt>Manifest</dt><dd class="mono">${escapeHtml(compactHash(archive.manifest_sha256))}</dd></div><div><dt>Package</dt><dd class="mono">${escapeHtml(compactHash(archive.package_sha256))}</dd></div><div><dt>Verified</dt><dd>${escapeHtml(formatDate(archive.verified_at_utc))}</dd></div></dl><footer><span>${Number(archive.export_count || 0)} exports</span><div>${exportable ? `<button class="button secondary" type="button" data-evidence-archive-verify="${escapeHtml(archive.archive_id)}">Verify</button><button class="button secondary" type="button" data-evidence-archive-export="${escapeHtml(archive.archive_id)}" data-evidence-file-name="${escapeHtml(archive.file_name)}" data-evidence-package-hash="${escapeHtml(archive.package_sha256)}">Export</button>` : ""}</div></footer></article>`;
+    }).join("")}</div>` : `<div class="runtime-empty compact"><strong>No evidence archives yet</strong><p>Create a verified archive after runtime, scheduling, or inference receipts exist.</p></div>`}
+  </section>`;
+}
+
 function renderRuntimePage() {
   if (!isRuntimeRoute()) return;
   ensureRuntimeNavigation();
@@ -303,6 +327,7 @@ function renderRuntimePage() {
       </section>
       ${renderSafetyBoundary(runtime)}
       ${renderModelGovernance()}
+      ${renderEvidenceArchives()}
       ${renderSupervisedCheckpoints(orchestration)}
       ${renderSchedules(scheduling)}
       <section class="runtime-primary-grid"><article class="panel runtime-plans-panel"><div class="panel-title"><div>${icon("activity", 18)}<div><h2>Runtime Plans</h2><p>Ordered low-risk work submitted through the Phase 16C job contract.</p></div></div><span>${values(runtime.plans).length} plans</span></div>${renderPlans()}</article><article class="panel runtime-tools-panel"><div class="panel-title"><div>${icon("apps", 18)}<div><h2>Tool Catalog</h2><p>HomeServer-owned, versioned, risk-classified adapters.</p></div></div><span>${tools.length} tools</span></div>${renderTools()}</article></section>
@@ -324,12 +349,14 @@ async function refreshRuntime(quiet = false) {
     invoke("homeserver_action_orchestration"),
     invoke("homeserver_agent_schedules"),
     invoke("homeserver_model_governance"),
+    invoke("homeserver_evidence_archives"),
   ]);
   if (results[0].status === "fulfilled") runtimeState.runtime = results[0].value;
   if (results[1].status === "fulfilled") runtimeState.authority = results[1].value;
   if (results[2].status === "fulfilled") runtimeState.orchestration = results[2].value;
   if (results[3].status === "fulfilled") runtimeState.scheduling = results[3].value;
   if (results[4].status === "fulfilled") runtimeState.governance = results[4].value;
+  if (results[5].status === "fulfilled") runtimeState.archives = results[5].value;
   const errors = results.filter((result) => result.status === "rejected").map((result) => String(result.reason));
   runtimeState.error = errors.length ? errors.join(" · ") : null;
   runtimeState.lastLoadedAt = Date.now();
@@ -349,6 +376,7 @@ async function runOneCycle() {
     runtimeState.runtime = await invoke("homeserver_agent_runtime");
     runtimeState.authority = await invoke("homeserver_agent_authority");
     runtimeState.governance = await invoke("homeserver_model_governance");
+    runtimeState.archives = await invoke("homeserver_evidence_archives");
     runtimeState.lastLoadedAt = Date.now();
   } catch (error) {
     runtimeState.error = String(error);
@@ -528,8 +556,121 @@ async function cancelModelInference(button) {
   }
 }
 
+
+async function createEvidenceArchive() {
+  if (runtimeState.busy) return;
+  if (window.prompt("Type CREATE EVIDENCE ARCHIVE to continue:") !== "CREATE EVIDENCE ARCHIVE") return;
+  runtimeState.busy = true;
+  runtimeState.error = null;
+  renderRuntimePage();
+  try {
+    const result = await invoke("homeserver_create_evidence_archive");
+    runtimeState.archives = result.snapshot || result;
+  } catch (error) {
+    runtimeState.error = String(error);
+  } finally {
+    runtimeState.busy = false;
+    runtimeState.lastLoadedAt = Date.now();
+    renderRuntimePage();
+  }
+}
+
+async function verifyEvidenceArchive(button) {
+  if (runtimeState.busy) return;
+  const archiveId = button.dataset.evidenceArchiveVerify || "";
+  const confirmation = `VERIFY EVIDENCE ARCHIVE ${archiveId}`;
+  if (window.prompt(`Type ${confirmation} to verify the encrypted package and chain:`) !== confirmation) return;
+  runtimeState.busy = true;
+  renderRuntimePage();
+  try {
+    const result = await invoke("homeserver_verify_evidence_archive", { archiveId, confirmation });
+    runtimeState.archives = result.snapshot || result;
+  } catch (error) {
+    runtimeState.error = String(error);
+  } finally {
+    runtimeState.busy = false;
+    runtimeState.lastLoadedAt = Date.now();
+    renderRuntimePage();
+  }
+}
+
+async function exportEvidenceArchive(button) {
+  if (runtimeState.busy) return;
+  const archiveId = button.dataset.evidenceArchiveExport || "";
+  const suggestedFileName = button.dataset.evidenceFileName || "Microgifter-HomeServer-Evidence.mgha";
+  const packageSha256 = button.dataset.evidencePackageHash || "";
+  runtimeState.busy = true;
+  renderRuntimePage();
+  try {
+    const result = await invoke("homeserver_export_evidence_archive", { archiveId, suggestedFileName, packageSha256 });
+    if (result) runtimeState.archives = result.receipt?.snapshot || await invoke("homeserver_evidence_archives");
+  } catch (error) {
+    runtimeState.error = String(error);
+  } finally {
+    runtimeState.busy = false;
+    runtimeState.lastLoadedAt = Date.now();
+    renderRuntimePage();
+  }
+}
+
+async function updateEvidenceArchivePolicy() {
+  if (runtimeState.busy) return;
+  const current = runtimeState.archives?.policy || {};
+  const enabled = window.confirm("Enable automatic evidence archives? Select Cancel to disable them.");
+  const intervalHours = Number(window.prompt("Archive interval in hours (1-720):", String(current.interval_hours || 24)));
+  const maxRecordsPerArchive = Number(window.prompt("Maximum records per archive (100-50000):", String(current.max_records_per_archive || 5000)));
+  const retentionCount = Number(window.prompt("Retained local package count (1-365):", String(current.retention_count || 30)));
+  const maxPackageMb = Number(window.prompt("Maximum package size in MB (1-256):", String(Math.round(Number(current.max_package_bytes || 67108864) / 1048576))));
+  const reason = window.prompt("Reason for this policy revision:", "Updated from Agent Runtime Control Center");
+  if (!reason?.trim()) return;
+  const policy = {
+    enabled,
+    interval_hours: intervalHours,
+    max_records_per_archive: maxRecordsPerArchive,
+    retention_count: retentionCount,
+    max_package_bytes: maxPackageMb * 1048576,
+    reason: reason.trim(),
+  };
+  runtimeState.busy = true;
+  renderRuntimePage();
+  try {
+    const result = await invoke("homeserver_update_evidence_archive_policy", { policy });
+    runtimeState.archives = result.snapshot || result;
+  } catch (error) {
+    runtimeState.error = String(error);
+  } finally {
+    runtimeState.busy = false;
+    runtimeState.lastLoadedAt = Date.now();
+    renderRuntimePage();
+  }
+}
+
 document.addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) return;
+  const updateArchivePolicy = event.target.closest("[data-evidence-policy-update]");
+  if (updateArchivePolicy) {
+    event.preventDefault();
+    void updateEvidenceArchivePolicy();
+    return;
+  }
+  const createArchive = event.target.closest("[data-evidence-archive-create]");
+  if (createArchive) {
+    event.preventDefault();
+    void createEvidenceArchive();
+    return;
+  }
+  const verifyArchive = event.target.closest("[data-evidence-archive-verify]");
+  if (verifyArchive) {
+    event.preventDefault();
+    void verifyEvidenceArchive(verifyArchive);
+    return;
+  }
+  const exportArchive = event.target.closest("[data-evidence-archive-export]");
+  if (exportArchive) {
+    event.preventDefault();
+    void exportEvidenceArchive(exportArchive);
+    return;
+  }
   const createPolicy = event.target.closest("[data-model-policy-create]");
   if (createPolicy) {
     event.preventDefault();

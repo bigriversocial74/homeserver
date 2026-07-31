@@ -193,3 +193,56 @@ pub(crate) async fn homeserver_cancel_model_inference(
     )
     .await
 }
+
+#[tauri::command]
+pub(crate) async fn homeserver_evidence_archives() -> Result<Value, String> {
+    get_json("/v1/evidence-archives").await
+}
+
+#[tauri::command]
+pub(crate) async fn homeserver_update_evidence_archive_policy(
+    policy: Value,
+) -> Result<Value, String> {
+    let mut object = policy
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "Evidence archive policy must be an object.".to_owned())?;
+    object.insert(
+        "created_by_user_id".to_owned(),
+        Value::String(LOCAL_CONTROL_CENTER_ACTOR.to_owned()),
+    );
+    object.insert(
+        "confirmation".to_owned(),
+        Value::String("UPDATE EVIDENCE ARCHIVE POLICY".to_owned()),
+    );
+    post_json("/v1/evidence-archives/policies", &Value::Object(object)).await
+}
+
+#[tauri::command]
+pub(crate) async fn homeserver_create_evidence_archive() -> Result<Value, String> {
+    post_json(
+        "/v1/evidence-archives/create",
+        &json!({
+            "idempotency_key": format!("control-center:{}", uuid::Uuid::new_v4()),
+            "actor_user_id": LOCAL_CONTROL_CENTER_ACTOR,
+            "confirmation": "CREATE EVIDENCE ARCHIVE"
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn homeserver_verify_evidence_archive(
+    archive_id: String,
+    confirmation: String,
+) -> Result<Value, String> {
+    post_json(
+        "/v1/evidence-archives/verify",
+        &json!({
+            "archive_id": archive_id,
+            "actor_user_id": LOCAL_CONTROL_CENTER_ACTOR,
+            "confirmation": confirmation
+        }),
+    )
+    .await
+}

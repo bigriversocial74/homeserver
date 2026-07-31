@@ -5,6 +5,7 @@ mod backup_key;
 mod config;
 mod database;
 mod document_extraction;
+mod evidence_archive;
 mod http;
 mod inference_governance;
 mod knowledge_vault;
@@ -134,6 +135,14 @@ impl AppState {
             return HealthSnapshot::needs_attention(
                 &self.config.server_name,
                 "model_inference_governance_integrity_check_failed",
+            );
+        }
+
+        if let Err(error) = evidence_archive::health_check(&connection, &self.config) {
+            error!(?error, "HomeServer evidence archive health check failed");
+            return HealthSnapshot::needs_attention(
+                &self.config.server_name,
+                "evidence_archive_integrity_check_failed",
             );
         }
 

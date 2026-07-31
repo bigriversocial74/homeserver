@@ -61,8 +61,8 @@ mod wrapper_scheduling;
 mod wrapper_runtime_policy;
 
 use crate::{
-    agent_runtime, backup, config::AppConfig, database, document_extraction, http,
-    inference_governance, knowledge_vault, mcp_runtime, microgifter_connection, model_center,
+    agent_runtime, backup, config::AppConfig, database, document_extraction, evidence_archive,
+    http, inference_governance, knowledge_vault, mcp_runtime, microgifter_connection, model_center,
     openrouter_provider, operational_data, review_intelligence, semantic_vault, software_authority,
     update, update_store, AppState,
 };
@@ -113,6 +113,7 @@ pub async fn run(
     model_center::initialize(&connection)?;
     openrouter_provider::initialize(&connection)?;
     inference_governance::initialize(&connection)?;
+    evidence_archive::initialize(&connection, &config)?;
     semantic_vault::initialize(&connection)?;
     review_intelligence::initialize(&connection)?;
     agent_runtime::initialize(&connection)?;
@@ -230,6 +231,7 @@ pub async fn run(
             .merge(model_center::router(state.clone()))
             .merge(openrouter_provider::router(state.clone()))
             .merge(inference_governance::router(state.clone()))
+            .merge(evidence_archive::router(state.clone()))
             .merge(semantic_vault::router(state.clone()))
             .merge(operational_data::router(state.clone()))
             .merge(review_intelligence::router(state.clone()))
@@ -309,6 +311,9 @@ async fn run_backup_scheduler(state: Arc<AppState>, mut shutdown: watch::Receive
                         if let Err(error) = wrapper_scheduling::maintain_history(&connection) {
                             warn!(?error, "scheduled agent scheduling retention failed");
                         }
+                    }
+                    if let Err(error) = evidence_archive::create_automatic_if_due(scheduled_state.clone()) {
+                        warn!(?error, "scheduled evidence archive failed");
                     }
                     scheduled_state.create_automatic_backup_if_due()
                 }).await {

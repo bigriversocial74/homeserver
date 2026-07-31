@@ -14,7 +14,9 @@ fn database() -> Connection {
              );",
         )
         .expect("base schema");
-    connection.execute_batch(MIGRATION).expect("Phase 21 migration");
+    connection
+        .execute_batch(MIGRATION)
+        .expect("Phase 21 migration");
     connection
 }
 
@@ -139,7 +141,9 @@ fn storage_retention_requires_exported_state_and_cannot_reverse_pruning() {
 #[test]
 fn migration_registers_archive_contract_once() {
     let connection = database();
-    connection.execute_batch(MIGRATION).expect("idempotent migration");
+    connection
+        .execute_batch(MIGRATION)
+        .expect("idempotent migration");
     let count: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM schema_migrations WHERE migration_key='0029_tamper_evident_evidence_archive'",

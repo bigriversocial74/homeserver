@@ -3,12 +3,12 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use axum::{
     body::Body,
     extract::{Path as AxumPath, State},
     http::{header, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
+    response::Response,
     routing::{get, post},
     Json, Router,
 };
@@ -279,21 +279,30 @@ pub fn health_check(connection: &Connection, config: &AppConfig) -> Result<()> {
         params![MIGRATION_KEY],
         |row| row.get(0),
     )?;
-    ensure!(migration_count == 1, "Phase 21 migration is not registered exactly once");
+    ensure!(
+        migration_count == 1,
+        "Phase 21 migration is not registered exactly once"
+    );
 
     let incomplete_terminal: i64 = connection.query_row(
         "SELECT COUNT(*) FROM evidence_archives WHERE state='verified' AND (manifest_sha256 IS NULL OR package_sha256 IS NULL OR chain_root_hash IS NULL OR completed_at_utc IS NULL OR verified_at_utc IS NULL)",
         [],
         |row| row.get(0),
     )?;
-    ensure!(incomplete_terminal == 0, "verified evidence archive metadata is incomplete");
+    ensure!(
+        incomplete_terminal == 0,
+        "verified evidence archive metadata is incomplete"
+    );
 
     let duplicate_members: i64 = connection.query_row(
         "SELECT COUNT(*) FROM (SELECT source_table,source_key,COUNT(*) AS total FROM evidence_archive_members GROUP BY source_table,source_key HAVING total<>1)",
         [],
         |row| row.get(0),
     )?;
-    ensure!(duplicate_members == 0, "evidence archive source membership is ambiguous");
+    ensure!(
+        duplicate_members == 0,
+        "evidence archive source membership is ambiguous"
+    );
 
     let latest = connection
         .query_row(
@@ -304,8 +313,14 @@ pub fn health_check(connection: &Connection, config: &AppConfig) -> Result<()> {
         .optional()?;
     if let Some((path, expected_hash)) = latest {
         let path = canonical_managed_archive_path(config, Path::new(&path))?;
-        ensure!(path.is_file(), "latest retained evidence archive package is missing");
-        ensure!(sha256_file(&path)? == expected_hash, "latest evidence archive package hash is invalid");
+        ensure!(
+            path.is_file(),
+            "latest retained evidence archive package is missing"
+        );
+        ensure!(
+            sha256_file(&path)? == expected_hash,
+            "latest evidence archive package hash is invalid"
+        );
     }
     Ok(())
 }
@@ -313,7 +328,10 @@ pub fn health_check(connection: &Connection, config: &AppConfig) -> Result<()> {
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/evidence-archives", get(snapshot_handler))
-        .route("/v1/evidence-archives/policies", post(update_policy_handler))
+        .route(
+            "/v1/evidence-archives/policies",
+            post(update_policy_handler),
+        )
         .route("/v1/evidence-archives/create", post(create_archive_handler))
         .route("/v1/evidence-archives/verify", post(verify_archive_handler))
         .route("/v1/evidence-archives/exports", post(record_export_handler))
@@ -329,7 +347,9 @@ pub fn snapshot(state: &AppState) -> Result<EvidenceArchiveSnapshot> {
     snapshot_with_connection(&connection)
 }
 
-pub fn create_automatic_if_due(state: Arc<AppState>) -> Result<Option<EvidenceArchiveActionResult>> {
+pub fn create_automatic_if_due(
+    state: Arc<AppState>,
+) -> Result<Option<EvidenceArchiveActionResult>> {
     let due = {
         let connection = state.connection()?;
         let policy = latest_policy(&connection)?;
@@ -344,7 +364,11 @@ pub fn create_automatic_if_due(state: Arc<AppState>) -> Result<Option<EvidenceAr
             )
             .optional()?;
         last_verified
-            .map(|value| parse_utc(&value).map(|last| Utc::now() - last >= Duration::hours(i64::from(policy.interval_hours))))
+            .map(|value| {
+                parse_utc(&value).map(|last| {
+                    Utc::now() - last >= Duration::hours(i64::from(policy.interval_hours))
+                })
+            })
             .transpose()?
             .unwrap_or(true)
     };
@@ -352,13 +376,7 @@ pub fn create_automatic_if_due(state: Arc<AppState>) -> Result<Option<EvidenceAr
         return Ok(None);
     }
     let hour = Utc::now().format("%Y%m%dT%H").to_string();
-    create_archive_internal(
-        &state,
-        format!("automatic:{hour}"),
-        "system",
-        "system",
-    )
-    .map(Some)
+    create_archive_internal(&state, format!("automatic:{hour}"), "system", "system").map(Some)
 }
 
 pub fn package_for_export(state: &AppState, archive_id: &str) -> Result<EvidenceArchivePackage> {
@@ -378,12 +396,21 @@ pub fn package_for_export(state: &AppState, archive_id: &str) -> Result<Evidence
         )
         .optional()?
         .context("verified evidence archive was not found")?;
-    ensure!(package.4 == "present" || package.4 == "exported", "evidence archive package is not retained locally");
+    ensure!(
+        package.4 == "present" || package.4 == "exported",
+        "evidence archive package is not retained locally"
+    );
     let path = canonical_managed_archive_path(&state.config, Path::new(&package.0))?;
     ensure!(path.is_file(), "evidence archive package is missing");
     let metadata = fs::metadata(&path)?;
-    ensure!(metadata.len() == package.2.max(0) as u64, "evidence archive package size changed");
-    ensure!(sha256_file(&path)? == package.3, "evidence archive package hash changed");
+    ensure!(
+        metadata.len() == package.2.max(0) as u64,
+        "evidence archive package size changed"
+    );
+    ensure!(
+        sha256_file(&path)? == package.3,
+        "evidence archive package hash changed"
+    );
     Ok(EvidenceArchivePackage {
         path,
         file_name: safe_archive_file_name(&package.1),
@@ -392,7 +419,9 @@ pub fn package_for_export(state: &AppState, archive_id: &str) -> Result<Evidence
     })
 }
 
-async fn snapshot_handler(State(state): State<Arc<AppState>>) -> ApiResult<EvidenceArchiveSnapshot> {
+async fn snapshot_handler(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<EvidenceArchiveSnapshot> {
     tokio::task::spawn_blocking(move || snapshot(&state))
         .await
         .map_err(task_error)?
@@ -463,13 +492,15 @@ async fn export_package_handler(
     );
     response.headers_mut().insert(
         header::CONTENT_DISPOSITION,
-        HeaderValue::from_str(&content_disposition)
-            .map_err(|error| internal_error("evidence_archive_export_header_failed", error.into()))?,
+        HeaderValue::from_str(&content_disposition).map_err(|error| {
+            internal_error("evidence_archive_export_header_failed", error.into())
+        })?,
     );
     response.headers_mut().insert(
         header::CONTENT_LENGTH,
-        HeaderValue::from_str(&package.size_bytes.to_string())
-            .map_err(|error| internal_error("evidence_archive_export_header_failed", error.into()))?,
+        HeaderValue::from_str(&package.size_bytes.to_string()).map_err(|error| {
+            internal_error("evidence_archive_export_header_failed", error.into())
+        })?,
     );
     Ok(response)
 }
@@ -478,11 +509,26 @@ fn update_policy(
     state: &AppState,
     request: UpdateEvidenceArchivePolicyRequest,
 ) -> Result<EvidenceArchiveActionResult> {
-    ensure!(request.confirmation == "UPDATE EVIDENCE ARCHIVE POLICY", "type UPDATE EVIDENCE ARCHIVE POLICY to continue");
-    ensure!((1..=720).contains(&request.interval_hours), "archive interval is invalid");
-    ensure!((100..=50_000).contains(&request.max_records_per_archive), "archive record limit is invalid");
-    ensure!((1..=365).contains(&request.retention_count), "archive retention count is invalid");
-    ensure!((1_048_576..=MAX_PACKAGE_HARD_BYTES).contains(&request.max_package_bytes), "archive package limit is invalid");
+    ensure!(
+        request.confirmation == "UPDATE EVIDENCE ARCHIVE POLICY",
+        "type UPDATE EVIDENCE ARCHIVE POLICY to continue"
+    );
+    ensure!(
+        (1..=720).contains(&request.interval_hours),
+        "archive interval is invalid"
+    );
+    ensure!(
+        (100..=50_000).contains(&request.max_records_per_archive),
+        "archive record limit is invalid"
+    );
+    ensure!(
+        (1..=365).contains(&request.retention_count),
+        "archive retention count is invalid"
+    );
+    ensure!(
+        (1_048_576..=MAX_PACKAGE_HARD_BYTES).contains(&request.max_package_bytes),
+        "archive package limit is invalid"
+    );
     let actor = bounded_text(&request.created_by_user_id, 1, 160, "policy actor")?;
     let reason = bounded_text(&request.reason, 1, 500, "policy reason")?;
     let connection = state.connection()?;
@@ -500,8 +546,8 @@ fn update_policy(
         "max_records_per_archive": request.max_records_per_archive,
         "retention_count": request.retention_count,
         "max_package_bytes": request.max_package_bytes,
-        "created_by_user_id": actor,
-        "reason": reason
+        "created_by_user_id": &actor,
+        "reason": &reason
     });
     let policy_hash = hash_json(&document)?;
     let policy_id = Uuid::new_v4().to_string();
@@ -547,7 +593,10 @@ fn create_archive(
     state: &AppState,
     request: CreateEvidenceArchiveRequest,
 ) -> Result<EvidenceArchiveActionResult> {
-    ensure!(request.confirmation == "CREATE EVIDENCE ARCHIVE", "type CREATE EVIDENCE ARCHIVE to continue");
+    ensure!(
+        request.confirmation == "CREATE EVIDENCE ARCHIVE",
+        "type CREATE EVIDENCE ARCHIVE to continue"
+    );
     let actor = bounded_text(&request.actor_user_id, 1, 160, "archive actor")?;
     let idempotency = request
         .idempotency_key
@@ -564,8 +613,11 @@ fn create_archive_internal(
     actor_type: &str,
     actor_id: &str,
 ) -> Result<EvidenceArchiveActionResult> {
-    ensure!(matches!(actor_type, "local_user" | "system"), "archive actor type is invalid");
-    let mut connection = state.connection()?;
+    ensure!(
+        matches!(actor_type, "local_user" | "system"),
+        "archive actor type is invalid"
+    );
+    let connection = state.connection()?;
     if let Some(archive_id) = connection
         .query_row(
             "SELECT archive_id FROM evidence_archives WHERE idempotency_key=?1",
@@ -656,23 +708,42 @@ fn create_archive_internal(
     )
     .and_then(|built| {
         write_atomic(&temporary_path, &final_path, &built.0)?;
-        let verified = verify_package_file(&connection, &state.config, &final_path, Some(&archive_id))?;
-        ensure!(verified.package_sha256 == built.1, "evidence archive package hash changed after write");
+        let verified =
+            verify_package_file(&connection, &state.config, &final_path, Some(&archive_id))?;
+        ensure!(
+            verified.package_sha256 == built.1,
+            "evidence archive package hash changed after write"
+        );
+        ensure!(
+            verified.size_bytes == built.0.len() as u64,
+            "evidence archive package size changed after write"
+        );
         Ok((built, verified))
     });
 
-    let ((package_bytes, package_sha256, manifest, manifest_sha256), verified) = match package_result {
-        Ok(value) => value,
-        Err(error) => {
-            let _ = fs::remove_file(&temporary_path);
-            let _ = fs::remove_file(&final_path);
-            let failure = bounded_failure_code(&error.to_string());
-            mark_archive_failed(&connection, &archive_id, &policy.policy_id, actor_type, actor_id, &failure)?;
-            return Err(error);
-        }
-    };
+    let ((package_bytes, package_sha256, manifest, manifest_sha256), verified) =
+        match package_result {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = fs::remove_file(&temporary_path);
+                let _ = fs::remove_file(&final_path);
+                let failure = bounded_failure_code(&error.to_string());
+                mark_archive_failed(
+                    &connection,
+                    &archive_id,
+                    &policy.policy_id,
+                    actor_type,
+                    actor_id,
+                    &failure,
+                )?;
+                return Err(error);
+            }
+        };
 
-    ensure!(verified.manifest.archive_id == archive_id, "verified evidence archive identity changed");
+    ensure!(
+        verified.manifest.archive_id == archive_id,
+        "verified evidence archive identity changed"
+    );
     let completed_at = now_utc();
     let transaction = connection.unchecked_transaction()?;
     let changed = transaction.execute(
@@ -747,12 +818,23 @@ fn verify_archive(
     request: EvidenceArchiveReferenceRequest,
 ) -> Result<EvidenceArchiveActionResult> {
     let archive_id = validate_uuid(&request.archive_id, "archive ID")?;
-    ensure!(request.confirmation == format!("VERIFY EVIDENCE ARCHIVE {archive_id}"), "archive verification confirmation is invalid");
+    ensure!(
+        request.confirmation == format!("VERIFY EVIDENCE ARCHIVE {archive_id}"),
+        "archive verification confirmation is invalid"
+    );
     let actor = bounded_text(&request.actor_user_id, 1, 160, "verification actor")?;
-    let connection = state.connection()?;
     let package = package_for_export(state, &archive_id)?;
-    let verified = verify_package_file(&connection, &state.config, &package.path, Some(&archive_id))?;
-    ensure!(verified.package_sha256 == package.package_sha256, "evidence archive package hash is not the recorded hash");
+    let connection = state.connection()?;
+    let verified =
+        verify_package_file(&connection, &state.config, &package.path, Some(&archive_id))?;
+    ensure!(
+        verified.size_bytes == package.size_bytes,
+        "evidence archive package size is not the recorded size"
+    );
+    ensure!(
+        verified.package_sha256 == package.package_sha256,
+        "evidence archive package hash is not the recorded hash"
+    );
     let now = now_utc();
     let transaction = connection.unchecked_transaction()?;
     transaction.execute(
@@ -788,7 +870,10 @@ fn record_export(
     request: RecordEvidenceArchiveExportRequest,
 ) -> Result<EvidenceArchiveActionResult> {
     let archive_id = validate_uuid(&request.archive_id, "archive ID")?;
-    ensure!(request.confirmation == format!("EXPORT EVIDENCE ARCHIVE {archive_id}"), "archive export confirmation is invalid");
+    ensure!(
+        request.confirmation == format!("EXPORT EVIDENCE ARCHIVE {archive_id}"),
+        "archive export confirmation is invalid"
+    );
     let actor = bounded_text(&request.actor_user_id, 1, 160, "export actor")?;
     let destination = safe_archive_file_name(&request.destination_file_name);
     let package_hash = validate_hash(&request.package_sha256, "package hash")?;
@@ -801,17 +886,20 @@ fn record_export(
         )
         .optional()?
         .context("verified evidence archive was not found")?;
-    ensure!(recorded_hash == package_hash, "exported package hash does not match the verified archive");
+    ensure!(
+        recorded_hash == package_hash,
+        "exported package hash does not match the verified archive"
+    );
     let export_id = Uuid::new_v4().to_string();
     let now = now_utc();
     let receipt_hash = hash_json(&json!({
         "schema": "homeserver.evidence-archive-export-receipt.v1",
-        "export_id": export_id,
-        "archive_id": archive_id,
-        "package_sha256": package_hash,
-        "destination_file_name": destination,
-        "exported_by_user_id": actor,
-        "created_at_utc": now
+        "export_id": &export_id,
+        "archive_id": &archive_id,
+        "package_sha256": &package_hash,
+        "destination_file_name": &destination,
+        "exported_by_user_id": &actor,
+        "created_at_utc": &now
     }))?;
     let transaction = connection.unchecked_transaction()?;
     transaction.execute(
@@ -835,7 +923,13 @@ fn record_export(
     )?;
     transaction.commit()?;
     let policy = latest_policy(&connection)?;
-    enforce_retention(&connection, &state.config, &policy, "system", "evidence_archive_retention")?;
+    enforce_retention(
+        &connection,
+        &state.config,
+        &policy,
+        "system",
+        "evidence_archive_retention",
+    )?;
     Ok(EvidenceArchiveActionResult {
         ok: true,
         message: "Evidence archive export receipt recorded.".to_owned(),
@@ -844,6 +938,7 @@ fn record_export(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_package(
     connection: &Connection,
     config: &AppConfig,
@@ -866,12 +961,20 @@ fn build_package(
     let mut first_record_at = None::<String>;
     let mut last_record_at = None::<String>;
     for record in records {
-        *table_counts.entry(record.source_table.clone()).or_insert(0_u64) += 1;
+        *table_counts
+            .entry(record.source_table.clone())
+            .or_insert(0_u64) += 1;
         if let Some(value) = &record.source_created_at_utc {
-            if first_record_at.as_ref().is_none_or(|current| value < current) {
+            if first_record_at
+                .as_ref()
+                .map_or(true, |current| value < current)
+            {
                 first_record_at = Some(value.clone());
             }
-            if last_record_at.as_ref().is_none_or(|current| value > current) {
+            if last_record_at
+                .as_ref()
+                .map_or(true, |current| value > current)
+            {
                 last_record_at = Some(value.clone());
             }
         }
@@ -903,7 +1006,10 @@ fn build_package(
     let manifest_bytes = serde_json::to_vec(&manifest)?;
     let manifest_sha256 = sha256_bytes(&manifest_bytes);
     let compressed = create_tar_gz(&manifest_bytes, &records_bytes)?;
-    ensure!(compressed.len() as u64 <= max_package_bytes, "evidence archive compressed payload exceeds the policy limit");
+    ensure!(
+        compressed.len() as u64 <= max_package_bytes,
+        "evidence archive compressed payload exceeds the policy limit"
+    );
     let compressed_payload_sha256 = sha256_bytes(&compressed);
     let key = Zeroizing::new(archive_key(config, connection)?);
     let mut nonce = [0_u8; 12];
@@ -925,14 +1031,23 @@ fn build_package(
         previous_archive_hash: previous_archive_hash.to_owned(),
     };
     let header_bytes = serde_json::to_vec(&header)?;
-    ensure!(header_bytes.len() <= MAX_HEADER_BYTES, "evidence archive header is too large");
+    ensure!(
+        header_bytes.len() <= MAX_HEADER_BYTES,
+        "evidence archive header is too large"
+    );
     let mut package = Vec::with_capacity(12 + header_bytes.len() + ciphertext.len());
     package.extend_from_slice(PACKAGE_MAGIC);
     package.extend_from_slice(&(header_bytes.len() as u32).to_be_bytes());
     package.extend_from_slice(&header_bytes);
     package.extend_from_slice(&ciphertext);
-    ensure!(package.len() as u64 <= max_package_bytes, "evidence archive package exceeds the policy limit");
-    ensure!(package.len() as u64 <= MAX_PACKAGE_HARD_BYTES, "evidence archive package exceeds the hard limit");
+    ensure!(
+        package.len() as u64 <= max_package_bytes,
+        "evidence archive package exceeds the policy limit"
+    );
+    ensure!(
+        package.len() as u64 <= MAX_PACKAGE_HARD_BYTES,
+        "evidence archive package exceeds the hard limit"
+    );
     let package_sha256 = sha256_bytes(&package);
     Ok((package, package_sha256, manifest, manifest_sha256))
 }
@@ -944,21 +1059,42 @@ fn verify_package_file(
     expected_archive_id: Option<&str>,
 ) -> Result<VerifiedPackage> {
     let metadata = fs::metadata(path)?;
-    ensure!(metadata.len() > 12 && metadata.len() <= MAX_PACKAGE_HARD_BYTES, "evidence archive package size is invalid");
+    ensure!(
+        metadata.len() > 12 && metadata.len() <= MAX_PACKAGE_HARD_BYTES,
+        "evidence archive package size is invalid"
+    );
     let package = fs::read(path)?;
     let package_sha256 = sha256_bytes(&package);
-    ensure!(&package[..8] == PACKAGE_MAGIC, "evidence archive package magic is invalid");
+    ensure!(
+        &package[..8] == PACKAGE_MAGIC,
+        "evidence archive package magic is invalid"
+    );
     let header_length = u32::from_be_bytes(package[8..12].try_into()?) as usize;
-    ensure!(header_length > 0 && header_length <= MAX_HEADER_BYTES, "evidence archive header length is invalid");
+    ensure!(
+        header_length > 0 && header_length <= MAX_HEADER_BYTES,
+        "evidence archive header length is invalid"
+    );
     let header_end = 12_usize
         .checked_add(header_length)
         .context("evidence archive header size overflow")?;
-    ensure!(header_end < package.len(), "evidence archive package is truncated");
+    ensure!(
+        header_end < package.len(),
+        "evidence archive package is truncated"
+    );
     let header: ArchivePackageHeader = serde_json::from_slice(&package[12..header_end])?;
-    ensure!(header.format_version == PACKAGE_VERSION, "evidence archive package version is unsupported");
-    ensure!(header.encryption == "device_key_aes256gcm", "evidence archive encryption mode is unsupported");
+    ensure!(
+        header.format_version == PACKAGE_VERSION,
+        "evidence archive package version is unsupported"
+    );
+    ensure!(
+        header.encryption == "device_key_aes256gcm",
+        "evidence archive encryption mode is unsupported"
+    );
     if let Some(expected) = expected_archive_id {
-        ensure!(header.archive_id == expected, "evidence archive package identity is invalid");
+        ensure!(
+            header.archive_id == expected,
+            "evidence archive package identity is invalid"
+        );
     }
     let nonce = URL_SAFE_NO_PAD.decode(&header.nonce_base64)?;
     ensure!(nonce.len() == 12, "evidence archive nonce is invalid");
@@ -968,20 +1104,53 @@ fn verify_package_file(
     let compressed = cipher
         .decrypt(Nonce::from_slice(&nonce), &package[header_end..])
         .map_err(|_| anyhow::anyhow!("evidence archive authentication failed"))?;
-    ensure!(sha256_bytes(&compressed) == header.compressed_payload_sha256, "evidence archive compressed payload hash is invalid");
+    ensure!(
+        sha256_bytes(&compressed) == header.compressed_payload_sha256,
+        "evidence archive compressed payload hash is invalid"
+    );
     let (manifest_bytes, records_bytes) = extract_tar_gz(&compressed)?;
-    ensure!(sha256_bytes(&manifest_bytes) == header.manifest_sha256, "evidence archive manifest hash is invalid");
+    ensure!(
+        sha256_bytes(&manifest_bytes) == header.manifest_sha256,
+        "evidence archive manifest hash is invalid"
+    );
     let manifest: ArchiveManifest = serde_json::from_slice(&manifest_bytes)?;
-    ensure!(manifest.schema == "homeserver.evidence-archive-manifest.v1", "evidence archive manifest schema is invalid");
-    ensure!(manifest.archive_id == header.archive_id, "evidence archive manifest identity is invalid");
-    ensure!(manifest.archive_sequence == header.archive_sequence, "evidence archive sequence is invalid");
-    ensure!(manifest.previous_archive_hash == header.previous_archive_hash, "evidence archive predecessor hash is invalid");
-    ensure!(!manifest.private_content_included && !manifest.source_evidence_deleted, "evidence archive privacy boundary is invalid");
-    ensure!(sha256_bytes(&records_bytes) == manifest.records_sha256, "evidence archive records hash is invalid");
+    ensure!(
+        manifest.schema == "homeserver.evidence-archive-manifest.v1",
+        "evidence archive manifest schema is invalid"
+    );
+    ensure!(
+        manifest.archive_id == header.archive_id,
+        "evidence archive manifest identity is invalid"
+    );
+    ensure!(
+        manifest.archive_sequence == header.archive_sequence,
+        "evidence archive sequence is invalid"
+    );
+    ensure!(
+        manifest.previous_archive_hash == header.previous_archive_hash,
+        "evidence archive predecessor hash is invalid"
+    );
+    ensure!(
+        !manifest.private_content_included && !manifest.source_evidence_deleted,
+        "evidence archive privacy boundary is invalid"
+    );
+    ensure!(
+        sha256_bytes(&records_bytes) == manifest.records_sha256,
+        "evidence archive records hash is invalid"
+    );
     let parsed = parse_records(&records_bytes, &manifest.previous_archive_hash)?;
-    ensure!(parsed.0 == manifest.record_count, "evidence archive record count is invalid");
-    ensure!(parsed.1 == manifest.chain_root_hash, "evidence archive chain root is invalid");
-    ensure!(parsed.2 == manifest.table_counts, "evidence archive table counts are invalid");
+    ensure!(
+        parsed.0 == manifest.record_count,
+        "evidence archive record count is invalid"
+    );
+    ensure!(
+        parsed.1 == manifest.chain_root_hash,
+        "evidence archive chain root is invalid"
+    );
+    ensure!(
+        parsed.2 == manifest.table_counts,
+        "evidence archive table counts are invalid"
+    );
     Ok(VerifiedPackage {
         manifest,
         package_sha256,
@@ -994,7 +1163,10 @@ fn collect_evidence(
     limit: usize,
     previous_archive_hash: &str,
 ) -> Result<Vec<CollectedRecord>> {
-    ensure!(limit > 0 && limit <= MAX_RECORDS_HARD, "evidence archive record limit is invalid");
+    ensure!(
+        limit > 0 && limit <= MAX_RECORDS_HARD,
+        "evidence archive record limit is invalid"
+    );
     let shapes = eligible_table_shapes(connection)?;
     let mut collected = Vec::new();
     let mut chain_hash = previous_archive_hash.to_owned();
@@ -1032,7 +1204,10 @@ fn eligible_table_shapes(connection: &Connection) -> Result<Vec<TableShape>> {
         if primary_keys.len() != 1 {
             continue;
         }
-        let names = columns.iter().map(|column| column.0.clone()).collect::<Vec<_>>();
+        let names = columns
+            .iter()
+            .map(|column| column.0.clone())
+            .collect::<Vec<_>>();
         let timestamp_column = [
             "created_at_utc",
             "completed_at_utc",
@@ -1063,10 +1238,15 @@ fn table_columns(connection: &Connection, table: &str) -> Result<Vec<(String, St
             row.get::<_, i64>(5)?,
         ))
     })?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    let columns = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(columns)
 }
 
-fn collect_table(connection: &Connection, shape: &TableShape, limit: usize) -> Result<Vec<CollectedRecord>> {
+fn collect_table(
+    connection: &Connection,
+    shape: &TableShape,
+    limit: usize,
+) -> Result<Vec<CollectedRecord>> {
     let table = quote_identifier(&shape.table_name)?;
     let primary = quote_identifier(&shape.primary_key)?;
     let order = if let Some(timestamp) = &shape.timestamp_column {
@@ -1083,7 +1263,10 @@ fn collect_table(connection: &Connection, shape: &TableShape, limit: usize) -> R
         .iter()
         .map(|value| (*value).to_owned())
         .collect::<Vec<_>>();
-    ensure!(column_names == shape.columns, "evidence table column order changed during collection");
+    ensure!(
+        column_names == shape.columns,
+        "evidence table column order changed during collection"
+    );
     let mut rows = statement.query(params![shape.table_name, limit as i64])?;
     let mut records = Vec::new();
     while let Some(row) = rows.next()? {
@@ -1095,7 +1278,10 @@ fn collect_table(connection: &Connection, shape: &TableShape, limit: usize) -> R
             .get(&shape.primary_key)
             .map(canonical_scalar)
             .context("evidence record primary key is unavailable")?;
-        ensure!(!key.is_empty() && key.chars().count() <= 500, "evidence record key is invalid");
+        ensure!(
+            !key.is_empty() && key.chars().count() <= 500,
+            "evidence record key is invalid"
+        );
         let created_at = shape
             .timestamp_column
             .as_ref()
@@ -1103,7 +1289,10 @@ fn collect_table(connection: &Connection, shape: &TableShape, limit: usize) -> R
             .and_then(Value::as_str)
             .map(str::to_owned);
         let canonical = serde_json::to_vec(&fields)?;
-        ensure!(canonical.len() <= MAX_RECORD_BYTES, "evidence record exceeds the canonical row size limit");
+        ensure!(
+            canonical.len() <= MAX_RECORD_BYTES,
+            "evidence record exceeds the canonical row size limit"
+        );
         let record_hash = hash_bytes_parts(&[
             shape.table_name.as_bytes(),
             b"\n",
@@ -1152,13 +1341,28 @@ fn parse_records(
     let mut tables = BTreeMap::new();
     let mut seen = BTreeSet::new();
     for line in text.lines() {
-        ensure!(!line.trim().is_empty(), "evidence archive contains an empty record line");
+        ensure!(
+            !line.trim().is_empty(),
+            "evidence archive contains an empty record line"
+        );
         let record: ArchiveRecord = serde_json::from_str(line)?;
         count = count.saturating_add(1);
-        ensure!(record.ordinal == count, "evidence archive record ordinal is invalid");
-        ensure!(record.schema == "homeserver.evidence-archive-record.v1", "evidence archive record schema is invalid");
-        ensure!(is_allowed_evidence_table(&record.source_table), "evidence archive contains a forbidden table");
-        ensure!(seen.insert((record.source_table.clone(), record.source_key.clone())), "evidence archive contains duplicate source membership");
+        ensure!(
+            record.ordinal == count,
+            "evidence archive record ordinal is invalid"
+        );
+        ensure!(
+            record.schema == "homeserver.evidence-archive-record.v1",
+            "evidence archive record schema is invalid"
+        );
+        ensure!(
+            is_allowed_evidence_table(&record.source_table),
+            "evidence archive contains a forbidden table"
+        );
+        ensure!(
+            seen.insert((record.source_table.clone(), record.source_key.clone())),
+            "evidence archive contains duplicate source membership"
+        );
         let canonical = serde_json::to_vec(&record.fields)?;
         let calculated_record_hash = hash_bytes_parts(&[
             record.source_table.as_bytes(),
@@ -1167,9 +1371,15 @@ fn parse_records(
             b"\n",
             &canonical,
         ]);
-        ensure!(calculated_record_hash == record.record_sha256, "evidence archive record hash is invalid");
+        ensure!(
+            calculated_record_hash == record.record_sha256,
+            "evidence archive record hash is invalid"
+        );
         chain = hash_chain(&chain, &record.record_sha256);
-        ensure!(chain == record.chain_hash, "evidence archive record chain is invalid");
+        ensure!(
+            chain == record.chain_hash,
+            "evidence archive record chain is invalid"
+        );
         *tables.entry(record.source_table).or_insert(0) += 1;
     }
     ensure!(count > 0, "evidence archive contains no records");
@@ -1201,25 +1411,40 @@ fn extract_tar_gz(bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
     let mut manifest = None;
     let mut records = None;
     for entry in archive.entries()? {
-        let mut entry = entry?;
+        let entry = entry?;
         let path = entry.path()?.to_string_lossy().into_owned();
-        ensure!(path == "manifest.json" || path == "records.ndjson", "evidence archive contains an unexpected path");
+        ensure!(
+            path == "manifest.json" || path == "records.ndjson",
+            "evidence archive contains an unexpected path"
+        );
         let limit = if path == "manifest.json" {
             MAX_HEADER_BYTES as u64
         } else {
             MAX_PACKAGE_HARD_BYTES
         };
-        ensure!(entry.size() <= limit, "evidence archive entry exceeds its size limit");
+        ensure!(
+            entry.size() <= limit,
+            "evidence archive entry exceeds its size limit"
+        );
         let mut output = Vec::new();
         entry.take(limit + 1).read_to_end(&mut output)?;
-        ensure!(output.len() as u64 <= limit, "evidence archive entry exceeds its size limit");
+        ensure!(
+            output.len() as u64 <= limit,
+            "evidence archive entry exceeds its size limit"
+        );
         match path.as_str() {
             "manifest.json" => {
-                ensure!(manifest.is_none(), "evidence archive contains duplicate manifests");
+                ensure!(
+                    manifest.is_none(),
+                    "evidence archive contains duplicate manifests"
+                );
                 manifest = Some(output);
             }
             "records.ndjson" => {
-                ensure!(records.is_none(), "evidence archive contains duplicate record streams");
+                ensure!(
+                    records.is_none(),
+                    "evidence archive contains duplicate record streams"
+                );
                 records = Some(output);
             }
             _ => unreachable!(),
@@ -1355,14 +1580,14 @@ fn latest_policy(connection: &Connection) -> Result<PolicyRecord> {
 }
 
 fn latest_verified_archive(connection: &Connection) -> Result<Option<(String, String)>> {
-    connection
+    let archive = connection
         .query_row(
             "SELECT archive_id,manifest_sha256 FROM evidence_archives WHERE state='verified' ORDER BY archive_sequence DESC LIMIT 1",
             [],
             |row| Ok((row.get(0)?,row.get(1)?)),
         )
-        .optional()
-        .map_err(Into::into)
+        .optional()?;
+    Ok(archive)
 }
 
 fn enforce_retention(
@@ -1373,11 +1598,11 @@ fn enforce_retention(
     actor_id: &str,
 ) -> Result<()> {
     let mut statement = connection.prepare(
-        "SELECT a.archive_id,a.storage_path FROM evidence_archives a JOIN evidence_archive_storage s ON s.archive_id=a.archive_id WHERE a.state='verified' AND s.state='exported' AND EXISTS (SELECT 1 FROM evidence_archive_exports x WHERE x.archive_id=a.archive_id) ORDER BY a.archive_sequence DESC LIMIT -1 OFFSET ?1",
+        "SELECT a.archive_id,a.storage_path FROM evidence_archives a JOIN evidence_archive_storage s ON s.archive_id=a.archive_id WHERE a.state='verified' AND s.state='exported' AND EXISTS (SELECT 1 FROM evidence_archive_exports x WHERE x.archive_id=a.archive_id) AND a.archive_id NOT IN (SELECT retained.archive_id FROM evidence_archives retained JOIN evidence_archive_storage retained_storage ON retained_storage.archive_id=retained.archive_id WHERE retained.state='verified' AND retained_storage.state IN ('present','exported') ORDER BY retained.archive_sequence DESC LIMIT ?1) ORDER BY a.archive_sequence ASC",
     )?;
     let candidates = statement
         .query_map(params![policy.retention_count as i64], |row| {
-            Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?))
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (archive_id, path) in candidates {
@@ -1412,14 +1637,27 @@ fn recover_interrupted_archives(connection: &Connection, config: &AppConfig) -> 
         "SELECT archive_id,storage_path,policy_id FROM evidence_archives WHERE state='collecting'",
     )?;
     let rows = statement
-        .query_map([], |row| Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?,row.get::<_, String>(2)?)))?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (archive_id, path, policy_id) in rows {
         if let Ok(path) = canonical_managed_archive_path(config, Path::new(&path)) {
             let _ = fs::remove_file(&path);
             let _ = fs::remove_file(path.with_extension("mgha.tmp"));
         }
-        mark_archive_failed(connection, &archive_id, &policy_id, "system", "restart_recovery", "restart_interrupted")?;
+        mark_archive_failed(
+            connection,
+            &archive_id,
+            &policy_id,
+            "system",
+            "restart_recovery",
+            "restart_interrupted",
+        )?;
     }
     Ok(())
 }
@@ -1457,6 +1695,7 @@ fn mark_archive_failed(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_event_tx(
     transaction: &Transaction<'_>,
     archive_id: Option<&str>,
@@ -1473,7 +1712,7 @@ fn record_event_tx(
     let metadata_json = serde_json::to_string(&metadata)?;
     let event_hash = hash_json(&json!({
         "schema": "homeserver.evidence-archive-event.v1",
-        "event_id": event_id,
+        "event_id": &event_id,
         "archive_id": archive_id,
         "policy_id": policy_id,
         "event_type": event_type,
@@ -1482,7 +1721,7 @@ fn record_event_tx(
         "actor_id": actor_id,
         "detail_code": detail_code,
         "metadata": metadata,
-        "created_at_utc": created_at
+        "created_at_utc": &created_at
     }))?;
     transaction.execute(
         "INSERT INTO evidence_archive_events (event_id,archive_id,policy_id,event_type,outcome,actor_type,actor_id,detail_code,metadata_json,event_hash,created_at_utc) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
@@ -1508,18 +1747,33 @@ fn canonical_managed_archive_path(config: &AppConfig, path: &Path) -> Result<Pat
     let directory = archive_directory(config);
     fs::create_dir_all(&directory)?;
     let canonical_directory = directory.canonicalize()?;
-    let canonical_path = path.canonicalize().or_else(|_| {
-        let parent = path.parent().context("evidence archive path has no parent")?.canonicalize()?;
-        let file_name = path.file_name().context("evidence archive path has no file name")?;
-        Ok::<PathBuf, std::io::Error>(parent.join(file_name))
-    })?;
-    ensure!(canonical_path.starts_with(&canonical_directory), "evidence archive path escaped the managed directory");
-    ensure!(canonical_path.extension().and_then(|value| value.to_str()) == Some("mgha"), "evidence archive path has an invalid extension");
+    let canonical_path = if path.exists() {
+        path.canonicalize()?
+    } else {
+        let parent = path
+            .parent()
+            .context("evidence archive path has no parent")?
+            .canonicalize()?;
+        let file_name = path
+            .file_name()
+            .context("evidence archive path has no file name")?;
+        parent.join(file_name)
+    };
+    ensure!(
+        canonical_path.starts_with(&canonical_directory),
+        "evidence archive path escaped the managed directory"
+    );
+    ensure!(
+        canonical_path.extension().and_then(|value| value.to_str()) == Some("mgha"),
+        "evidence archive path has an invalid extension"
+    );
     Ok(canonical_path)
 }
 
 fn write_atomic(temporary: &Path, final_path: &Path, bytes: &[u8]) -> Result<()> {
-    let directory = final_path.parent().context("evidence archive directory is unavailable")?;
+    let directory = final_path
+        .parent()
+        .context("evidence archive directory is unavailable")?;
     fs::create_dir_all(directory)?;
     let mut output = File::create(temporary)?;
     output.write_all(bytes)?;
@@ -1562,7 +1816,10 @@ fn is_allowed_evidence_table(table: &str) -> bool {
 }
 
 fn quote_identifier(value: &str) -> Result<String> {
-    ensure!(valid_identifier(value), "SQLite evidence identifier is invalid");
+    ensure!(
+        valid_identifier(value),
+        "SQLite evidence identifier is invalid"
+    );
     Ok(format!("\"{value}\""))
 }
 
@@ -1653,15 +1910,24 @@ fn validate_uuid(value: &str, label: &str) -> Result<String> {
 
 fn validate_hash(value: &str, label: &str) -> Result<String> {
     let value = value.trim().to_ascii_lowercase();
-    ensure!(value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()), "{label} is invalid");
+    ensure!(
+        value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "{label} is invalid"
+    );
     Ok(value)
 }
 
 fn bounded_text(value: &str, minimum: usize, maximum: usize, label: &str) -> Result<String> {
     let value = value.trim();
     let count = value.chars().count();
-    ensure!((minimum..=maximum).contains(&count), "{label} length is invalid");
-    ensure!(!value.chars().any(char::is_control), "{label} contains control characters");
+    ensure!(
+        (minimum..=maximum).contains(&count),
+        "{label} length is invalid"
+    );
+    ensure!(
+        !value.chars().any(char::is_control),
+        "{label} contains control characters"
+    );
     Ok(value.to_owned())
 }
 
@@ -1759,8 +2025,12 @@ mod tests {
     fn evidence_allowlist_rejects_private_content_tables() {
         assert!(is_allowed_evidence_table("agent_runtime_receipts"));
         assert!(is_allowed_evidence_table("model_inference_events"));
-        assert!(is_allowed_evidence_table("private_knowledge_egress_receipts"));
-        assert!(!is_allowed_evidence_table("model_inference_private_results"));
+        assert!(is_allowed_evidence_table(
+            "private_knowledge_egress_receipts"
+        ));
+        assert!(!is_allowed_evidence_table(
+            "model_inference_private_results"
+        ));
         assert!(!is_allowed_evidence_table("agent_messages"));
         assert!(!is_allowed_evidence_table("wrapper_job_payloads"));
         assert!(!is_allowed_evidence_table("evidence_archive_events"));
@@ -1778,10 +2048,7 @@ mod tests {
 
     #[test]
     fn archive_file_names_are_bounded() {
-        assert_eq!(
-            safe_archive_file_name("evidence.mgha"),
-            "evidence.mgha"
-        );
+        assert_eq!(safe_archive_file_name("evidence.mgha"), "evidence.mgha");
         assert_eq!(
             safe_archive_file_name("../unsafe.exe"),
             "Microgifter-HomeServer-Evidence.mgha"

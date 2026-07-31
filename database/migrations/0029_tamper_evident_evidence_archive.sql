@@ -2,6 +2,7 @@
 -- The archive copies only reviewed evidence tables. It never archives prompts,
 -- model output, document content, credentials, private payloads, or arbitrary tables.
 -- Source evidence remains immutable and is not deleted by this phase.
+-- Local package pruning is allowed only after export_verified_before_prune evidence.
 
 CREATE TABLE IF NOT EXISTS evidence_archive_policies (
   policy_id TEXT PRIMARY KEY,
@@ -76,6 +77,38 @@ CREATE TRIGGER IF NOT EXISTS trg_evidence_archives_no_delete
 BEFORE DELETE ON evidence_archives
 BEGIN
   SELECT RAISE(ABORT,'evidence archives are immutable');
+END;
+
+CREATE TABLE IF NOT EXISTS evidence_archive_storage (
+  archive_id TEXT PRIMARY KEY,
+  state TEXT NOT NULL CHECK (state IN ('creating','present','exported','pruned','missing')),
+  last_verified_at_utc TEXT,
+  exported_at_utc TEXT,
+  pruned_at_utc TEXT,
+  updated_at_utc TEXT NOT NULL,
+  FOREIGN KEY (archive_id) REFERENCES evidence_archives(archive_id) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_evidence_archive_storage_state
+  ON evidence_archive_storage (state,updated_at_utc DESC,archive_id DESC);
+
+CREATE TRIGGER IF NOT EXISTS trg_evidence_archive_storage_transition_guard
+BEFORE UPDATE ON evidence_archive_storage
+WHEN NOT (
+  (OLD.state='creating' AND NEW.state IN ('creating','present','missing')) OR
+  (OLD.state='present' AND NEW.state IN ('present','exported','missing')) OR
+  (OLD.state='exported' AND NEW.state IN ('exported','pruned','missing')) OR
+  (OLD.state='pruned' AND NEW.state='pruned') OR
+  (OLD.state='missing' AND NEW.state='missing')
+)
+BEGIN
+  SELECT RAISE(ABORT,'evidence archive storage transition is invalid');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_evidence_archive_storage_no_delete
+BEFORE DELETE ON evidence_archive_storage
+BEGIN
+  SELECT RAISE(ABORT,'evidence archive storage history is retained');
 END;
 
 CREATE TABLE IF NOT EXISTS evidence_archive_members (
