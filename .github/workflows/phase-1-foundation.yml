@@ -58,6 +58,7 @@ jobs:
               raise SystemExit('OpenRouter validator routing anchor is missing')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
+          cargo fmt --all
       - name: Install frontend dependencies
         run: npm ci
       - name: Validate Phase 20 and retained contracts
