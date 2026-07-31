@@ -428,7 +428,7 @@ fn ensure_runtime_worker(connection: &Connection) -> Result<String> {
     Ok(worker.worker_id)
 }
 
-fn create_plan(state: &AppState, request: CreateRuntimePlanRequest) -> Result<String> {
+pub(crate) fn create_plan(state: &AppState, request: CreateRuntimePlanRequest) -> Result<String> {
     ensure!(
         !request.steps.is_empty() && request.steps.len() <= MAX_STEPS,
         "runtime plan must contain between one and 32 steps"
@@ -1299,6 +1299,10 @@ fn reconcile(connection: &Connection) -> Result<()> {
     let now = now_utc();
     connection.execute(
         "UPDATE agent_runtime_plan_steps SET state=(SELECT CASE WHEN j.state='waiting' THEN 'queued' WHEN j.state='dead_letter' THEN 'failed' WHEN j.state='completed' AND NOT EXISTS (SELECT 1 FROM agent_runtime_receipts r WHERE r.step_id=agent_runtime_plan_steps.step_id) THEN 'failed' ELSE j.state END FROM wrapper_jobs j WHERE j.job_id=agent_runtime_plan_steps.job_id),failure_code=COALESCE(failure_code,(SELECT CASE WHEN j.state='completed' AND NOT EXISTS (SELECT 1 FROM agent_runtime_receipts r WHERE r.step_id=agent_runtime_plan_steps.step_id) THEN 'runtime_receipt_missing' WHEN j.state='dead_letter' THEN COALESCE(j.failure_code,'dead_letter') ELSE j.failure_code END FROM wrapper_jobs j WHERE j.job_id=agent_runtime_plan_steps.job_id)),completed_at_utc=COALESCE(completed_at_utc,(SELECT j.completed_at_utc FROM wrapper_jobs j WHERE j.job_id=agent_runtime_plan_steps.job_id)),updated_at_utc=?1 WHERE state IN ('queued','leased','running')",
+        params![now],
+    )?;
+    connection.execute(
+        "UPDATE agent_runtime_plan_steps SET state='running',failure_code=NULL,completed_at_utc=NULL,result_code=COALESCE(result_code,'awaiting_supervised_approval'),updated_at_utc=?1 WHERE tool_key='action.supervised' AND state='failed' AND EXISTS (SELECT 1 FROM wrapper_jobs j WHERE j.job_id=agent_runtime_plan_steps.job_id AND j.state='completed') AND NOT EXISTS (SELECT 1 FROM agent_runtime_receipts r WHERE r.step_id=agent_runtime_plan_steps.step_id)",
         params![now],
     )?;
     connection.execute(

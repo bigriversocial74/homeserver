@@ -51,6 +51,9 @@ mod wrapper_privacy;
 #[path = "app/wrapper_runtime.rs"]
 mod wrapper_runtime;
 
+#[path = "app/wrapper_orchestration.rs"]
+mod wrapper_orchestration;
+
 #[path = "app/wrapper_runtime_policy.rs"]
 mod wrapper_runtime_policy;
 
@@ -100,6 +103,7 @@ pub async fn run(
     wrapper_privacy::initialize(&connection)?;
     wrapper_privacy::maintain_history(&connection)?;
     wrapper_runtime::initialize(&connection)?;
+    wrapper_orchestration::initialize(&connection)?;
     document_extraction::initialize(&connection)?;
     model_center::initialize(&connection)?;
     openrouter_provider::initialize(&connection)?;
@@ -175,6 +179,8 @@ pub async fn run(
         tokio::spawn(pod_provider_runtime::run(state.clone(), shutdown.clone()));
     let agent_tool_runtime_worker =
         tokio::spawn(wrapper_runtime::run(state.clone(), shutdown.clone()));
+    let supervised_action_orchestration_worker =
+        tokio::spawn(wrapper_orchestration::run(state.clone(), shutdown.clone()));
     let review_intelligence_worker = tokio::spawn(run_review_intelligence_scheduler(
         state.clone(),
         shutdown.clone(),
@@ -209,6 +215,7 @@ pub async fn run(
             .merge(wrapper_agents::router(state.clone()))
             .merge(wrapper_privacy::router(state.clone()))
             .merge(wrapper_runtime::router(state.clone()))
+            .merge(wrapper_orchestration::router(state.clone()))
             .merge(wrapper_runtime_policy::router(state.clone()))
             .merge(knowledge_vault::router(state.clone()))
             .merge(model_center::router(state.clone()))
@@ -237,6 +244,7 @@ pub async fn run(
     vp3_authority_worker.abort();
     pod_provider_worker.abort();
     agent_tool_runtime_worker.abort();
+    supervised_action_orchestration_worker.abort();
     review_intelligence_worker.abort();
     result?;
     Ok(())

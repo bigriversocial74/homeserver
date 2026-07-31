@@ -83,3 +83,27 @@
   .runtime-primary-grid, .runtime-bottom-grid { grid-template-columns: 1fr; }
   .runtime-safety-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+.runtime-supervised-panel { margin-bottom: 16px; }
+.runtime-checkpoint-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; max-height: 720px; overflow: auto; }
+.runtime-checkpoint-card { padding: 15px; border: 1px solid #e0e7f0; border-left: 4px solid #91a1b8; border-radius: 12px; background: #fbfcff; }
+.runtime-checkpoint-card.warning { border-left-color: var(--amber); }
+.runtime-checkpoint-card.success { border-left-color: var(--green); }
+.runtime-checkpoint-card.danger { border-left-color: var(--red); }
+.runtime-checkpoint-card header, .runtime-checkpoint-card footer { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.runtime-checkpoint-card header span:first-child { color: var(--muted); font-size: 8px; font-weight: 750; text-transform: uppercase; letter-spacing: .06em; }
+.runtime-checkpoint-card h3 { margin-top: 4px; font-size: 13px; }
+.runtime-checkpoint-card > p { margin-top: 8px; color: #56627a; font-size: 9px; line-height: 1.5; }
+.runtime-safe-preview { margin-top: 11px; padding: 10px; border: 1px solid #e5eaf2; border-radius: 9px; background: white; }
+.runtime-safe-preview strong, .runtime-safe-preview code { display: block; }
+.runtime-safe-preview strong { color: var(--muted); font-size: 8px; text-transform: uppercase; letter-spacing: .06em; }
+.runtime-safe-preview code { margin-top: 6px; overflow-wrap: anywhere; color: #40506a; font-size: 8px; line-height: 1.45; white-space: normal; }
+.runtime-checkpoint-card dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 11px; }
+.runtime-checkpoint-card dl div { min-width: 0; padding: 8px; border-radius: 8px; background: #f3f6fa; }
+.runtime-checkpoint-card dt { color: var(--muted); font-size: 7px; text-transform: uppercase; letter-spacing: .05em; }
+.runtime-checkpoint-card dd { margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 8px; font-weight: 700; }
+.runtime-checkpoint-card footer { align-items: center; margin-top: 12px; padding-top: 10px; border-top: 1px solid #e5eaf1; }
+.runtime-checkpoint-card footer > span { color: var(--muted); font-size: 8px; }
+.runtime-checkpoint-card footer > div { display: flex; gap: 6px; }
+.runtime-checkpoint-card footer .button { min-height: 30px; padding: 5px 9px; font-size: 8px; }
+@media (max-width: 1100px) { .runtime-checkpoint-grid { grid-template-columns: 1fr; } }

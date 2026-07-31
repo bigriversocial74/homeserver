@@ -8,6 +8,7 @@ const REFRESH_WINDOW_MS = 15_000;
 const runtimeState = {
   runtime: null,
   authority: null,
+  orchestration: null,
   busy: false,
   error: null,
   lastLoadedAt: 0,
@@ -122,6 +123,14 @@ function activeStops() {
   return values(runtimeState.authority?.emergency_stops).filter((stop) => stop.state === "active");
 }
 
+function supervisedCheckpoints() {
+  return values(runtimeState.orchestration?.checkpoints);
+}
+
+function activeSupervisedCheckpoints() {
+  return supervisedCheckpoints().filter((checkpoint) => ["awaiting_approval", "approved", "executing"].includes(checkpoint.state));
+}
+
 function failedWorkCount() {
   const plans = values(runtimeState.runtime?.plans).filter((plan) => plan.state === "failed").length;
   const steps = values(runtimeState.runtime?.steps).filter((step) => step.state === "failed").length;
@@ -192,6 +201,28 @@ function renderAuthority() {
   </div>`;
 }
 
+function safePreview(value) {
+  try {
+    const text = JSON.stringify(value ?? {});
+    return text.length > 320 ? `${text.slice(0, 320)}…` : text;
+  } catch {
+    return "Safe preview unavailable";
+  }
+}
+
+function renderSupervisedCheckpoints() {
+  const checkpoints = supervisedCheckpoints();
+  const receipts = new Map(values(runtimeState.orchestration?.receipts).map((receipt) => [receipt.checkpoint_id, receipt]));
+  if (!checkpoints.length) {
+    return `<section class="panel runtime-supervised-panel"><div class="panel-title"><div>${icon("shield", 18)}<div><h2>Supervised Actions</h2><p>Approval-gated Phase 16D checkpoints inside ordered Phase 17 plans.</p></div></div><span>0 checkpoints</span></div><div class="runtime-empty compact"><strong>No supervised checkpoints</strong><p>Approval-gated actions will pause here without entering the low-risk tool worker.</p></div></section>`;
+  }
+  return `<section class="panel runtime-supervised-panel"><div class="panel-title"><div>${icon("shield", 18)}<div><h2>Supervised Actions</h2><p>Safe previews, exact approval evidence, execution, and reversible compensation.</p></div></div><span>${activeSupervisedCheckpoints().length} active</span></div><div class="runtime-checkpoint-grid">${checkpoints.slice(0, 30).map((checkpoint) => {
+    const receipt = receipts.get(checkpoint.checkpoint_id);
+    const rollbackAvailable = checkpoint.state === "completed" && checkpoint.compensation_supported && checkpoint.compensation_state === "available";
+    return `<article class="runtime-checkpoint-card ${statusTone(checkpoint.state)}"><header><div><span>Step ${Number(checkpoint.sequence_number || 0)} · ${escapeHtml(humanize(checkpoint.risk_class))}</span><h3>${escapeHtml(checkpoint.title)}</h3></div>${statusBadge(checkpoint.state)}</header><p>${escapeHtml(checkpoint.rationale)}</p><div class="runtime-safe-preview"><strong>Safe proposal preview</strong><code>${escapeHtml(safePreview(checkpoint.safe_summary))}</code></div><dl><div><dt>Proposal</dt><dd>${escapeHtml(humanize(checkpoint.proposal_state))}</dd></div><div><dt>Approval</dt><dd>${escapeHtml(humanize(checkpoint.approval_state || "not available"))}</dd></div><div><dt>Adapter</dt><dd>${escapeHtml(checkpoint.tool_adapter)}</dd></div><div><dt>Expires</dt><dd>${escapeHtml(formatDate(checkpoint.expires_at_utc))}</dd></div><div><dt>Plan hash</dt><dd class="mono">${escapeHtml(compactHash(checkpoint.runtime_plan_hash))}</dd></div><div><dt>Payload hash</dt><dd class="mono">${escapeHtml(compactHash(checkpoint.payload_hash))}</dd></div></dl><footer><span>${receipt ? `Receipt ${escapeHtml(compactHash(receipt.receipt_hash))}` : `Compensation ${escapeHtml(humanize(checkpoint.compensation_state))}`}</span><div>${["awaiting_approval", "approved"].includes(checkpoint.state) ? `<button class="button secondary" type="button" data-runtime-open-agent>Review approval</button>` : ""}${rollbackAvailable ? `<button class="button danger" type="button" data-runtime-rollback-checkpoint="${escapeHtml(checkpoint.checkpoint_id)}" data-runtime-checkpoint-title="${escapeHtml(checkpoint.title)}">Rollback</button>` : ""}</div></footer></article>`;
+  }).join("")}</div></section>`;
+}
+
 function renderReceipts() {
   const receipts = values(runtimeState.runtime?.receipts);
   if (!receipts.length) return `<div class="runtime-empty compact"><strong>No runtime receipts</strong><p>Immutable per-step evidence will appear after work completes or fails.</p></div>`;
@@ -204,6 +235,7 @@ function renderRuntimePage() {
   const canvas = document.querySelector(".page-canvas");
   if (!canvas) return;
   const runtime = runtimeState.runtime || {};
+  const orchestration = runtimeState.orchestration || {};
   const tools = values(runtime.tools);
   const receipts = values(runtime.receipts);
   const agents = values(runtimeState.authority?.agents);
@@ -216,11 +248,12 @@ function renderRuntimePage() {
         ${metric("activity", "Runtime", humanize(runtime.runtime_state || "offline"), runtime.worker_id ? "Persistent local worker" : "Worker unavailable", runtime.runtime_state === "active" ? "green" : "amber")}
         ${metric("agent", "Active Agents", String(agents.filter((agent) => agent.state === "active").length), `${agents.length} registered identities`, "blue")}
         ${metric("play", "Active Plans", String(activePlans().length), `${queuedSteps().length} queued or running steps`, activePlans().length ? "purple" : "gray")}
-        ${metric("shield", "Pending Approvals", String(pendingApprovals().length), "Sensitive lifecycle only", pendingApprovals().length ? "amber" : "green")}
+        ${metric("shield", "Pending Approvals", String(pendingApprovals().length), `${activeSupervisedCheckpoints().length} supervised checkpoints`, pendingApprovals().length ? "amber" : "green")}
         ${metric("warning", "Failures", String(failedWorkCount()), `${activeStops().length} active emergency stops`, failedWorkCount() || activeStops().length ? "amber" : "green")}
         ${metric("logs", "Receipts", String(receipts.length), `${tools.length} cataloged tools`, "teal")}
       </section>
       ${renderSafetyBoundary(runtime)}
+      ${renderSupervisedCheckpoints(orchestration)}
       <section class="runtime-primary-grid"><article class="panel runtime-plans-panel"><div class="panel-title"><div>${icon("activity", 18)}<div><h2>Runtime Plans</h2><p>Ordered low-risk work submitted through the Phase 16C job contract.</p></div></div><span>${values(runtime.plans).length} plans</span></div>${renderPlans()}</article><article class="panel runtime-tools-panel"><div class="panel-title"><div>${icon("apps", 18)}<div><h2>Tool Catalog</h2><p>HomeServer-owned, versioned, risk-classified adapters.</p></div></div><span>${tools.length} tools</span></div>${renderTools()}</article></section>
       ${renderAuthority()}
       <section class="runtime-bottom-grid"><article class="panel"><div class="panel-title"><div>${icon("activity", 18)}<div><h2>Step Queue & History</h2><p>Exact order, state, tool, result code, and completion time.</p></div></div><span>${values(runtime.steps).length} steps</span></div>${renderStepQueue()}</article><article class="panel"><div class="panel-title"><div>${icon("logs", 18)}<div><h2>Immutable Runtime Receipts</h2><p>Hash-only evidence linked to the Phase 16C job receipt.</p></div></div><span>${receipts.length} receipts</span></div>${renderReceipts()}</article></section>
@@ -237,9 +270,11 @@ async function refreshRuntime(quiet = false) {
   const results = await Promise.allSettled([
     invoke("homeserver_agent_runtime"),
     invoke("homeserver_agent_authority"),
+    invoke("homeserver_action_orchestration"),
   ]);
   if (results[0].status === "fulfilled") runtimeState.runtime = results[0].value;
   if (results[1].status === "fulfilled") runtimeState.authority = results[1].value;
+  if (results[2].status === "fulfilled") runtimeState.orchestration = results[2].value;
   const errors = results.filter((result) => result.status === "rejected").map((result) => String(result.reason));
   runtimeState.error = errors.length ? errors.join(" · ") : null;
   runtimeState.lastLoadedAt = Date.now();
@@ -253,9 +288,10 @@ async function runOneCycle() {
   runtimeState.error = null;
   renderRuntimePage();
   try {
-    runtimeState.runtime = await invoke("homeserver_run_agent_runtime_once");
-    const authority = await invoke("homeserver_agent_authority");
-    runtimeState.authority = authority;
+    await invoke("homeserver_run_agent_runtime_once");
+    runtimeState.orchestration = await invoke("homeserver_run_action_orchestration_once");
+    runtimeState.runtime = await invoke("homeserver_agent_runtime");
+    runtimeState.authority = await invoke("homeserver_agent_authority");
     runtimeState.lastLoadedAt = Date.now();
   } catch (error) {
     runtimeState.error = String(error);
@@ -279,6 +315,32 @@ async function cancelRuntimePlan(button) {
   try {
     runtimeState.runtime = await invoke("homeserver_cancel_agent_runtime_plan", {
       planId,
+      confirmation,
+      reason: reason.trim(),
+    });
+    runtimeState.lastLoadedAt = Date.now();
+  } catch (error) {
+    runtimeState.error = String(error);
+  } finally {
+    runtimeState.busy = false;
+    renderRuntimePage();
+  }
+}
+
+async function rollbackSupervisedCheckpoint(button) {
+  if (runtimeState.busy) return;
+  const checkpointId = button.dataset.runtimeRollbackCheckpoint || "";
+  const title = button.dataset.runtimeCheckpointTitle || "this action";
+  const confirmation = window.prompt(`Type ROLLBACK ACTION ${checkpointId} to compensate ${title}:`);
+  if (confirmation !== `ROLLBACK ACTION ${checkpointId}`) return;
+  const reason = window.prompt("Reason for rollback:", "Rolled back from Agent Runtime Control Center");
+  if (reason === null || !reason.trim()) return;
+  runtimeState.busy = true;
+  runtimeState.error = null;
+  renderRuntimePage();
+  try {
+    runtimeState.orchestration = await invoke("homeserver_rollback_supervised_action", {
+      checkpointId,
       confirmation,
       reason: reason.trim(),
     });
@@ -317,6 +379,12 @@ document.addEventListener("click", (event) => {
   if (cancelButton) {
     event.preventDefault();
     void cancelRuntimePlan(cancelButton);
+    return;
+  }
+  const rollbackButton = event.target.closest("[data-runtime-rollback-checkpoint]");
+  if (rollbackButton) {
+    event.preventDefault();
+    void rollbackSupervisedCheckpoint(rollbackButton);
     return;
   }
   const agentButton = event.target.closest("[data-runtime-open-agent]");
