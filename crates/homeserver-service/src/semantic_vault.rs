@@ -262,7 +262,7 @@ async fn search_semantic_index(
         .map_err(|error| action_error("semantic_search_failed", error))
 }
 
-fn snapshot(state: &AppState) -> Result<SemanticVaultSnapshot> {
+pub(crate) fn snapshot(state: &AppState) -> Result<SemanticVaultSnapshot> {
     let connection = state.connection()?;
     let default_embedding_model =
         model_center::configured_embedding_model_from_connection(&connection)?;
