@@ -78,3 +78,8 @@ if "fn parse_utc(" not in text:
     text = text.replace(anchor, parser, 1)
 
 path.write_text(text, encoding="utf-8")
+
+contract = root / "crates/homeserver-service/tests/phase18_supervised_orchestration_contract.rs"
+for number, line in enumerate(contract.read_text(encoding="utf-8").splitlines(), start=1):
+    if 90 <= number <= 170:
+        print(f"PHASE18_FIXTURE {number:04d}: {line}")
