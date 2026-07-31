@@ -121,7 +121,37 @@ text = replace_once(
     "selector state tuple",
 )
 
-incident_call_pattern = re.compile(
+egress_incident_pattern = re.compile(
+    r"record_incident_tx\(\n"
+    r"\s*transaction,\n"
+    r"\s*Some\(context\.wrapper_id\),\n"
+    r"\s*Some\(context\.connection_id\),\n"
+    r"\s*Some\(context\.job_id\),\n"
+    r"\s*Some\(&selector_id\),\n"
+    r"\s*\"critical\",\n"
+    r"\s*category,\n"
+    r"\s*\"egress_content_denied\",\n"
+    r"\s*&private_evidence_hash,\n"
+    r"\s*\)\?;"
+)
+egress_incident_replacement = """record_incident_tx(
+                transaction,
+                PrivacyIncidentEvidence {
+                    wrapper: Some(context.wrapper_id),
+                    connection: Some(context.connection_id),
+                    job: Some(context.job_id),
+                    selector: Some(&selector_id),
+                    severity: "critical",
+                    category,
+                    detail: "egress_content_denied",
+                    evidence: &private_evidence_hash,
+                },
+            )?;"""
+text, count = egress_incident_pattern.subn(egress_incident_replacement, text, count=1)
+if count != 1:
+    raise SystemExit(f"egress incident call marker mismatch: {count}")
+
+resource_incident_pattern = re.compile(
     r"record_incident_tx\(\n"
     r"\s*tx,\n"
     r"\s*None,\n"
@@ -134,7 +164,7 @@ incident_call_pattern = re.compile(
     r"\s*&evidence,\n"
     r"\s*\)"
 )
-incident_call_replacement = """record_incident_tx(
+resource_incident_replacement = """record_incident_tx(
         tx,
         PrivacyIncidentEvidence {
             wrapper: None,
@@ -147,9 +177,9 @@ incident_call_replacement = """record_incident_tx(
             evidence: &evidence,
         },
     )"""
-text, count = incident_call_pattern.subn(incident_call_replacement, text, count=1)
+text, count = resource_incident_pattern.subn(resource_incident_replacement, text, count=1)
 if count != 1:
-    raise SystemExit(f"privacy incident call marker mismatch: {count}")
+    raise SystemExit(f"resource incident call marker mismatch: {count}")
 
 incident_signature_pattern = re.compile(
     r"fn record_incident_tx\(\n"
