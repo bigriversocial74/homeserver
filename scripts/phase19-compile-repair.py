@@ -50,19 +50,16 @@ if trigger_alias not in source:
         raise RuntimeError("Phase 19 trigger type alias anchor is missing")
     source = source.replace(api_result_anchor, api_result_anchor + trigger_alias, 1)
 
-complex_signature = ''') -> Result<(
-    Option<String>,
-    Option<i64>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-)> {
-'''
-simple_signature = ") -> Result<NormalizedTrigger> {\n"
+simple_signature = "-> Result<NormalizedTrigger> {"
 if simple_signature not in source:
-    if complex_signature not in source:
-        raise RuntimeError("Phase 19 normalized trigger signature anchor is missing")
-    source = source.replace(complex_signature, simple_signature, 1)
+    function_start = source.find("fn normalize_trigger(")
+    if function_start < 0:
+        raise RuntimeError("Phase 19 normalize_trigger function is missing")
+    result_start = source.find("-> Result<", function_start)
+    body_start = source.find("{", result_start)
+    if result_start < 0 or body_start < 0:
+        raise RuntimeError("Phase 19 normalized trigger signature bounds are missing")
+    source = source[:result_start] + simple_signature + source[body_start + 1 :]
 
 source = source.replace("template_json.as_bytes().len()", "template_json.len()")
 source = source.replace("metadata_json.as_bytes().len()", "metadata_json.len()")
