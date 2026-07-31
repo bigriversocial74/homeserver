@@ -28,7 +28,7 @@ replace_once(
 openrouter_path = ROOT / "crates/homeserver-service/src/openrouter_provider.rs"
 openrouter = openrouter_path.read_text(encoding="utf-8")
 start = openrouter.find("pub async fn generate_agent_response(")
-end = openrouter.find("async fn fetch_catalog(", start)
+end = openrouter.find("pub async fn generate_governed_response(", start)
 if start < 0 or end < 0:
     raise SystemExit("retired direct OpenRouter entry point anchors are missing")
 openrouter_path.write_text(openrouter[:start] + openrouter[end:], encoding="utf-8")
