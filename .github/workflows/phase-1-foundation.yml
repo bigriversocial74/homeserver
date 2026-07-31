@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/phase-1-foundation.yml
       - scripts/phase21-integrate.py
+      - scripts/phase21-lint-fix.py
       - database/migrations/0029_tamper_evident_evidence_archive.sql
       - crates/homeserver-service/src/evidence_archive.rs
       - crates/homeserver-service/tests/phase21_evidence_archive_contract.rs
@@ -42,6 +43,7 @@ jobs:
       - name: Apply exact Phase 21 integration
         run: |
           python scripts/phase21-integrate.py
+          python scripts/phase21-lint-fix.py
           cargo fmt --all
       - name: Install frontend dependencies
         run: npm ci
@@ -69,7 +71,7 @@ jobs:
       - name: Commit clean permanent Phase 21 implementation
         run: |
           git checkout origin/main -- .github/workflows/phase-1-foundation.yml
-          rm -f scripts/phase21-integrate.py
+          rm -f scripts/phase21-integrate.py scripts/phase21-lint-fix.py
           find scripts -type d -name __pycache__ -prune -exec rm -rf {} +
           find scripts -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
           git config user.name github-actions[bot]
