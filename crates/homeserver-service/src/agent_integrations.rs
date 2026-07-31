@@ -1,6 +1,4 @@
-use crate::{
-    app::cloud_registry, model_center, operational_data, semantic_vault, AppState,
-};
+use crate::{app::cloud_registry, model_center, operational_data, semantic_vault, AppState};
 use anyhow::{bail, ensure, Context, Result};
 use axum::{
     extract::{DefaultBodyLimit, Query, State},
@@ -207,7 +205,6 @@ struct RpcError {
 struct IntegrationRecord {
     summary: SiteIntegrationSummary,
     credential_key: String,
-    pending_state_hash: Option<String>,
     pending_expires_at_utc: Option<String>,
 }
 
@@ -392,7 +389,10 @@ pub fn initialize(connection: &Connection) -> Result<()> {
         params![MIGRATION_KEY],
         |row| row.get(0),
     )?;
-    ensure!(count == 1, "unified Agent migration is not registered exactly once");
+    ensure!(
+        count == 1,
+        "unified Agent migration is not registered exactly once"
+    );
     health_check(connection)?;
     maintain_history(connection)
 }
@@ -411,11 +411,10 @@ pub fn health_check(connection: &Connection) -> Result<()> {
 }
 
 pub fn maintain_history(connection: &Connection) -> Result<()> {
-    let context_count: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM agent_context_receipts",
-        [],
-        |row| row.get(0),
-    )?;
+    let context_count: i64 =
+        connection.query_row("SELECT COUNT(*) FROM agent_context_receipts", [], |row| {
+            row.get(0)
+        })?;
     ensure!(
         context_count <= MAX_CONTEXT_RECEIPTS,
         "Agent context receipt retention requires archival"
@@ -450,7 +449,9 @@ pub fn oauth_callback_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-async fn snapshot_handler(State(state): State<Arc<AppState>>) -> ApiResult<AgentIntegrationSnapshot> {
+async fn snapshot_handler(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<AgentIntegrationSnapshot> {
     integration_snapshot(state)
         .await
         .map(Json)
@@ -554,17 +555,25 @@ async fn complete_authorization(
         bail!(
             "{}: {}",
             error,
-            query.error_description.unwrap_or_else(|| "authorization was denied".to_owned())
+            query
+                .error_description
+                .unwrap_or_else(|| "authorization was denied".to_owned())
         );
     }
     let code = bounded_text(
-        query.code.as_deref().context("authorization code is missing")?,
+        query
+            .code
+            .as_deref()
+            .context("authorization code is missing")?,
         1,
         2_000,
         "authorization code",
     )?;
     let state_value = bounded_text(
-        query.state.as_deref().context("authorization state is missing")?,
+        query
+            .state
+            .as_deref()
+            .context("authorization state is missing")?,
         32,
         500,
         "authorization state",
@@ -588,9 +597,7 @@ async fn complete_authorization(
         .take()
         .context("PKCE verifier is unavailable")?;
     let client = McpHttpClient::new()?;
-    let token = client
-        .token_exchange(&record, &code, &verifier)
-        .await?;
+    let token = client.token_exchange(&record, &code, &verifier).await?;
     validate_token_response(&token)?;
     credentials.access_token = Some(token.access_token);
     if let Some(refresh_token) = token.refresh_token {
@@ -611,15 +618,20 @@ async fn complete_authorization(
 
 pub async fn integration_snapshot(state: Arc<AppState>) -> Result<AgentIntegrationSnapshot> {
     let health = serde_json::to_value(state.snapshot())?;
-    let knowledge = semantic_vault::snapshot(&state)
-        .map(serde_json::to_value)
-        .transpose()?
-        .unwrap_or_else(|| json!({ "state": "unavailable" }));
-    let models = model_center::snapshot(state.clone())
-        .await
-        .map(serde_json::to_value)
-        .transpose()?
-        .unwrap_or_else(|| json!({ "runtime": { "state": "unavailable" } }));
+    let knowledge = match semantic_vault::snapshot(&state) {
+        Ok(snapshot) => serde_json::to_value(snapshot)?,
+        Err(error) => json!({
+            "state": "unavailable",
+            "error": truncate_chars(&error.to_string(), 300)
+        }),
+    };
+    let models = match model_center::snapshot(state.clone()).await {
+        Ok(snapshot) => serde_json::to_value(snapshot)?,
+        Err(error) => json!({
+            "runtime": { "state": "unavailable" },
+            "error": truncate_chars(&error.to_string(), 300)
+        }),
+    };
     let operational = {
         let task_state = state.clone();
         tokio::task::spawn_blocking(move || operational_data::snapshot_for_state(&task_state))
@@ -683,7 +695,10 @@ pub async fn collect_mcp_grounding(
     prompt: &str,
     connection_ids: &[String],
 ) -> UnifiedMcpGrounding {
-    let integrations = match state.connection().and_then(|connection| read_integrations(&connection)) {
+    let integrations = match state
+        .connection()
+        .and_then(|connection| read_integrations(&connection))
+    {
         Ok(values) => values
             .into_iter()
             .filter(|integration| {
@@ -783,7 +798,10 @@ fn configure_site_integration(
         .into_iter()
         .find(|connection| connection.connection_id == request.connection_id)
         .context("paired cloud connection was not found")?;
-    ensure!(cloud.provider_key == "microgifter", "MCP provider is not installed");
+    ensure!(
+        cloud.provider_key == "microgifter",
+        "MCP provider is not installed"
+    );
     let resource_uri = normalize_resource_uri(
         request
             .resource_uri
@@ -866,7 +884,10 @@ fn begin_authorization(state: &AppState, connection_id: &str) -> Result<Authoriz
     })
 }
 
-async fn refresh_tools(state: Arc<AppState>, connection_id: &str) -> Result<SiteIntegrationSummary> {
+async fn refresh_tools(
+    state: Arc<AppState>,
+    connection_id: &str,
+) -> Result<SiteIntegrationSummary> {
     validate_uuid(connection_id, "connection ID")?;
     let record = {
         let connection = state.connection()?;
@@ -901,7 +922,10 @@ async fn call_tool_with_authority(
         let connection = state.connection()?;
         integration_by_id(&connection, &request.connection_id)?
     };
-    ensure!(record.summary.state == "connected", "MCP integration is not connected");
+    ensure!(
+        record.summary.state == "connected",
+        "MCP integration is not connected"
+    );
     let tool = record
         .summary
         .tools
@@ -967,7 +991,9 @@ async fn ensure_access_token(state: Arc<AppState>, record: &IntegrationRecord) -
         .as_deref()
         .map(parse_time)
         .transpose()?
-        .is_none_or(|expiry| expiry <= Utc::now() + ChronoDuration::seconds(60));
+        .map_or(true, |expiry| {
+            expiry <= Utc::now() + ChronoDuration::seconds(60)
+        });
     if !expires_soon {
         return credentials
             .access_token
@@ -1134,10 +1160,7 @@ fn guidance(
     }
 }
 
-fn select_automatic_tools(
-    prompt: &str,
-    tools: &[McpToolSummary],
-) -> Vec<(McpToolSummary, Value)> {
+fn select_automatic_tools(prompt: &str, tools: &[McpToolSummary]) -> Vec<(McpToolSummary, Value)> {
     let prompt_lower = prompt.to_ascii_lowercase();
     let prompt_terms = prompt_lower
         .split(|character: char| !character.is_ascii_alphanumeric())
@@ -1150,7 +1173,10 @@ fn select_automatic_tools(
         selected.push((tool.clone(), json!({})));
     }
     if prompt_terms.iter().any(|term| {
-        ["catalog", "product", "products", "item", "menu", "deal", "gift"].contains(term)
+        [
+            "catalog", "product", "products", "item", "menu", "deal", "gift",
+        ]
+        .contains(term)
     }) {
         if let Some(tool) = tools.iter().find(|tool| {
             tool.name == "microgifter.catalog.search" && tool.operation_class == "read"
@@ -1165,7 +1191,9 @@ fn select_automatic_tools(
         .iter()
         .filter(|tool| {
             tool.operation_class == "read"
-                && !selected.iter().any(|(selected, _)| selected.name == tool.name)
+                && !selected
+                    .iter()
+                    .any(|(selected, _)| selected.name == tool.name)
                 && schema_has_no_required_inputs(&tool.input_schema)
         })
         .map(|tool| {
@@ -1178,7 +1206,12 @@ fn select_automatic_tools(
         })
         .filter(|(score, _)| *score >= 2)
         .collect::<Vec<_>>();
-    scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.name.cmp(&right.1.name)));
+    scored.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.name.cmp(&right.1.name))
+    });
     for (_, tool) in scored.into_iter().take(MAX_MCP_AUTOMATIC_CALLS) {
         selected.push((tool.clone(), json!({})));
     }
@@ -1190,7 +1223,7 @@ fn schema_has_no_required_inputs(schema: &Value) -> bool {
     schema
         .get("required")
         .and_then(Value::as_array)
-        .is_none_or(Vec::is_empty)
+        .map_or(true, |values| values.is_empty())
 }
 
 fn parse_tool(value: &Value) -> Result<McpToolSummary> {
@@ -1278,7 +1311,10 @@ fn integration_by_id(connection: &Connection, connection_id: &str) -> Result<Int
         .context("site MCP integration was not configured")
 }
 
-fn integration_by_pending_state(connection: &Connection, state_hash: &str) -> Result<IntegrationRecord> {
+fn integration_by_pending_state(
+    connection: &Connection,
+    state_hash: &str,
+) -> Result<IntegrationRecord> {
     connection
         .query_row(
             "SELECT connection_id,provider_key,resource_uri,authorization_server,client_id,redirect_uri,scopes_json,state,token_expires_at_utc,tool_catalog_json,last_tool_sync_utc,last_success_utc,last_error,credential_key,pending_state_hash,pending_expires_at_utc FROM agent_site_integrations WHERE pending_state_hash=?1 AND state='authorization_pending'",
@@ -1308,7 +1344,6 @@ fn map_integration_record(row: &Row<'_>) -> rusqlite::Result<IntegrationRecord> 
     Ok(IntegrationRecord {
         summary,
         credential_key: row.get(13)?,
-        pending_state_hash: row.get(14)?,
         pending_expires_at_utc: row.get(15)?,
     })
 }
@@ -1373,7 +1408,11 @@ fn mark_integration_success(state: &AppState, connection_id: &str) -> Result<()>
     Ok(())
 }
 
-fn mark_integration_error(state: &AppState, connection_id: &str, error: &anyhow::Error) -> Result<()> {
+fn mark_integration_error(
+    state: &AppState,
+    connection_id: &str,
+    error: &anyhow::Error,
+) -> Result<()> {
     state.connection()?.execute(
         "UPDATE agent_site_integrations SET state='degraded',last_error=?1,updated_at_utc=?2 WHERE connection_id=?3",
         params![truncate_chars(&error.to_string(), 500),now_string(),connection_id],
@@ -1461,7 +1500,9 @@ async fn decode_rpc_response(response: reqwest::Response) -> Result<Value> {
             .unwrap_or_default();
         bail!("MCP {}: {} {}", error.code, error.message, data);
     }
-    envelope.result.context("MCP response did not contain a result")
+    envelope
+        .result
+        .context("MCP response did not contain a result")
 }
 
 async fn bounded_response_bytes(response: reqwest::Response) -> Result<Vec<u8>> {
@@ -1471,7 +1512,10 @@ async fn bounded_response_bytes(response: reqwest::Response) -> Result<Vec<u8>> 
             "remote response exceeds the Agent size limit"
         );
     }
-    let bytes = response.bytes().await.context("unable to read remote response")?;
+    let bytes = response
+        .bytes()
+        .await
+        .context("unable to read remote response")?;
     ensure!(
         bytes.len() <= MAX_MCP_RESPONSE_BYTES,
         "remote response exceeds the Agent size limit"
@@ -1524,7 +1568,10 @@ fn normalize_resource_uri(value: &str) -> Result<String> {
 
 fn normalize_authorization_server(value: &str) -> Result<String> {
     let url = Url::parse(value.trim()).context("authorization server is invalid")?;
-    ensure!(url.scheme() == "https", "authorization server must use HTTPS");
+    ensure!(
+        url.scheme() == "https",
+        "authorization server must use HTTPS"
+    );
     ensure!(
         url.username().is_empty() && url.password().is_none(),
         "authorization server cannot contain credentials"
@@ -1586,9 +1633,9 @@ fn normalize_prompt_key(value: &str) -> Result<String> {
     let value = value.trim().to_ascii_lowercase();
     ensure!(
         (2..=120).contains(&value.len())
-            && value
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-')),
+            && value.chars().all(
+                |character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+            ),
         "Agent prompt key is invalid"
     );
     Ok(value)
@@ -1602,7 +1649,10 @@ fn validate_uuid(value: &str, label: &str) -> Result<()> {
 fn bounded_text(value: &str, minimum: usize, maximum: usize, label: &str) -> Result<String> {
     let value = value.trim();
     let count = value.chars().count();
-    ensure!((minimum..=maximum).contains(&count), "{label} length is invalid");
+    ensure!(
+        (minimum..=maximum).contains(&count),
+        "{label} length is invalid"
+    );
     ensure!(
         !value
             .chars()
@@ -1758,8 +1808,12 @@ mod tests {
         ];
         let selected = select_automatic_tools("Find products in my catalog", &tools);
         assert!(selected.len() <= MAX_MCP_AUTOMATIC_CALLS);
-        assert!(selected.iter().all(|(tool, _)| tool.operation_class == "read"));
-        assert!(selected.iter().any(|(tool, _)| tool.name == "microgifter.catalog.search"));
+        assert!(selected
+            .iter()
+            .all(|(tool, _)| tool.operation_class == "read"));
+        assert!(selected
+            .iter()
+            .any(|(tool, _)| tool.name == "microgifter.catalog.search"));
     }
 
     #[test]

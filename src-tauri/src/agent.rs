@@ -137,3 +137,51 @@ pub(crate) async fn homeserver_cancel_world_mission(
     )
     .await
 }
+
+#[tauri::command]
+pub(crate) async fn homeserver_agent_integrations() -> Result<Value, String> {
+    get_json("/v1/agent/integrations").await
+}
+
+#[tauri::command]
+pub(crate) async fn homeserver_agent_integration_action(request: Value) -> Result<Value, String> {
+    match request.get("action").and_then(Value::as_str) {
+        Some("configure") => post_json("/v1/agent/integrations/configure", &request).await,
+        Some("authorize") => post_json("/v1/agent/integrations/authorize", &request).await,
+        Some("refresh_tools") => post_json("/v1/agent/integrations/tools", &request).await,
+        Some("call_tool") => post_json("/v1/agent/integrations/call", &request).await,
+        Some("dismiss_guidance") => post_json("/v1/agent/guidance/dismiss", &request).await,
+        _ => Err("Unsupported Agent integration action.".to_owned()),
+    }
+}
+
+#[tauri::command]
+pub(crate) fn homeserver_open_agent_authorization(url: String) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(url.trim()).map_err(|error| error.to_string())?;
+    if parsed.scheme() != "https"
+        || parsed.host_str() != Some("microgifter.com")
+        || parsed.username() != ""
+        || parsed.password().is_some()
+    {
+        return Err("Only the Microgifter HTTPS authorization page may be opened.".to_owned());
+    }
+    #[cfg(target_os = "windows")]
+    let mut command = std::process::Command::new("rundll32");
+    #[cfg(target_os = "windows")]
+    command.args(["url.dll,FileProtocolHandler", parsed.as_str()]);
+
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(target_os = "macos")]
+    command.arg(parsed.as_str());
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = std::process::Command::new("xdg-open");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    command.arg(parsed.as_str());
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Unable to open the authorization page: {error}"))
+}

@@ -165,7 +165,41 @@ function goalOptions() {
 
 function modelOptions() {
   const model = workspace?.default_chat_model;
-  return `<option value="">${model ? `Default · ${escapeHtml(model)}` : "HomeServer default"}</option>`;
+  return `<option value="">${model ? `Automatic · ${escapeHtml(model)}` : "Automatic model routing"}</option>`;
+}
+
+function integrationSnapshot() {
+  return workspace?.integrations || null;
+}
+
+function renderAgentGuidance() {
+  const guidance = integrationSnapshot()?.active_prompt;
+  if (!guidance) return "";
+  return `<section class="hs-agent-guidance" data-guidance-key="${escapeHtml(guidance.key)}">
+    <div><span>HomeServer guidance</span><strong>${escapeHtml(guidance.title)}</strong><p>${escapeHtml(guidance.message)}</p></div>
+    <div class="hs-agent-guidance-actions"><button type="button" data-guidance-action="${escapeHtml(guidance.action_target)}">${escapeHtml(guidance.action_label)}</button><button type="button" class="quiet" data-dismiss-guidance="${escapeHtml(guidance.key)}">Dismiss</button></div>
+  </section>`;
+}
+
+function renderMcpIntegrationPanel() {
+  const clouds = Array.isArray(workspace?.connections) ? workspace.connections : [];
+  const integrations = integrationSnapshot()?.site_integrations || [];
+  const rows = clouds.map((connection) => {
+    const integration = integrations.find((item) => item.connection_id === connection.connection_id);
+    if (!integration) {
+      return `<form class="hs-mcp-config" data-mcp-config="${escapeHtml(connection.connection_id)}">
+        <div><strong>${escapeHtml(connection.display_name || "Microgifter")}</strong><span>Paired for sync · authorize live MCP tools</span></div>
+        <input name="client_id" required maxlength="240" placeholder="Pre-registered MCP OAuth client ID">
+        <button type="submit">Configure MCP</button>
+      </form>`;
+    }
+    return `<article class="hs-mcp-integration">
+      <div><strong>${escapeHtml(connection.display_name || "Microgifter")}</strong><span>${escapeHtml(humanize(integration.state))} · ${integration.tools.length} tools</span></div>
+      <div>${integration.state === "connected" ? `<button type="button" data-mcp-refresh="${escapeHtml(connection.connection_id)}">Refresh tools</button>` : `<button type="button" data-mcp-authorize="${escapeHtml(connection.connection_id)}">Authorize MCP</button>`}</div>
+      ${integration.last_error ? `<small>${escapeHtml(integration.last_error)}</small>` : ""}
+    </article>`;
+  }).join("");
+  return `<section class="hs-provider-mcp"><div class="hs-provider-section-head"><h3>Live site tools</h3><span>Read tools can run automatically. Drafts and actions remain governed.</span></div>${rows || '<p>Pair a cloud connection before configuring MCP.</p>'}</section>`;
 }
 
 function renderComposer() {
@@ -186,7 +220,7 @@ function renderComposer() {
         <label><input type="checkbox" name="hs-chat-context" value="connections" checked>Connections</label>
         <label><input type="checkbox" name="hs-chat-context" value="knowledge" checked>Knowledge</label>
         <label><input type="checkbox" name="hs-chat-context" value="goals" checked>Goals</label>
-        <label><input type="checkbox" name="hs-chat-context" value="operational_data">Operational data</label>
+        <label><input type="checkbox" name="hs-chat-context" value="operational_data" checked>Operational data</label>
       </div>
       <small>External actions still require a separate local approval.</small>
     </div>
@@ -241,6 +275,7 @@ function renderConnectionDrawer() {
     <div class="hs-provider-toolbar"><button type="button" class="button primary" id="hs-provider-open-connect">Connect Microgifter</button><button type="button" class="button secondary" id="hs-provider-refresh" ${connectionBusy ? "disabled" : ""}>Refresh</button></div>
     ${renderConnectForm()}
     <div class="hs-provider-list">${connections.length ? connections.map(renderConnectionCard).join("") : '<div class="hs-provider-empty"><strong>No Microgifter connection</strong><span>Generate a Sync Code from the Microgifter account panel, then connect it here.</span></div>'}</div>
+    ${renderMcpIntegrationPanel()}
     <section class="hs-provider-receipts"><h3>Recent connection activity</h3>${(provider?.recent_receipts || []).slice(0, 8).map((receipt) => `<div><span class="hs-provider-result ${escapeHtml(receipt.result_category)}"></span><strong>${escapeHtml(humanize(receipt.event_type))}</strong><small>${escapeHtml(relativeDate(receipt.created_at_utc))}</small></div>`).join("") || '<p>No Phase 6A connection receipts yet.</p>'}</section>
   </aside></div>`;
 }
@@ -263,6 +298,7 @@ function renderPage() {
     <main class="hs-chat-main">
       <header class="hs-chat-header"><div><strong>${escapeHtml(thread?.title || "New chat")}</strong><span>${thread ? `Updated ${escapeHtml(relativeDate(thread.updated_at_utc))}` : "Private local conversation"}</span></div><div class="hs-chat-header-actions"><span class="hs-runtime-state ${shellHealth.models === "degraded" ? "warn" : ""}">${escapeHtml(shellHealth.models === "degraded" ? "Model runtime offline" : humanize(workspace?.model_runtime_state || "loading"))}</span><button type="button" id="hs-chat-refresh" title="Refresh Agent Chat" ${loading ? "disabled" : ""}>↻</button><button type="button" id="hs-chat-open-connections">Connections</button></div></header>
       ${notice && !connectionDrawerOpen ? `<div class="hs-chat-notice ${escapeHtml(notice.kind)}">${escapeHtml(notice.message)}</div>` : ""}
+      ${renderAgentGuidance()}
       <section class="hs-chat-stream" id="hs-chat-stream">${loading && !workspace ? '<div class="hs-chat-loading">Loading your private HomeServer chats…</div>' : renderMessages()}</section>
       ${renderComposer()}
     </main>
@@ -356,6 +392,11 @@ function bindEvents() {
   document.querySelector("#hs-provider-refresh")?.addEventListener("click", refreshProvider);
   document.querySelector("#hs-provider-connect-form")?.addEventListener("submit", connectMicrogifter);
   document.querySelectorAll("[data-provider-action]").forEach((button) => button.addEventListener("click", runProviderAction));
+  document.querySelectorAll("[data-mcp-config]").forEach((form) => form.addEventListener("submit", configureMcp));
+  document.querySelectorAll("[data-mcp-authorize]").forEach((button) => button.addEventListener("click", authorizeMcp));
+  document.querySelectorAll("[data-mcp-refresh]").forEach((button) => button.addEventListener("click", refreshMcpTools));
+  document.querySelectorAll("[data-guidance-action]").forEach((button) => button.addEventListener("click", runGuidanceAction));
+  document.querySelectorAll("[data-dismiss-guidance]").forEach((button) => button.addEventListener("click", dismissGuidance));
 }
 
 function autoSizeComposer() {
@@ -440,7 +481,7 @@ async function submitPrompt(event) {
     prompt,
     connection_ids: context.includes("connections") ? (workspace?.connections || []).map((connection) => connection.connection_id) : [],
     dataset_keys: selectedDatasetKeys(context),
-    goal_ids: goalId ? [goalId] : [],
+    goal_ids: goalId ? [goalId] : context.includes("goals") ? goals().map((goal) => goal.goal_id) : [],
     knowledge_query: context.includes("knowledge") ? prompt : null,
     model: document.querySelector("#hs-chat-model")?.value || null,
     proposed_action: null,
@@ -461,6 +502,100 @@ async function submitPrompt(event) {
     sending = false;
     mount(true);
     document.querySelector("#hs-chat-input")?.focus();
+  }
+}
+
+async function configureMcp(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const connectionId = form.dataset.mcpConfig || "";
+  const clientId = new FormData(form).get("client_id")?.toString().trim() || "";
+  if (!connectionId || !clientId || connectionBusy) return;
+  connectionBusy = true;
+  notice = null;
+  mount(true);
+  try {
+    workspace.integrations = await invoke("homeserver_agent_integration_action", { request: {
+      action: "configure",
+      connection_id: connectionId,
+      client_id: clientId,
+      resource_uri: "https://mcp.microgifter.com/mcp",
+      authorization_server: "https://microgifter.com",
+      scopes: ["profile:read", "catalog:read"],
+    }});
+    notice = { kind: "success", message: "MCP client configured. Authorize it with Microgifter next." };
+  } catch (error) {
+    notice = { kind: "warning", message: String(error) };
+  } finally {
+    connectionBusy = false;
+    mount(true);
+  }
+}
+
+async function authorizeMcp(event) {
+  const connectionId = event.currentTarget.dataset.mcpAuthorize || "";
+  if (!connectionId || connectionBusy) return;
+  connectionBusy = true;
+  notice = null;
+  mount(true);
+  try {
+    const result = await invoke("homeserver_agent_integration_action", { request: { action: "authorize", connection_id: connectionId } });
+    await invoke("homeserver_open_agent_authorization", { url: result.authorization_url });
+    notice = { kind: "info", message: "Complete authorization in your browser, then return here. HomeServer will accept the secure local callback." };
+    window.setTimeout(() => void refreshAll(), 6000);
+  } catch (error) {
+    notice = { kind: "warning", message: String(error) };
+  } finally {
+    connectionBusy = false;
+    mount(true);
+  }
+}
+
+async function refreshMcpTools(event) {
+  const connectionId = event.currentTarget.dataset.mcpRefresh || "";
+  if (!connectionId || connectionBusy) return;
+  connectionBusy = true;
+  mount(true);
+  try {
+    await invoke("homeserver_agent_integration_action", { request: { action: "refresh_tools", connection_id: connectionId } });
+    workspace.integrations = await invoke("homeserver_agent_integrations");
+    notice = { kind: "success", message: "Microgifter MCP tools refreshed." };
+  } catch (error) {
+    notice = { kind: "warning", message: String(error) };
+  } finally {
+    connectionBusy = false;
+    mount(true);
+  }
+}
+
+async function runGuidanceAction(event) {
+  const target = event.currentTarget.dataset.guidanceAction || "";
+  if (target === "agent:connections" || target === "agent:integrations") {
+    connectionDrawerOpen = true;
+    mount(true);
+    return;
+  }
+  if (target.startsWith("agent:prompt:")) {
+    const input = document.querySelector("#hs-chat-input");
+    if (input) {
+      input.value = target.slice("agent:prompt:".length);
+      input.focus();
+      autoSizeComposer();
+    }
+    return;
+  }
+  if (target.startsWith("#")) window.location.hash = target;
+}
+
+async function dismissGuidance(event) {
+  const promptKey = event.currentTarget.dataset.dismissGuidance || "";
+  if (!promptKey) return;
+  try {
+    workspace.integrations = await invoke("homeserver_agent_integration_action", { request: { action: "dismiss_guidance", prompt_key: promptKey } });
+    mount(true);
+  } catch (error) {
+    notice = { kind: "warning", message: String(error) };
+    mount(true);
   }
 }
 
