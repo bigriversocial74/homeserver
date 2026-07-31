@@ -175,7 +175,8 @@ for immutable_trigger in (
     "trg_supervised_compensation_receipts_no_delete",
     "trg_supervised_action_events_no_delete",
 ):
-    require(immutable_trigger in migration_contract, f"missing immutable delete trigger: {immutable_trigger}")
+    if immutable_trigger not in migration_contract:
+        raise SystemExit(f"missing immutable delete trigger: {immutable_trigger}")
 """
 if "trg_supervised_action_receipts_no_delete" not in validator:
     validator += validator_extension
