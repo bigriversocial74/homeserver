@@ -127,8 +127,8 @@ fn parse_utc(value: &str, label: &str) -> Result<DateTime<Utc>> {
       - name: Commit clean implementation
         shell: bash
         run: |
-          rm -f scripts/.phase18-* scripts/phase18-branch-builder.py docs/.phase18-staging-marker.md
-          rm -f .github/workflows/phase18-branch-builder.yml .github/workflows/phase18-builder-v2.yml .github/workflows/phase18-builder-v3.yml
+          rm -f scripts/.phase18-* scripts/phase18-branch-builder.py scripts/phase18-source-repair.py docs/.phase18-staging-marker.md
+          rm -f .github/workflows/phase18-branch-builder.yml .github/workflows/phase18-builder-v2.yml .github/workflows/phase18-builder-v3.yml .github/workflows/phase18-push-builder.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
