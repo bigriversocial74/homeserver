@@ -128,7 +128,10 @@ fn create_policy(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .context("runtime policy agent was not found")?;
-    ensure!(agent_state == "active", "runtime policy agent is not active");
+    ensure!(
+        agent_state == "active",
+        "runtime policy agent is not active"
+    );
     let required_autonomy = match risk_class.as_str() {
         "read_only" => 1,
         "reversible" => 2,
@@ -239,7 +242,8 @@ fn validate_symbol(value: &str, max: usize, label: &str) -> Result<String> {
     ensure!(
         value
             .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-' | ':')),
+            .all(|character| character.is_ascii_alphanumeric()
+                || matches!(character, '.' | '_' | '-' | ':')),
         "{label} contains unsupported characters"
     );
     Ok(value)
@@ -269,10 +273,7 @@ fn timestamp(value: DateTime<Utc>) -> String {
 }
 
 fn hash_json(value: &Value) -> Result<String> {
-    Ok(format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(value)?)
-    ))
+    Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(value)?)))
 }
 
 fn api_error(code: &'static str, error: anyhow::Error) -> (StatusCode, Json<ApiError>) {

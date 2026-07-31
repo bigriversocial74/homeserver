@@ -224,13 +224,19 @@ pub fn health_check(connection: &Connection) -> Result<()> {
         [],
         |row| row.get(0),
     )?;
-    ensure!(invalid_worker == 0, "agent runtime worker registration is invalid");
+    ensure!(
+        invalid_worker == 0,
+        "agent runtime worker registration is invalid"
+    );
     let bypass: i64 = connection.query_row(
         "SELECT COUNT(*) FROM agent_runtime_plan_steps s JOIN wrapper_jobs j ON j.job_id=s.job_id LEFT JOIN agent_job_bindings b ON b.job_id=j.job_id WHERE j.submitted_by_type<>'agent' OR b.job_id IS NULL",
         [],
         |row| row.get(0),
     )?;
-    ensure!(bypass == 0, "agent runtime step bypassed agent-bound job authority");
+    ensure!(
+        bypass == 0,
+        "agent runtime step bypassed agent-bound job authority"
+    );
     let incomplete_receipts: i64 = connection.query_row(
         "SELECT COUNT(*) FROM agent_runtime_plan_steps s LEFT JOIN agent_runtime_receipts r ON r.step_id=s.step_id WHERE s.state='completed' AND r.step_id IS NULL",
         [],
@@ -253,11 +259,10 @@ pub fn maintain_history(connection: &Connection) -> Result<()> {
         "DELETE FROM agent_runtime_events WHERE event_id NOT IN (SELECT event_id FROM agent_runtime_events ORDER BY created_at_utc DESC,event_id DESC LIMIT ?1)",
         params![MAX_EVENTS],
     )?;
-    let receipt_count: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM agent_runtime_receipts",
-        [],
-        |row| row.get(0),
-    )?;
+    let receipt_count: i64 =
+        connection.query_row("SELECT COUNT(*) FROM agent_runtime_receipts", [], |row| {
+            row.get(0)
+        })?;
     ensure!(
         receipt_count <= MAX_RECEIPTS,
         "agent runtime receipt retention requires archival"
@@ -368,7 +373,10 @@ fn ensure_runtime_worker(connection: &Connection) -> Result<String> {
         wrapper_jobs::RegisterWorkerRequest {
             worker_kind: "tool".to_owned(),
             display_name: RUNTIME_WORKER_NAME.to_owned(),
-            allowed_job_types: RUNTIME_JOB_TYPES.iter().map(|value| (*value).to_owned()).collect(),
+            allowed_job_types: RUNTIME_JOB_TYPES
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect(),
             max_concurrent_jobs: 1,
         },
     )?;
@@ -677,13 +685,7 @@ fn process_leased_job(
     let execution = match execute_adapter(state, &context, &leased.private_input) {
         Ok(execution) => execution,
         Err(error) => {
-            fail_runtime_job(
-                state,
-                worker_id,
-                &leased,
-                "runtime_adapter_failed",
-                &error,
-            )?;
+            fail_runtime_job(state, worker_id, &leased, "runtime_adapter_failed", &error)?;
             return Err(error);
         }
     };
@@ -714,7 +716,10 @@ fn prepare_execution(
     worker_id: &str,
     job: &wrapper_jobs::JobSummary,
 ) -> Result<ExecutionContext> {
-    ensure!(job.submitted_by_type == "agent", "runtime job is not agent-submitted");
+    ensure!(
+        job.submitted_by_type == "agent",
+        "runtime job is not agent-submitted"
+    );
     let connection = state.connection()?;
     let transaction = connection.unchecked_transaction()?;
     ensure!(
@@ -726,15 +731,26 @@ fn prepare_execution(
         params![job.job_id, now_utc()],
         |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?,row.get(9)?,row.get(10)?,row.get(11)?,row.get(12)?,row.get(13)?,row.get(14)?)),
     )?;
-    ensure!(row.2 == job.submitted_by_id, "runtime plan agent does not match the job submitter");
+    ensure!(
+        row.2 == job.submitted_by_id,
+        "runtime plan agent does not match the job submitter"
+    );
     let tool = read_tool_tx(&transaction, &row.5)?;
     ensure!(tool.state == "active", "runtime tool is not active");
     ensure!(tool.adapter_key == row.7, "runtime step adapter changed");
-    ensure!(row.13 == tool.adapter_key, "agent policy adapter does not match the runtime tool");
-    ensure!(row.11 == tool.risk_class, "agent policy risk class does not match the runtime tool");
+    ensure!(
+        row.13 == tool.adapter_key,
+        "agent policy adapter does not match the runtime tool"
+    );
+    ensure!(
+        row.11 == tool.risk_class,
+        "agent policy risk class does not match the runtime tool"
+    );
     ensure!(row.14 == "active", "agent execution policy is not active");
     ensure!(
-        tool.allowed_job_types.iter().any(|value| value == &job.job_type),
+        tool.allowed_job_types
+            .iter()
+            .any(|value| value == &job.job_type),
         "runtime tool does not allow this job type"
     );
     enforce_tool_restrictions(&row.9, &tool.adapter_key)?;
@@ -849,12 +865,16 @@ fn enforce_autonomy_and_approval(
         params![job.job_id, agent_id, policy_id, plan_hash, approval_id, now_utc()],
         |row| row.get(0),
     )?;
-    ensure!(approved == 1, "runtime tool approval is missing, stale, or mismatched");
+    ensure!(
+        approved == 1,
+        "runtime tool approval is missing, stale, or mismatched"
+    );
     Ok(())
 }
 
 fn enforce_tool_restrictions(restrictions_json: &str, adapter_key: &str) -> Result<()> {
-    let restrictions = serde_json::from_str::<Value>(restrictions_json).unwrap_or_else(|_| json!({}));
+    let restrictions =
+        serde_json::from_str::<Value>(restrictions_json).unwrap_or_else(|_| json!({}));
     let denied = string_array(restrictions.get("denied_adapters"));
     ensure!(
         !denied.iter().any(|value| value == adapter_key),
@@ -1476,7 +1496,8 @@ fn validate_symbol(value: &str, max: usize, label: &str) -> Result<String> {
     ensure!(
         value
             .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-' | ':')),
+            .all(|character| character.is_ascii_alphanumeric()
+                || matches!(character, '.' | '_' | '-' | ':')),
         "{label} contains unsupported characters"
     );
     Ok(value)
