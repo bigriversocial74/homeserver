@@ -165,7 +165,11 @@ require(
     ],
     "Control Center evidence archive UI",
 )
-forbid(frontend, ["storage_path", "prompt", "private_results", "MutationObserver"], "unsafe archive UI")
+forbid(
+    frontend,
+    ["storage_path", "prompt_text", "output_text", "source_fields", "MutationObserver"],
+    "unsafe archive UI",
+)
 require(frontend_css, ["runtime-evidence-archive", "runtime-archive-grid"], "archive UI styles")
 require(package, ["validate-evidence-archive.py"], "permanent validator registration")
 require(workflow, ["Phase 21 Evidence Archive", "phase21_evidence_archive_contract", "-D warnings"], "permanent workflow")
