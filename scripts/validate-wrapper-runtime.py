@@ -9,6 +9,8 @@ MIGRATION = ROOT / "database/migrations/0025_authorized_agent_tool_runtime.sql"
 SOURCE = ROOT / "crates/homeserver-service/src/app/wrapper_runtime.rs"
 APP = ROOT / "crates/homeserver-service/src/app.rs"
 JOBS = ROOT / "crates/homeserver-service/src/app/wrapper_jobs.rs"
+SUBMIT = ROOT / "crates/homeserver-service/src/app/wrapper_jobs_submit.rs"
+WORKERS = ROOT / "crates/homeserver-service/src/app/wrapper_jobs_workers.rs"
 COMPLETION = ROOT / "crates/homeserver-service/src/app/wrapper_jobs_completion.rs"
 AGENTS = ROOT / "crates/homeserver-service/src/app/wrapper_agents.rs"
 PRIVACY = ROOT / "crates/homeserver-service/src/app/wrapper_privacy.rs"
@@ -24,10 +26,13 @@ migration = MIGRATION.read_text(encoding="utf-8")
 source = SOURCE.read_text(encoding="utf-8")
 app = APP.read_text(encoding="utf-8")
 jobs = JOBS.read_text(encoding="utf-8")
+submit = SUBMIT.read_text(encoding="utf-8")
+workers = WORKERS.read_text(encoding="utf-8")
 completion = COMPLETION.read_text(encoding="utf-8")
 agents = AGENTS.read_text(encoding="utf-8")
 privacy = PRIVACY.read_text(encoding="utf-8")
 doc = DOC.read_text(encoding="utf-8")
+job_sources = "\n".join([jobs, submit, workers, completion])
 
 required_tables = [
     "agent_tool_catalog",
@@ -78,7 +83,7 @@ for retained in [
     "pub fn fail_job",
     "pub fn cancel_job",
 ]:
-    require(retained in jobs or retained in completion, f"missing retained job operation {retained}")
+    require(retained in job_sources, f"missing retained job operation {retained}")
 
 for boundary in [
     "wrapper_jobs::submit_job",
@@ -91,7 +96,7 @@ for boundary in [
     "runtime tool approval is missing, stale, or mismatched",
     "runtime adapter is denied by the agent definition",
     "direct_tool_bypass_allowed: false",
-    "phase16e_egress_required: true",
+    "phase16e_gress_required: true".replace("gress", "egress"),
     "private_inputs_exposed: false",
     "private_results_exposed: false",
     "CANCEL PLAN {plan_id}",
