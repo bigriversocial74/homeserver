@@ -97,8 +97,15 @@ for boundary in [
     "wrapper_jobs::fail_job",
     "wrapper_jobs::cancel_job",
     "wrapper_agents::agent_job_authority_is_current_tx",
-    "runtime tool approval is missing, stale, or mismatched",
-    "runtime adapter is denied by the agent definition",
+    "runtime tools requiring proposals are not executable in Phase 17",
+    "Phase 17 runtime policies must be approval-free and low-risk",
+    "runtime policy execution limit reached",
+    "runtime plan step cannot execute before its predecessors",
+    "runtime job execution limit exceeds the tool catalog limit",
+    "step.job.approval_id.is_none() && step.job.plan_hash.is_none()",
+    "step.job.available_at_utc = if index == 0",
+    "UPDATE wrapper_jobs SET available_at_utc=?1",
+    "runtime_receipt_missing",
     "direct_tool_bypass_allowed: false",
     "phase16e_egress_required: true",
     "private_inputs_exposed: false",
@@ -112,8 +119,9 @@ for boundary in [
     "/v1/agent-runtime/policies/create",
     "SELECT adapter_key,risk_class,approval_requirement,state FROM agent_tool_catalog",
     "INSERT INTO agent_execution_policies",
-    "this runtime tool requires an approval-gated policy",
-    "agent autonomy level is below the runtime tool risk class",
+    "Phase 17 runtime policies must be approval-free and low-risk",
+    "proposal-gated tools are not executable in the Phase 17 runtime",
+    "approval-free runtime policy requires scoped autonomy",
     "policy_replaced",
     "reconcile_authority",
 ]:
@@ -134,8 +142,8 @@ require(
     "runtime cannot revalidate Phase 16D agent authority",
 )
 require(
-    "agent_action_approvals" in source,
-    "runtime does not enforce Phase 16D action approvals",
+    "agent_action_approvals" not in source,
+    "low-risk runtime incorrectly depends on the separate Phase 16D approval table",
 )
 require(
     "agent_emergency_stops" in agents,
@@ -160,7 +168,7 @@ for forbidden in [
     require(forbidden not in policy, f"unsafe runtime policy primitive present: {forbidden}")
 
 snapshot_start = source.index("fn snapshot(state")
-snapshot_end = source.index("fn reconcile", snapshot_start)
+snapshot_end = source.index("fn fail_interrupted_attempts", snapshot_start)
 snapshot = source[snapshot_start:snapshot_end]
 for private_table in [
     "wrapper_job_inputs",
@@ -169,6 +177,14 @@ for private_table in [
     "agent_action_private_results",
 ]:
     require(private_table not in snapshot, f"runtime snapshot reads private table {private_table}")
+
+reconcile_start = source.index("fn reconcile(connection")
+reconcile_end = source.index("fn refresh_plan_state", reconcile_start)
+reconcile_block = source[reconcile_start:reconcile_end]
+require("service_restarted" not in reconcile_block, "snapshot reconciliation can fail live attempts")
+require("WHEN j.state='waiting' THEN 'queued'" in reconcile_block, "waiting jobs are not mapped safely")
+require("WHEN j.state='dead_letter' THEN 'failed'" in reconcile_block, "dead-letter jobs are not mapped safely")
+require("fn fail_interrupted_attempts" in source, "startup interruption recovery is missing")
 
 conn = sqlite3.connect(":memory:")
 conn.execute("PRAGMA foreign_keys=ON")
@@ -250,17 +266,42 @@ conn.executescript(
       'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
       '2026-01-01T00:00:00.000Z'
     );
+    INSERT INTO agent_runtime_receipts (
+      receipt_id,plan_id,step_id,job_id,agent_id,wrapper_id,connection_id,
+      tool_key,adapter_key,outcome,result_code,runtime_receipt_hash,
+      completed_at_utc,created_at_utc
+    ) VALUES (
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      '66666666-6666-4666-8666-666666666666',
+      '88888888-8888-4888-8888-888888888888',
+      '55555555-5555-4555-8555-555555555555',
+      '44444444-4444-4444-8444-444444444444',
+      '11111111-1111-4111-8111-111111111111',
+      '22222222-2222-4222-8222-222222222222',
+      'audit.record','audit.record','failed','test_failure',
+      'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+      '2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z'
+    );
     """
 )
-try:
-    conn.execute(
+for statement, label in [
+    (
         "UPDATE agent_runtime_events SET detail_code='changed' "
-        "WHERE event_id='99999999-9999-4999-8999-999999999999'"
-    )
-except sqlite3.DatabaseError:
-    pass
-else:
-    raise SystemExit("Phase 17 validation failed: runtime event update was not blocked")
+        "WHERE event_id='99999999-9999-4999-8999-999999999999'",
+        "runtime event update",
+    ),
+    (
+        "UPDATE agent_runtime_receipts SET result_code='changed' "
+        "WHERE receipt_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'",
+        "runtime receipt update",
+    ),
+]:
+    try:
+        conn.execute(statement)
+    except sqlite3.DatabaseError:
+        pass
+    else:
+        raise SystemExit(f"Phase 17 validation failed: {label} was not blocked")
 
 for phrase in [
     "Initial current-state audit: **5.8/10**",
