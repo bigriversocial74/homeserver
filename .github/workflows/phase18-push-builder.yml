@@ -1,5 +1,6 @@
 name: Phase 18 Push Builder
 
+# Retriggered after Phase 17 merge baseline verification.
 on:
   push:
     branches: [feature/phase-18-supervised-action-orchestration]
