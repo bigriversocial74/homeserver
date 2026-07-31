@@ -21,6 +21,9 @@ require("crates/homeserver-service/src/agent_integrations.rs", [
     "https://mcp.microgifter.com/mcp",
     "PKCE verifier is unavailable",
     "agent_mcp_invocation_receipts",
+    "let connection = task_state.connection()?;\n            read_integrations(&connection)",
+    "crate::database::installation_id(&connection)?",
+    "Ok(integration_by_id(&connection, connection_id)?.summary)",
 ])
 require("crates/homeserver-service/src/agent_runtime.rs", [
     "Knowledge Vault search failed",
