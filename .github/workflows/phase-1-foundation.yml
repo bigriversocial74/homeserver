@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/phase-1-foundation.yml
       - scripts/phase21-hardening.py
+      - scripts/phase21-hardening-anchor-fix.py
       - database/migrations/0029_tamper_evident_evidence_archive.sql
       - crates/homeserver-service/src/evidence_archive.rs
       - crates/homeserver-service/tests/phase21_evidence_archive_contract.rs
@@ -39,6 +40,7 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Apply final Phase 21 trust hardening
         run: |
+          python scripts/phase21-hardening-anchor-fix.py
           python scripts/phase21-hardening.py
           cargo fmt --all
       - name: Install frontend dependencies
@@ -68,7 +70,7 @@ jobs:
       - name: Commit clean permanent Phase 21 hardening
         run: |
           git checkout origin/main -- .github/workflows/phase-1-foundation.yml
-          rm -f scripts/phase21-hardening.py
+          rm -f scripts/phase21-hardening.py scripts/phase21-hardening-anchor-fix.py
           find scripts -type d -name __pycache__ -prune -exec rm -rf {} +
           find scripts -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
           git config user.name github-actions[bot]
