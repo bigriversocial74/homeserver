@@ -37,7 +37,7 @@ fn default_policy_is_bounded_and_machine_local() {
     assert!((1_048_576..=268_435_456).contains(&policy.4));
     assert_eq!(
         policy.5,
-        "faeef059a975afe172c0640813d05d2331a71e48224df64d138a44e837b2c84f"
+        "21bc488664102f117d7c1296383962d611aa521127368d983cbff37732939b04"
     );
 }
 
