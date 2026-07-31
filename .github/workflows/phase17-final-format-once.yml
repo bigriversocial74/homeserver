@@ -1,0 +1,41 @@
+name: Phase 17 Final Format Once
+
+on:
+  push:
+    branches:
+      - feature/phase-17-authorized-agent-tool-runtime
+    paths:
+      - .github/workflows/phase17-final-format-once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: homeserver-phase17-final-format
+  cancel-in-progress: true
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-17-authorized-agent-tool-runtime
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+      - name: Apply canonical formatting
+        shell: bash
+        run: |
+          cargo fmt --all
+          git diff --check
+          if git diff --quiet; then
+            echo "No formatting changes required."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/homeserver-service/src/app/wrapper_runtime.rs crates/homeserver-service/src/app/wrapper_runtime_policy.rs crates/homeserver-service/tests/phase17_runtime_contract.rs
+          git commit -m "Apply final rustfmt to Phase 17 runtime"
+          git push origin HEAD:feature/phase-17-authorized-agent-tool-runtime
