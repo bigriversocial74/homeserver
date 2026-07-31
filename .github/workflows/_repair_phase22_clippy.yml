@@ -38,12 +38,10 @@ jobs:
 
           source = Path("crates/homeserver-service/src/agent_integrations.rs")
           value = source.read_text(encoding="utf-8")
-          old = '''            .map(str::trim)
-                      .filter(|line| !line.is_empty())
+          old = '''            .filter(|line| !line.is_empty())
                       .next_back()
           '''
-          new = '''            .map(str::trim)
-                      .rfind(|line| !line.is_empty())
+          new = '''            .rfind(|line| !line.is_empty())
           '''
           if value.count(old) != 1:
               raise SystemExit("SSE rfind repair target was not found exactly once")
