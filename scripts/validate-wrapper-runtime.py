@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "database/migrations/0025_authorized_agent_tool_runtime.sql"
 SOURCE = ROOT / "crates/homeserver-service/src/app/wrapper_runtime.rs"
+POLICY = ROOT / "crates/homeserver-service/src/app/wrapper_runtime_policy.rs"
 APP = ROOT / "crates/homeserver-service/src/app.rs"
 JOBS = ROOT / "crates/homeserver-service/src/app/wrapper_jobs.rs"
 SUBMIT = ROOT / "crates/homeserver-service/src/app/wrapper_jobs_submit.rs"
@@ -24,6 +25,7 @@ def require(condition: bool, message: str) -> None:
 
 migration = MIGRATION.read_text(encoding="utf-8")
 source = SOURCE.read_text(encoding="utf-8")
+policy = POLICY.read_text(encoding="utf-8")
 app = APP.read_text(encoding="utf-8")
 jobs = JOBS.read_text(encoding="utf-8")
 submit = SUBMIT.read_text(encoding="utf-8")
@@ -68,9 +70,11 @@ for tool in [
 
 for integration in [
     '#[path = "app/wrapper_runtime.rs"]',
+    '#[path = "app/wrapper_runtime_policy.rs"]',
     "wrapper_runtime::initialize(&connection)?;",
     "wrapper_runtime::run(state.clone(), shutdown.clone())",
     ".merge(wrapper_runtime::router(state.clone()))",
+    ".merge(wrapper_runtime_policy::router(state.clone()))",
     "wrapper_runtime::maintain_history(&connection)",
 ]:
     require(integration in app, f"missing service integration {integration}")
@@ -96,13 +100,30 @@ for boundary in [
     "runtime tool approval is missing, stale, or mismatched",
     "runtime adapter is denied by the agent definition",
     "direct_tool_bypass_allowed: false",
-    "phase16e_gress_required: true".replace("gress", "egress"),
+    "phase16e_egress_required: true",
     "private_inputs_exposed: false",
     "private_results_exposed: false",
     "CANCEL PLAN {plan_id}",
     "runtime_receipt_hash",
 ]:
     require(boundary in source, f"missing runtime boundary {boundary}")
+
+for boundary in [
+    "/v1/agent-runtime/policies/create",
+    "SELECT adapter_key,risk_class,approval_requirement,state FROM agent_tool_catalog",
+    "INSERT INTO agent_execution_policies",
+    "this runtime tool requires an approval-gated policy",
+    "agent autonomy level is below the runtime tool risk class",
+    "policy_replaced",
+    "reconcile_authority",
+]:
+    require(boundary in policy, f"missing runtime policy boundary {boundary}")
+
+request_start = policy.index("pub struct CreateRuntimePolicyRequest")
+request_end = policy.index("pub struct RuntimePolicyResponse", request_start)
+request_contract = policy[request_start:request_end]
+require("tool_adapter" not in request_contract, "caller can supply a runtime adapter")
+require("risk_class" not in request_contract, "caller can supply a runtime risk class")
 
 require(
     "wrapper_privacy::evaluate_egress_tx" in completion,
@@ -136,6 +157,7 @@ for forbidden in [
     "tokio::process::Command",
 ]:
     require(forbidden not in source, f"unsafe runtime primitive present: {forbidden}")
+    require(forbidden not in policy, f"unsafe runtime policy primitive present: {forbidden}")
 
 snapshot_start = source.index("fn snapshot(state")
 snapshot_end = source.index("fn reconcile", snapshot_start)
