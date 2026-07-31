@@ -34,6 +34,13 @@ if start < 0 or end < 0:
 openrouter_path.write_text(openrouter[:start] + openrouter[end:], encoding="utf-8")
 
 replace_once(
+    "scripts/validate-openrouter-provider.py",
+    '    "generate_agent_response",\n]:',
+    '    "generate_governed_response",\n]:',
+    "retained OpenRouter provider symbol",
+)
+
+replace_once(
     "crates/homeserver-service/src/backup_key.rs",
     "use sha2::{Digest, Sha256};",
     "#[cfg(any(windows, test))]\nuse sha2::{Digest, Sha256};",
@@ -67,4 +74,4 @@ scripts.pop("postinstall", None)
 package_path.write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
 
 subprocess.run(["cargo", "fmt", "--all"], cwd=ROOT, check=True)
-print("Phase 20 strict lint cleanup applied and temporary postinstall hook removed.")
+print("Phase 20 strict lint cleanup and retained OpenRouter validation applied; temporary postinstall hook removed.")
