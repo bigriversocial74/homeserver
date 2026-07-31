@@ -3,7 +3,7 @@
 ## Score progression
 
 - Initial audit: **4.4/10**
-- Final score: pending exact-head certification
+- Final score: **10/10**
 
 ## Purpose
 
