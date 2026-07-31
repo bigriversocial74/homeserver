@@ -19,7 +19,11 @@ pub fn poll_deliveries(
         .query_map(params![connection_id, now, limit], delivery_from_row)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let transaction = connection.unchecked_transaction()?;
-    for delivery in &deliveries {
+    let mut ready = Vec::new();
+    for delivery in deliveries {
+        if !wrapper_privacy::delivery_egress_is_current_tx(&transaction, &delivery.job_id)? {
+            continue;
+        }
         let delay_seconds = (15_i64 * 2_i64.pow(delivery.attempt_count.min(8))).min(3_600);
         let next_attempt = (Utc::now() + Duration::seconds(delay_seconds))
             .to_rfc3339_opts(SecondsFormat::Millis, true);
@@ -27,9 +31,10 @@ pub fn poll_deliveries(
             "UPDATE wrapper_job_deliveries SET state='in_flight',attempt_count=attempt_count+1,last_attempt_at_utc=?1,next_attempt_at_utc=?2,updated_at_utc=?1 WHERE delivery_id=?3 AND connection_id=?4 AND state IN ('pending','in_flight')",
             params![now, next_attempt, delivery.delivery_id, connection_id],
         )?;
+        ready.push(delivery);
     }
     transaction.commit()?;
-    deliveries
+    ready
         .into_iter()
         .map(|delivery| {
             let updated = read_delivery(connection, &delivery.delivery_id)?;

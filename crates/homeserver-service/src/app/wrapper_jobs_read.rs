@@ -67,7 +67,11 @@ fn job_record_by_id_tx(transaction: &Transaction<'_>, job_id: &str) -> Result<Jo
 }
 
 fn job_summary(connection: &Connection, job: JobRecord) -> Result<JobSummary> {
-    let safe_result = read_safe_result(connection, &job.job_id)?;
+    let safe_result = if wrapper_privacy::safe_result_is_visible(connection, &job.job_id)? {
+        read_safe_result(connection, &job.job_id)?
+    } else {
+        None
+    };
     let receipt = read_receipt(connection, &job.job_id)?;
     Ok(JobSummary {
         job_id: job.job_id,

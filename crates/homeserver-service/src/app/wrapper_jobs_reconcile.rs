@@ -56,7 +56,8 @@ fn authority_is_current_tx(transaction: &Transaction<'_>, job: &JobRecord) -> Re
         && grant_revision.max(0) as u64 == job.grant_revision
         && parse_utc(&grant_expires, "grant expiration")? > Utc::now();
     Ok(base_current
-        && wrapper_agents::agent_job_authority_is_current_tx(transaction, &job.job_id)?)
+        && wrapper_agents::agent_job_authority_is_current_tx(transaction, &job.job_id)?
+        && wrapper_privacy::job_privacy_authority_is_current_tx(transaction, &job.job_id, &job.capability_key)?)
 }
 
 fn cancel_for_authority_tx(

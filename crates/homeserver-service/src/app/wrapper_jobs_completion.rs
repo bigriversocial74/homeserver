@@ -6,104 +6,98 @@ pub fn complete_job(
     let worker_id = validate_uuid(&request.worker_id, "worker ID")?;
     let job_id = validate_uuid(&request.job_id, "job ID")?;
     let lease_token = bounded_text(&request.lease_token, 32, 128, "lease token")?;
-    let result_code = validate_symbol(&request.result_code, 120, "result code")?;
+    let requested_result_code = validate_symbol(&request.result_code, 120, "result code")?;
     let private_result_text = json_text(&request.private_result)?;
-    ensure!(
-        (2..=MAX_PRIVATE_RESULT_BYTES).contains(&private_result_text.len()),
-        "private job result exceeds the HomeServer limit"
-    );
+    ensure!((2..=MAX_PRIVATE_RESULT_BYTES).contains(&private_result_text.len()), "private job result exceeds the HomeServer limit");
     let private_provenance_text = json_text(&request.private_provenance)?;
-    ensure!(
-        private_provenance_text.len() <= MAX_PRIVATE_RESULT_BYTES,
-        "private provenance exceeds the HomeServer limit"
-    );
+    ensure!(private_provenance_text.len() <= MAX_PRIVATE_RESULT_BYTES, "private provenance exceeds the HomeServer limit");
     let transaction = connection.unchecked_transaction()?;
-    let job = validate_worker_lease_tx(
-        &transaction,
-        &worker_id,
-        &job_id,
-        &lease_token,
-        &["running"],
-    )?;
+    let job = validate_worker_lease_tx(&transaction, &worker_id, &job_id, &lease_token, &["running"])?;
     ensure!(authority_is_current_tx(&transaction, &job)?, "job authority changed");
-    let safe_result = project_safe_result(&job, &request.private_result)?;
-    let safe_result_text = json_text(&safe_result)?;
-    ensure!(
-        safe_result_text.len() <= job.max_result_bytes as usize,
-        "safe job result exceeds the captured grant limit"
-    );
-    let provenance_summary = safe_provenance_summary(
-        request.source_count,
-        &request.source_types,
-        request.evidence_hash.as_deref(),
-    )?;
-    let provenance_summary_text = json_text(&provenance_summary)?;
+    let initial_safe_result = project_safe_result(&job, &request.private_result)?;
     let private_result_hash = hash_text(&private_result_text);
-    let safe_result_hash = hash_text(&safe_result_text);
-    let provenance_summary_hash = hash_text(&provenance_summary_text);
-    enforce_completion_usage_tx(
+    let egress = wrapper_privacy::evaluate_egress_tx(
         &transaction,
-        &job.grant_id,
-        safe_result_text.len() as u64,
-        request.actual_token_count.unwrap_or(0),
+        wrapper_privacy::EgressContext {
+  job_id: &job.job_id,
+  wrapper_id: &job.wrapper_id,
+  connection_id: &job.connection_id,
+  grant_id: &job.grant_id,
+  grant_revision: job.grant_revision,
+  connection_authority_revision: job.connection_authority_revision,
+  capability_key: &job.capability_key,
+        },
+        &request.private_result,
+        &initial_safe_result,
+        &private_result_hash,
+        request.source_count,
     )?;
+    let provenance_summary = safe_provenance_summary(request.source_count, &request.source_types, request.evidence_hash.as_deref())?;
+    let provenance_summary_text = json_text(&provenance_summary)?;
+    let provenance_summary_hash = hash_text(&provenance_summary_text);
+    let safe_result_text = egress.safe_result.as_ref().map(json_text).transpose()?;
+    if let Some(text) = safe_result_text.as_deref() {
+        ensure!(text.len() <= job.max_result_bytes as usize, "safe job result exceeds the captured grant limit");
+    }
+    enforce_completion_usage_tx(&transaction, &job.grant_id, safe_result_text.as_ref().map_or(0, String::len) as u64, request.actual_token_count.unwrap_or(0))?;
     let now = now_utc();
     transaction.execute(
         "INSERT INTO wrapper_job_private_results (job_id,private_result_json,private_provenance_json,private_result_hash,created_at_utc) VALUES (?1,?2,?3,?4,?5)",
         params![job_id, private_result_text, private_provenance_text, private_result_hash, now],
     )?;
+    let safe_result_hash = if let (Some(value), Some(text)) = (egress.safe_result.as_ref(), safe_result_text.as_ref()) {
+        let hash = egress.output_hash.clone().unwrap_or(hash_json(value)?);
+        transaction.execute(
+  "INSERT INTO wrapper_job_safe_results (job_id,result_policy,safe_result_json,safe_result_hash,provenance_summary_json,provenance_summary_hash,filter_version,result_bytes,created_at_utc) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+  params![job_id, job.result_policy, text, hash, provenance_summary_text, provenance_summary_hash, egress.filter_version, text.len() as i64, now],
+        )?;
+        Some(hash)
+    } else { None };
+    let (terminal_state, outcome, result_code) = match egress.state.as_str() {
+        "denied" => ("failed", "error", egress.detail_code.clone()),
+        "pending_review" => ("completed", "warning", "privacy_review_pending".to_owned()),
+        _ => ("completed", "success", requested_result_code),
+    };
     transaction.execute(
-        "INSERT INTO wrapper_job_safe_results (job_id,result_policy,safe_result_json,safe_result_hash,provenance_summary_json,provenance_summary_hash,filter_version,result_bytes,created_at_utc) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-        params![
-            job_id,
-            job.result_policy,
-            safe_result_text,
-            safe_result_hash,
-            provenance_summary_text,
-            provenance_summary_hash,
-            FILTER_VERSION,
-            safe_result_text.len() as i64,
-            now
-        ],
-    )?;
-    transaction.execute(
-        "UPDATE wrapper_jobs SET state='completed',completed_at_utc=?1,lease_owner_id=NULL,lease_token_hash=NULL,lease_expires_at_utc=NULL,failure_code=NULL,updated_at_utc=?1 WHERE job_id=?2 AND state='running'",
-        params![now, job_id],
+        "UPDATE wrapper_jobs SET state=?1,completed_at_utc=?2,lease_owner_id=NULL,lease_token_hash=NULL,lease_expires_at_utc=NULL,failure_code=CASE WHEN ?1='failed' THEN ?3 ELSE NULL END,updated_at_utc=?2 WHERE job_id=?4 AND state='running'",
+        params![terminal_state, now, result_code, job_id],
     )?;
     let completed = job_record_by_id_tx(&transaction, &job_id)?;
     record_job_event(
         &transaction,
         &completed,
         JobEventEvidence {
-            event_type: "wrapper.job.completed",
-            previous_state: Some("running"),
-            current_state: "completed",
-            outcome: "success",
-            detail_code: &result_code,
-            actor_type: "worker",
-            actor_id: &worker_id,
-            visibility: "wrapper",
-            metadata: json!({
-                "safe_result_hash": safe_result_hash,
-                "provenance_summary_hash": provenance_summary_hash,
-                "filter_version": FILTER_VERSION,
-                "private_result_exposed": false
-            }),
+  event_type: "wrapper.job.privacy_completed",
+  previous_state: Some("running"),
+  current_state: terminal_state,
+  outcome,
+  detail_code: &result_code,
+  actor_type: "worker",
+  actor_id: &worker_id,
+  visibility: "wrapper",
+  metadata: json!({
+      "egress_decision_id": egress.decision_id,
+      "egress_state": egress.state,
+      "safe_result_hash": safe_result_hash,
+      "provenance_summary_hash": provenance_summary_hash,
+      "filter_version": egress.filter_version,
+      "approval_required": egress.approval_required,
+      "private_result_exposed": false,
+      "source_identifiers_included": false,
+      "private_source_content_included": false
+  }),
         },
     )?;
     create_terminal_receipt_tx(
         &transaction,
         &completed,
-        "completed",
+        terminal_state,
         &result_code,
-        Some(&safe_result_hash),
+        safe_result_hash.as_deref(),
         Some(&provenance_summary_hash),
         Some(&worker_id),
     )?;
-    transaction.execute(
-        "UPDATE wrapper_job_workers SET last_seen_at_utc=?1,updated_at_utc=?1 WHERE worker_id=?2",
-        params![now, worker_id],
-    )?;
+    transaction.execute("UPDATE wrapper_job_workers SET last_seen_at_utc=?1,updated_at_utc=?1 WHERE worker_id=?2", params![now, worker_id])?;
     transaction.commit()?;
     read_receipt(connection, &job_id)?.context("job completion receipt was not created")
 }

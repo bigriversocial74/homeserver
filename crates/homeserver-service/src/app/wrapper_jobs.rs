@@ -1,5 +1,6 @@
 use super::wrapper_agents;
 use super::wrapper_grants::{self, AuthorizeRequest};
+use super::wrapper_privacy;
 use crate::AppState;
 use anyhow::{bail, ensure, Context, Result};
 use axum::{
@@ -234,6 +235,10 @@ pub struct SubmitJobRequest {
     pub job_type: String,
     pub idempotency_key: String,
     pub private_input: Value,
+    pub private_selector_id: Option<String>,
+    pub purpose: Option<String>,
+    pub output_schema: Option<String>,
+    pub remote_model_provider: Option<String>,
     pub scope_kind: Option<String>,
     pub scope_value: Option<String>,
     pub estimated_result_bytes: Option<u64>,
