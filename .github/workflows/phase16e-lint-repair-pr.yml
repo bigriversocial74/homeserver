@@ -16,7 +16,7 @@ jobs:
   repair:
     if: github.event.pull_request.head.ref == 'feature/phase-16e-private-knowledge-egress'
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -32,6 +32,7 @@ jobs:
           python scripts/phase16e-typed-lint-repair.py
           cargo fmt --all
           python scripts/validate-wrapper-privacy.py
+          cargo test -p microgifter-homeserver-service
           cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings
       - name: Commit clean typed repair
         shell: bash
