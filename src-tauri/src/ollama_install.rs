@@ -1,4 +1,5 @@
 use serde::Serialize;
+#[cfg(windows)]
 use std::process::Command;
 
 const OLLAMA_WINDOWS_PAGE: &str = "https://ollama.com/download/windows";

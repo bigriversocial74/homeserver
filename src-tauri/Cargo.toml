@@ -20,8 +20,11 @@ reqwest.workspace = true
 rfd.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-autostart = "2"
 tokio.workspace = true
 tokio-util.workspace = true
+uuid.workspace = true
 zeroize.workspace = true

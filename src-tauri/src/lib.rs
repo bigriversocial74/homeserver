@@ -20,6 +20,7 @@ use microgifter_homeserver_core::{
 };
 use rfd::AsyncFileDialog;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 #[cfg(desktop)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -34,6 +35,7 @@ use tokio_util::io::ReaderStream;
 use zeroize::Zeroizing;
 
 const MAX_RECOVERY_PACKAGE_BYTES: u64 = 320 * 1024 * 1024;
+const MAX_EVIDENCE_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_LOCAL_JSON_BYTES: usize = 2 * 1024 * 1024;
 const PASSPHRASE_HEADER: &str = "x-mg-recovery-passphrase";
 
@@ -201,6 +203,25 @@ fn validate_passphrase(passphrase: &str) -> Result<(), String> {
         return Err("Recovery passphrase must contain between 12 and 256 characters.".to_owned());
     }
     Ok(())
+}
+
+fn safe_evidence_archive_file_name(value: &str) -> String {
+    let name: String = value
+        .chars()
+        .take(200)
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || ".-_".contains(character) {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if name.ends_with(".mgha") && name.len() > ".mgha".len() {
+        name
+    } else {
+        "Microgifter-HomeServer-Evidence.mgha".to_owned()
+    }
 }
 
 fn safe_file_name(value: &str) -> String {
@@ -389,6 +410,110 @@ async fn homeserver_export_recovery_package(
     Ok(Some(destination_path.to_string_lossy().into_owned()))
 }
 
+#[tauri::command]
+async fn homeserver_export_evidence_archive(
+    archive_id: String,
+    suggested_file_name: String,
+    package_sha256: String,
+) -> Result<Option<serde_json::Value>, String> {
+    let file_name = safe_evidence_archive_file_name(&suggested_file_name);
+    if package_sha256.len() != 64 || !package_sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("Evidence archive package hash is invalid.".to_owned());
+    }
+    let expected_package_sha256 = package_sha256.to_ascii_lowercase();
+    let Some(destination) = AsyncFileDialog::new()
+        .add_filter("Microgifter evidence archive", &["mgha"])
+        .set_file_name(&file_name)
+        .save_file()
+        .await
+    else {
+        return Ok(None);
+    };
+
+    let response = client()?
+        .get(format!(
+            "{}/v1/evidence-archives/{}/package",
+            api_base_url(),
+            archive_id
+        ))
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        return decode_json::<serde_json::Value>(response)
+            .await
+            .map(|_| None);
+    }
+    if response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        != Some("application/vnd.microgifter.homeserver-evidence-archive")
+    {
+        return Err("HomeServer returned an unexpected evidence archive content type.".to_owned());
+    }
+
+    let destination_path = destination.path().to_path_buf();
+    let mut output = tokio::fs::File::create(&destination_path)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut stream = response.bytes_stream();
+    let mut total_bytes = 0_u64;
+    let mut package_hasher = Sha256::new();
+    let transfer_result = async {
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|error| error.to_string())?;
+            total_bytes = total_bytes
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| "Evidence archive export size overflow.".to_owned())?;
+            if total_bytes > MAX_EVIDENCE_ARCHIVE_BYTES {
+                return Err("Evidence archive export exceeds the package size limit.".to_owned());
+            }
+            package_hasher.update(&chunk);
+            output
+                .write_all(&chunk)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        if total_bytes <= 12 {
+            return Err("Evidence archive export was empty or truncated.".to_owned());
+        }
+        output.sync_all().await.map_err(|error| error.to_string())?;
+        Ok::<(), String>(())
+    }
+    .await;
+    if let Err(error) = transfer_result {
+        drop(output);
+        let _ = tokio::fs::remove_file(&destination_path).await;
+        return Err(error);
+    }
+    drop(output);
+    let downloaded_package_sha256 = hex::encode(package_hasher.finalize());
+    if downloaded_package_sha256 != expected_package_sha256 {
+        let _ = tokio::fs::remove_file(&destination_path).await;
+        return Err(
+            "Evidence archive export hash verification failed; the incomplete file was removed."
+                .to_owned(),
+        );
+    }
+
+    let receipt: serde_json::Value = post_json(
+        "/v1/evidence-archives/exports",
+        &serde_json::json!({
+            "archive_id": archive_id,
+            "package_sha256": expected_package_sha256,
+            "destination_file_name": file_name,
+            "actor_user_id": "local_control_center",
+            "confirmation": format!("EXPORT EVIDENCE ARCHIVE {}", archive_id)
+        }),
+    )
+    .await?;
+    Ok(Some(serde_json::json!({
+        "path": destination_path.to_string_lossy(),
+        "receipt": receipt
+    })))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -515,6 +640,10 @@ pub fn run() {
             runtime::homeserver_create_model_policy,
             runtime::homeserver_revoke_model_policy,
             runtime::homeserver_cancel_model_inference,
+            runtime::homeserver_evidence_archives,
+            runtime::homeserver_update_evidence_archive_policy,
+            runtime::homeserver_create_evidence_archive,
+            runtime::homeserver_verify_evidence_archive,
             cloud::homeserver_cloud_status,
             cloud::homeserver_pair_cloud,
             cloud::homeserver_disconnect_cloud,
@@ -552,6 +681,7 @@ pub fn run() {
             homeserver_apply_update,
             homeserver_import_recovery_package,
             homeserver_export_recovery_package,
+            homeserver_export_evidence_archive,
             vault::homeserver_vault,
             vault::homeserver_import_vault_document,
             vault::homeserver_search_vault,
