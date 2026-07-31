@@ -2,10 +2,28 @@ name: Phase 16E Private Knowledge and Egress
 
 on:
   pull_request:
+    paths:
+      - .github/workflows/phase16e-private-knowledge.yml
+      - database/migrations/0024_private_knowledge_boundary.sql
+      - docs/phase-16e-private-knowledge-egress.md
+      - scripts/validate-wrapper-privacy.py
+      - crates/homeserver-service/src/app.rs
+      - crates/homeserver-service/src/app/wrapper_privacy.rs
+      - crates/homeserver-service/src/app/wrapper_jobs.rs
+      - crates/homeserver-service/src/app/wrapper_jobs_*.rs
   push:
     branches:
       - feature/phase-16e-private-knowledge-egress
       - main
+    paths:
+      - .github/workflows/phase16e-private-knowledge.yml
+      - database/migrations/0024_private_knowledge_boundary.sql
+      - docs/phase-16e-private-knowledge-egress.md
+      - scripts/validate-wrapper-privacy.py
+      - crates/homeserver-service/src/app.rs
+      - crates/homeserver-service/src/app/wrapper_privacy.rs
+      - crates/homeserver-service/src/app/wrapper_jobs.rs
+      - crates/homeserver-service/src/app/wrapper_jobs_*.rs
 
 permissions:
   contents: read
