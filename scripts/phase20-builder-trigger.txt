@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import json
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -42,18 +43,20 @@ replace_once(
 # Convert SQLite mapped-row iterators into owned vectors before statements drop.
 path = ROOT / "crates/homeserver-service/src/inference_governance.rs"
 text = path.read_text(encoding="utf-8")
-old = """        statement
-            .query_map([], |row| row.get::<_,String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };"""
+pattern = re.compile(
+    r"        statement\n"
+    r"            \.query_map\(\[\], \|row\| row\.get::<_,\s*String>\(0\)\)\?\n"
+    r"            \.collect::<rusqlite::Result<Vec<_>>>\(\)\?\n"
+    r"    };"
+)
 new = """        let rows = statement
-            .query_map([], |row| row.get::<_,String>(0))?
+            .query_map([], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows
     };"""
-if text.count(old) != 2:
-    raise SystemExit(f"Expected two owned request-list anchors, found {text.count(old)}")
-text = text.replace(old, new, 2)
+text, count = pattern.subn(new, text)
+if count != 2:
+    raise SystemExit(f"Expected two owned request-list anchors, found {count}")
 
 
 def own_query_rows(source: str, function_name: str, next_function_name: str) -> str:
