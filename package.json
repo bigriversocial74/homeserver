@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "preinstall": "python scripts/phase20-builder-trigger.txt",
+    "postinstall": "python scripts/phase20-open-pr-now.txt",
     "dev": "vite",
     "build": "vite build",
     "prepare:icons": "node scripts/prepare-icons.mjs",
