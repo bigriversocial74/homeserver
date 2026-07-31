@@ -24,22 +24,40 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           components: rustfmt
-      - name: Repair native runtime source once
+      - name: Repair and harden Phase 17 runtime
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
-          path = Path("crates/homeserver-service/src/app/wrapper_runtime.rs")
-          text = path.read_text(encoding="utf-8")
+          runtime_path = Path("crates/homeserver-service/src/app/wrapper_runtime.rs")
+          policy_path = Path("crates/homeserver-service/src/app/wrapper_runtime_policy.rs")
+          validator_path = Path("scripts/validate-wrapper-runtime.py")
+          docs_path = Path("docs/phase-17-authorized-agent-tool-runtime.md")
 
+          runtime = runtime_path.read_text(encoding="utf-8")
+          policy = policy_path.read_text(encoding="utf-8")
+          validator = validator_path.read_text(encoding="utf-8")
+          docs = docs_path.read_text(encoding="utf-8")
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              if old in text:
+                  if text.count(old) != 1:
+                      raise SystemExit(f"{label}: expected one old occurrence")
+                  return text.replace(old, new, 1)
+              if new in text:
+                  return text
+              raise SystemExit(f"{label}: source shape not recognized")
+
+          # Own rusqlite query results before statements are dropped.
           for name in ("read_tools", "read_plans", "read_steps", "read_receipts"):
               marker = f"fn {name}("
-              start = text.index(marker)
-              next_start = text.find("\nfn ", start + len(marker))
+              start = runtime.index(marker)
+              next_start = runtime.find("\nfn ", start + len(marker))
               if next_start < 0:
-                  next_start = len(text)
-              block = text[start:next_start]
+                  next_start = len(runtime)
+              block = runtime[start:next_start]
               old_first = "    statement\n        .query_map"
               new_first = "    let values = statement\n        .query_map"
               old_suffix = "        .collect::<rusqlite::Result<Vec<_>>>()\n        .map_err(Into::into)"
@@ -47,27 +65,89 @@ jobs:
               if old_first in block:
                   if block.count(old_first) != 1 or block.count(old_suffix) != 1:
                       raise SystemExit(f"unexpected query shape in {name}")
-                  block = block.replace(old_first, new_first, 1)
-                  block = block.replace(old_suffix, new_suffix, 1)
-                  text = text[:start] + block + text[next_start:]
+                  block = block.replace(old_first, new_first, 1).replace(old_suffix, new_suffix, 1)
+                  runtime = runtime[:start] + block + runtime[next_start:]
               elif new_first not in block or new_suffix not in block:
                   raise SystemExit(f"unrecognized repaired query shape in {name}")
 
-          old = "        step.job.causation_id = previous_job_id.clone();\n        step.job.expires_minutes = step.job.expires_minutes.min(request.expires_minutes);"
-          new = "        step.job.causation_id = previous_job_id.clone();\n        step.job.priority = Some(5);\n        step.job.expires_minutes = step.job.expires_minutes.min(request.expires_minutes);"
-          if old in text:
-              text = text.replace(old, new, 1)
-          elif new not in text:
-              raise SystemExit("unrecognized runtime plan priority shape")
+          runtime = replace_once(
+              runtime,
+              "use std::{collections::BTreeSet, sync::Arc, time::Duration as StdDuration};",
+              "use std::{sync::Arc, time::Duration as StdDuration};",
+              "test-only BTreeSet import",
+          )
+          runtime = replace_once(
+              runtime,
+              "mod tests {\n    use super::*;",
+              "mod tests {\n    use super::*;\n    use std::collections::BTreeSet;",
+              "test module import",
+          )
 
-          old = '''    ensure!(
+          # Mark interrupted attempts only during service startup, never from a snapshot or retention pass.
+          runtime = replace_once(
+              runtime,
+              "    connection.execute_batch(MIGRATION)?;\n    reconcile(connection)?;",
+              "    connection.execute_batch(MIGRATION)?;\n    fail_interrupted_attempts(connection)?;\n    reconcile(connection)?;",
+              "startup interruption handling",
+          )
+
+          old_reconcile_prefix = '''fn reconcile(connection: &Connection) -> Result<()> {
+              let now = now_utc();
+              connection.execute(
+                  "UPDATE agent_runtime_attempts SET state='failed',result_code='service_restarted',completed_at_utc=?1 WHERE state='running'",
+                  params![now],
+              )?;
+              connection.execute(
+                  "UPDATE agent_runtime_plan_steps SET state=(SELECT j.state FROM wrapper_jobs j WHERE j.job_id=agent_runtime_plan_steps.job_id),failure_code=COALESCE(failure_code,(SELECT j.failure_code FROM wrapper_jobs j WHERE j.job_id=agent_runtime_plan_steps.job_id)),completed_at_utc=COALESCE(completed_at_utc,(SELECT j.completed_at_utc FROM wrapper_jobs j WHERE j.job_id=agent_runtime_plan_steps.job_id)),updated_at_utc=?1 WHERE state IN ('queued','leased','running')",
+                  params![now],
+              )?;'''
+          new_reconcile_prefix = '''fn fail_interrupted_attempts(connection: &Connection) -> Result<()> {
+              connection.execute(
+                  "UPDATE agent_runtime_attempts SET state='failed',result_code='service_restarted',completed_at_utc=?1 WHERE state='running'",
+                  params![now_utc()],
+              )?;
+              Ok(())
+          }
+
+          fn reconcile(connection: &Connection) -> Result<()> {
+              let now = now_utc();
+              connection.execute(
+                  "UPDATE agent_runtime_plan_steps SET state=(SELECT CASE WHEN j.state='waiting' THEN 'queued' WHEN j.state='dead_letter' THEN 'failed' WHEN j.state='completed' AND NOT EXISTS (SELECT 1 FROM agent_runtime_receipts r WHERE r.step_id=agent_runtime_plan_steps.step_id) THEN 'failed' ELSE j.state END FROM wrapper_jobs j WHERE j.job_id=agent_runtime_plan_steps.job_id),failure_code=COALESCE(failure_code,(SELECT CASE WHEN j.state='completed' AND NOT EXISTS (SELECT 1 FROM agent_runtime_receipts r WHERE r.step_id=agent_runtime_plan_steps.step_id) THEN 'runtime_receipt_missing' WHEN j.state='dead_letter' THEN COALESCE(j.failure_code,'dead_letter') ELSE j.failure_code END FROM wrapper_jobs j WHERE j.job_id=agent_runtime_plan_steps.job_id)),completed_at_utc=COALESCE(completed_at_utc,(SELECT j.completed_at_utc FROM wrapper_jobs j WHERE j.job_id=agent_runtime_plan_steps.job_id)),updated_at_utc=?1 WHERE state IN ('queued','leased','running')",
+                  params![now],
+              )?;'''
+          runtime = replace_once(runtime, old_reconcile_prefix, new_reconcile_prefix, "safe runtime reconciliation")
+
+          # Runtime plans are low-risk, non-approval jobs. Later steps remain unavailable until unlocked.
+          old_plan_binding = '''        step.job.submitted_by_type = "agent".to_owned();
+                  step.job.submitted_by_id = agent_id.clone();
+                  step.job.correlation_id = Some(correlation_id.clone());
+                  step.job.causation_id = previous_job_id.clone();
+                  step.job.expires_minutes = step.job.expires_minutes.min(request.expires_minutes);'''
+          new_plan_binding = '''        ensure!(
+                      step.job.approval_id.is_none() && step.job.plan_hash.is_none(),
+                      "approval-gated runtime jobs are not supported by the low-risk Phase 17 runtime"
+                  );
+                  step.job.submitted_by_type = "agent".to_owned();
+                  step.job.submitted_by_id = agent_id.clone();
+                  step.job.correlation_id = Some(correlation_id.clone());
+                  step.job.causation_id = previous_job_id.clone();
+                  step.job.priority = Some(5);
+                  step.job.available_at_utc = if index == 0 {
+                      None
+                  } else {
+                      Some(expires_at.clone())
+                  };
+                  step.job.expires_minutes = step.job.expires_minutes.min(request.expires_minutes);'''
+          runtime = replace_once(runtime, old_plan_binding, new_plan_binding, "ordered runtime job binding")
+
+          old_allowed = '''    ensure!(
               tool.allowed_job_types
                   .iter()
                   .any(|value| value == &job.job_type),
               "runtime tool does not allow this job type"
           );
           enforce_tool_restrictions(&row.9, &tool.adapter_key)?;'''
-          new = '''    ensure!(
+          new_allowed = '''    ensure!(
               tool.allowed_job_types
                   .iter()
                   .any(|value| value == &job.job_type),
@@ -77,36 +157,219 @@ jobs:
               job.max_execution_seconds <= tool.max_execution_seconds,
               "runtime job execution limit exceeds the tool catalog limit"
           );
+          let incomplete_predecessors: i64 = transaction.query_row(
+              "SELECT COUNT(*) FROM agent_runtime_plan_steps WHERE plan_id=?1 AND sequence_number<?2 AND state<>'completed'",
+              params![row.0, row.6],
+              |result| result.get(0),
+          )?;
+          ensure!(
+              incomplete_predecessors == 0,
+              "runtime plan step cannot execute before its predecessors"
+          );
           enforce_tool_restrictions(&row.9, &tool.adapter_key)?;'''
-          if old in text:
-              text = text.replace(old, new, 1)
-          elif new not in text:
-              raise SystemExit("unrecognized runtime execution-limit shape")
+          runtime = replace_once(runtime, old_allowed, new_allowed, "tool limits and predecessor gate")
 
-          old = "use std::{collections::BTreeSet, sync::Arc, time::Duration as StdDuration};"
-          new = "use std::{sync::Arc, time::Duration as StdDuration};"
-          if old in text:
-              text = text.replace(old, new, 1)
-          elif new not in text:
-              raise SystemExit("unrecognized BTreeSet import shape")
+          old_call = '''    enforce_autonomy_and_approval(
+              &transaction,
+              job,
+              &row.2,
+              &row.10,
+              &row.11,
+              &row.12,
+              &tool.approval_requirement,
+          )?;'''
+          new_call = '''    enforce_autonomy_and_approval(
+              &transaction,
+              &row.2,
+              &row.11,
+              &row.12,
+              &tool.approval_requirement,
+          )?;
+          enforce_policy_execution_limit(&transaction, &row.2, &row.8, &row.10)?;'''
+          runtime = replace_once(runtime, old_call, new_call, "low-risk policy enforcement call")
 
-          old = "mod tests {\n    use super::*;"
-          new = "mod tests {\n    use super::*;\n    use std::collections::BTreeSet;"
-          if old in text:
-              text = text.replace(old, new, 1)
-          elif new not in text:
-              raise SystemExit("unrecognized test module shape")
+          new_enforcement = '''fn enforce_autonomy_and_approval(
+              transaction: &Transaction<'_>,
+              agent_id: &str,
+              risk_class: &str,
+              approval_mode: &str,
+              approval_requirement: &str,
+          ) -> Result<()> {
+              let autonomy: i64 = transaction.query_row(
+                  "SELECT autonomy_level FROM homeserver_agents WHERE agent_id=?1",
+                  params![agent_id],
+                  |row| row.get(0),
+              )?;
+              ensure!(
+                  matches!(risk_class, "read_only" | "reversible"),
+                  "sensitive runtime tools remain on the Phase 16D proposal boundary"
+              );
+              ensure!(
+                  approval_requirement != "proposal",
+                  "runtime tools requiring proposals are not executable in Phase 17"
+              );
+              ensure!(
+                  approval_mode == "none",
+                  "Phase 17 runtime policies must be approval-free and low-risk"
+              );
+              ensure!(
+                  autonomy >= 3,
+                  "approval-free runtime execution requires scoped autonomy"
+              );
+              Ok(())
+          }
 
-          path.write_text(text, encoding="utf-8")
+          fn enforce_policy_execution_limit(
+              transaction: &Transaction<'_>,
+              agent_id: &str,
+              action_type: &str,
+              policy_id: &str,
+          ) -> Result<()> {
+              let (max_executions, window_seconds): (i64, i64) = transaction.query_row(
+                  "SELECT max_executions,window_seconds FROM agent_execution_policies WHERE policy_id=?1 AND state='active'",
+                  params![policy_id],
+                  |row| Ok((row.get(0)?, row.get(1)?)),
+              )?;
+              ensure!(
+                  max_executions > 0 && window_seconds > 0,
+                  "runtime policy execution window is invalid"
+              );
+              let window_start = timestamp(Utc::now() - Duration::seconds(window_seconds));
+              let completed: i64 = transaction.query_row(
+                  "SELECT COUNT(*) FROM agent_runtime_receipts r JOIN agent_runtime_plan_steps s ON s.step_id=r.step_id JOIN agent_runtime_plans p ON p.plan_id=r.plan_id WHERE p.agent_id=?1 AND s.action_type=?2 AND r.outcome='completed' AND r.completed_at_utc>=?3",
+                  params![agent_id, action_type, window_start],
+                  |row| row.get(0),
+              )?;
+              ensure!(
+                  completed < max_executions,
+                  "runtime policy execution limit reached"
+              );
+              Ok(())
+          }
+
+          fn enforce_tool_restrictions'''
+          pattern = r"fn enforce_autonomy_and_approval\([\s\S]*?\nfn enforce_tool_restrictions"
+          runtime, count = re.subn(pattern, new_enforcement, runtime, count=1)
+          if count != 1 and "runtime policy execution limit reached" not in runtime:
+              raise SystemExit("low-risk enforcement block was not replaced")
+
+          old_complete = '''    transaction.execute(
+              "UPDATE agent_runtime_plan_steps SET state='completed',private_result_hash=?1,safe_result_hash=?2,result_code=?3,completed_at_utc=?4,updated_at_utc=?4 WHERE step_id=?5",
+              params![private_result_hash, receipt.safe_result_hash, receipt.result_code, now, context.step_id],
+          )?;'''
+          new_complete = '''    transaction.execute(
+              "UPDATE agent_runtime_plan_steps SET state='completed',private_result_hash=?1,safe_result_hash=?2,result_code=?3,completed_at_utc=?4,updated_at_utc=?4 WHERE step_id=?5",
+              params![private_result_hash, receipt.safe_result_hash, receipt.result_code, now, context.step_id],
+          )?;
+          transaction.execute(
+              "UPDATE wrapper_jobs SET available_at_utc=?1,updated_at_utc=?1 WHERE job_id=(SELECT next.job_id FROM agent_runtime_plan_steps current JOIN agent_runtime_plan_steps next ON next.plan_id=current.plan_id AND next.sequence_number=current.sequence_number+1 WHERE current.step_id=?2) AND state='queued'",
+              params![now, context.step_id],
+          )?;'''
+          runtime = replace_once(runtime, old_complete, new_complete, "next-step unlock")
+
+          # Catalog-bound runtime policy is deliberately low-risk and approval-free.
+          policy = replace_once(
+              policy,
+              '''    ensure!(
+                  APPROVAL_MODES.contains(&approval_mode.as_str()),
+                  "runtime policy approval mode is invalid"
+              );''',
+              '''    ensure!(
+                  APPROVAL_MODES.contains(&approval_mode.as_str()),
+                  "runtime policy approval mode is invalid"
+              );
+              ensure!(
+                  approval_mode == "none",
+                  "Phase 17 runtime policies must be approval-free and low-risk"
+              );''',
+              "policy approval mode boundary",
+          )
+          old_policy_autonomy = r'''    let required_autonomy = match risk_class\.as_str\(\) \{[\s\S]*?    \}
+
+              let now = Utc::now\(\);'''
+          new_policy_autonomy = '''    ensure!(
+              matches!(risk_class.as_str(), "read_only" | "reversible"),
+              "sensitive tools remain on the Phase 16D proposal boundary"
+          );
+          ensure!(
+              approval_requirement != "proposal",
+              "proposal-gated tools are not executable in the Phase 17 runtime"
+          );
+          ensure!(
+              autonomy_level >= 3,
+              "approval-free runtime policy requires scoped autonomy"
+          );
+
+          let now = Utc::now();'''
+          policy, count = re.subn(old_policy_autonomy, new_policy_autonomy, policy, count=1)
+          if count != 1 and "proposal-gated tools are not executable" not in policy:
+              raise SystemExit("runtime policy autonomy block was not replaced")
+
+          # Update the permanent validator to enforce the corrected architecture.
+          validator = validator.replace(
+              '    "runtime tool approval is missing, stale, or mismatched",\n',
+              '    "runtime tools requiring proposals are not executable in Phase 17",\n    "runtime policy execution limit reached",\n    "runtime plan step cannot execute before its predecessors",\n    "runtime_receipt_missing",\n',
+          )
+          validator = validator.replace(
+              '    "this runtime tool requires an approval-gated policy",\n    "agent autonomy level is below the runtime tool risk class",\n',
+              '    "Phase 17 runtime policies must be approval-free and low-risk",\n    "proposal-gated tools are not executable in the Phase 17 runtime",\n    "approval-free runtime policy requires scoped autonomy",\n',
+          )
+          validator = validator.replace(
+              '''require(
+              "agent_action_approvals" in source,
+              "runtime does not enforce Phase 16D action approvals",
+          )
+          ''',
+              '''require(
+              "agent_action_approvals" not in source,
+              "low-risk runtime incorrectly depends on the separate Phase 16D proposal approval table",
+          )
+          ''',
+          )
+          insertion = '''
+          reconcile_start = source.index("fn reconcile(connection")
+          reconcile_end = source.index("fn refresh_plan_state", reconcile_start)
+          reconcile_block = source[reconcile_start:reconcile_end]
+          require("service_restarted" not in reconcile_block, "snapshot reconciliation can fail live attempts")
+          require("WHEN j.state='waiting' THEN 'queued'" in reconcile_block, "waiting jobs are not mapped safely")
+          require("WHEN j.state='dead_letter' THEN 'failed'" in reconcile_block, "dead-letter jobs are not mapped safely")
+          require("fn fail_interrupted_attempts" in source, "startup interruption recovery is missing")
+          require("step.job.available_at_utc = if index == 0" in source, "later plan steps are not dispatch-locked")
+          require("UPDATE wrapper_jobs SET available_at_utc=?1" in source, "next plan step is not unlocked after completion")
+          require("step.job.approval_id.is_none() && step.job.plan_hash.is_none()" in source, "approval-gated wrapper jobs can enter the low-risk runtime")
+          '''
+          marker = 'snapshot_start = source.index("fn snapshot(state")\n'
+          if insertion.strip() not in validator:
+              validator = validator.replace(marker, insertion + "\n" + marker, 1)
+
+          # Align documentation with the actual retained proposal boundary.
+          docs = docs.replace(
+              "6. A fresh Phase 16D action approval when the policy or risk class requires one.\n7. A Phase 16E selector and result-egress decision when private knowledge or private results are involved.",
+              "6. A low-risk, approval-free execution policy with scoped autonomy; sensitive and proposal-gated actions remain on the retained Phase 16D proposal lifecycle and are not executed by this first runtime.\n7. A Phase 16E selector and result-egress decision when private knowledge or private results are involved.",
+          )
+          docs = docs.replace(
+              "- optional Phase 16D approval and plan hash;\n- optional Phase 16E private selector and output schema.",
+              "- a canonical runtime plan hash retained locally with the ordered job bindings;\n- optional Phase 16E private selector and output schema.\n\nThe initial Phase 17 runtime rejects wrapper-job approval IDs and approval plan hashes. Sensitive actions continue through the separate, already-certified Phase 16D `action.propose` → approval → execution lifecycle.",
+          )
+          docs = docs.replace(
+              "- approval identity and plan hash when required.",
+              "- low-risk approval-free policy state, execution-window limits, plan order, and tool timeout limits.",
+          )
+
+          runtime_path.write_text(runtime, encoding="utf-8")
+          policy_path.write_text(policy, encoding="utf-8")
+          validator_path.write_text(validator, encoding="utf-8")
+          docs_path.write_text(docs, encoding="utf-8")
           PY
           cargo fmt --all
+          python scripts/validate-wrapper-runtime.py
           git diff --check
           if git diff --quiet; then
-            echo "Phase 17 source is already repaired."
+            echo "Phase 17 runtime is already repaired and hardened."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/homeserver-service/src/app/wrapper_runtime.rs
-          git commit -m "Repair Phase 17 native runtime compilation"
+          git add crates/homeserver-service/src/app/wrapper_runtime.rs crates/homeserver-service/src/app/wrapper_runtime_policy.rs scripts/validate-wrapper-runtime.py docs/phase-17-authorized-agent-tool-runtime.md
+          git commit -m "Harden Phase 17 runtime authority and reconciliation"
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
