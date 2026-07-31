@@ -101,7 +101,29 @@ jobs:
             echo "Control Center desktop compilation passed."
           else
             echo "::group::Control Center compiler diagnostic"
-            grep -n -A30 -B8 -E 'error(\[E[0-9]+\])?:|could not compile' "$RUNNER_TEMP/control-center-check.log" | tail -n 240 || true
+            python - "$RUNNER_TEMP/control-center-check.log" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          raw_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+          ansi = re.compile(r"\x1b\[[0-9;]*m")
+          lines = [ansi.sub("", line) for line in raw_lines]
+          hits = [index for index, line in enumerate(lines) if "error[E0433]" in line]
+          if hits:
+              for block, index in enumerate(hits[:2], start=1):
+                  print(f"--- E0433 block {block} ---")
+                  start = max(0, index - 4)
+                  end = min(len(lines), index + 22)
+                  for line_number in range(start, end):
+                      print(f"{line_number + 1}:{lines[line_number]}")
+          else:
+              print("No E0433 marker found; printing final 120 compiler lines.")
+              start = max(0, len(lines) - 120)
+              for line_number in range(start, len(lines)):
+                  print(f"{line_number + 1}:{lines[line_number]}")
+          PY
             echo "::endgroup::"
           fi
           exit "$status"
