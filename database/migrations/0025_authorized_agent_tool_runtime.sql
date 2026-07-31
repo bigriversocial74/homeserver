@@ -187,6 +187,12 @@ CREATE TABLE IF NOT EXISTS agent_runtime_audit_records (
   FOREIGN KEY (agent_id) REFERENCES homeserver_agents(agent_id) ON DELETE RESTRICT
 );
 
+CREATE TRIGGER IF NOT EXISTS trg_agent_runtime_audit_records_no_update
+BEFORE UPDATE ON agent_runtime_audit_records
+BEGIN
+  SELECT RAISE(ABORT, 'agent runtime audit records are immutable');
+END;
+
 CREATE TABLE IF NOT EXISTS agent_runtime_state (
   singleton_id INTEGER PRIMARY KEY CHECK (singleton_id=1),
   worker_id TEXT NOT NULL,
