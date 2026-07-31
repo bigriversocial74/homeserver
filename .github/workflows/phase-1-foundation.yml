@@ -1,6 +1,10 @@
 name: Phase 20 Controlled Integration Builder
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/phase-1-foundation.yml
+      - scripts/phase20-integrate.py
   push:
     branches:
       - feature/phase-20-authorized-model-routing-inference-governance
@@ -52,6 +56,7 @@ jobs:
           cargo test -p microgifter-homeserver-service --test phase20_model_inference_governance_contract
           cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings
       - name: Commit clean permanent Phase 20 implementation
+        if: github.event_name == 'push'
         run: |
           rm scripts/phase20-integrate.py
           git checkout origin/main -- .github/workflows/phase-1-foundation.yml
