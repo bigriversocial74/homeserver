@@ -3,7 +3,6 @@ import { icon } from "./icons.js";
 import "./agent-runtime-control-center.css";
 
 const RUNTIME_ROUTE = "runtime";
-const LOCAL_ACTOR = "local_control_center";
 const REFRESH_WINDOW_MS = 15_000;
 
 const runtimeState = {
@@ -280,7 +279,6 @@ async function cancelRuntimePlan(button) {
   try {
     runtimeState.runtime = await invoke("homeserver_cancel_agent_runtime_plan", {
       planId,
-      actorUserId: LOCAL_ACTOR,
       confirmation,
       reason: reason.trim(),
     });

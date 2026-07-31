@@ -43,6 +43,8 @@ fn phase17_runtime_retains_certified_authority_chain() {
         "wrapper_jobs::fail_job",
         "wrapper_jobs::cancel_job",
         "wrapper_agents::agent_job_authority_is_current_tx",
+        "struct ExecutionAuthorityRow",
+        "execution_authority_from_row",
         "runtime policy execution limit reached",
         "runtime plan step cannot execute before its predecessors",
         "step.job.approval_id.is_none() && step.job.plan_hash.is_none()",

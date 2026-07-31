@@ -176,6 +176,24 @@ for bridge in [
     require(bridge in tauri_runtime, f"missing trusted runtime bridge {bridge}")
     require(bridge in tauri_lib or bridge.startswith("/v1/"), f"runtime bridge is not registered {bridge}")
 
+require(
+    'const LOCAL_CONTROL_CENTER_ACTOR: &str = "local_control_center"' in tauri_runtime,
+    "runtime cancellation actor is not pinned in the trusted bridge",
+)
+require(
+    '"actor_user_id": LOCAL_CONTROL_CENTER_ACTOR' in tauri_runtime,
+    "trusted runtime cancellation does not use the pinned actor",
+)
+require(
+    "actorUserId" not in control_center,
+    "runtime UI can supply its own cancellation audit actor",
+)
+require(
+    "struct ExecutionAuthorityRow" in source
+    and "execution_authority_from_row" in source,
+    "runtime execution authority is not represented by a typed row",
+)
+
 for surface in [
     "data-agent-runtime-route",
     "Agent Runtime",

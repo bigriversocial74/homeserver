@@ -179,6 +179,45 @@ struct ExecutionContext {
     attempt_number: u32,
 }
 
+#[derive(Debug, Clone)]
+struct ExecutionAuthorityRow {
+    plan_id: String,
+    step_id: String,
+    agent_id: String,
+    wrapper_id: String,
+    connection_id: String,
+    tool_key: String,
+    sequence_number: i64,
+    adapter_key: String,
+    action_type: String,
+    tool_restrictions_json: String,
+    policy_id: String,
+    risk_class: String,
+    approval_mode: String,
+    policy_adapter: String,
+    policy_state: String,
+}
+
+fn execution_authority_from_row(row: &Row<'_>) -> rusqlite::Result<ExecutionAuthorityRow> {
+    Ok(ExecutionAuthorityRow {
+        plan_id: row.get(0)?,
+        step_id: row.get(1)?,
+        agent_id: row.get(2)?,
+        wrapper_id: row.get(3)?,
+        connection_id: row.get(4)?,
+        tool_key: row.get(5)?,
+        sequence_number: row.get(6)?,
+        adapter_key: row.get(7)?,
+        action_type: row.get(8)?,
+        tool_restrictions_json: row.get(9)?,
+        policy_id: row.get(10)?,
+        risk_class: row.get(11)?,
+        approval_mode: row.get(12)?,
+        policy_adapter: row.get(13)?,
+        policy_state: row.get(14)?,
+    })
+}
+
 #[derive(Debug)]
 struct AdapterExecution {
     private_result: Value,
@@ -738,27 +777,33 @@ fn prepare_execution(
         wrapper_agents::agent_job_authority_is_current_tx(&transaction, &job.job_id)?,
         "runtime job agent authority changed"
     );
-    let row: (String, String, String, String, String, String, i64, String, String, String, String, String, String, String, String) = transaction.query_row(
+    let authority = transaction.query_row(
         "SELECT s.plan_id,s.step_id,p.agent_id,j.wrapper_id,j.connection_id,s.tool_key,s.sequence_number,s.adapter_key,s.action_type,a.tool_restrictions_json,e.policy_id,e.risk_class,e.approval_mode,e.tool_adapter,e.state FROM agent_runtime_plan_steps s JOIN agent_runtime_plans p ON p.plan_id=s.plan_id JOIN wrapper_jobs j ON j.job_id=s.job_id JOIN agent_job_bindings b ON b.job_id=j.job_id JOIN homeserver_agents a ON a.agent_id=b.agent_id JOIN agent_execution_policies e ON e.agent_id=a.agent_id AND e.action_type=s.action_type WHERE s.job_id=?1 AND s.state IN ('queued','leased') AND p.state IN ('queued','running') AND e.state='active' AND e.not_before_utc<=?2 AND e.expires_at_utc>?2",
         params![job.job_id, now_utc()],
-        |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?,row.get(9)?,row.get(10)?,row.get(11)?,row.get(12)?,row.get(13)?,row.get(14)?)),
+        execution_authority_from_row,
     )?;
     ensure!(
-        row.2 == job.submitted_by_id,
+        authority.agent_id == job.submitted_by_id,
         "runtime plan agent does not match the job submitter"
     );
-    let tool = read_tool_tx(&transaction, &row.5)?;
+    let tool = read_tool_tx(&transaction, &authority.tool_key)?;
     ensure!(tool.state == "active", "runtime tool is not active");
-    ensure!(tool.adapter_key == row.7, "runtime step adapter changed");
     ensure!(
-        row.13 == tool.adapter_key,
+        tool.adapter_key == authority.adapter_key,
+        "runtime step adapter changed"
+    );
+    ensure!(
+        authority.policy_adapter == tool.adapter_key,
         "agent policy adapter does not match the runtime tool"
     );
     ensure!(
-        row.11 == tool.risk_class,
+        authority.risk_class == tool.risk_class,
         "agent policy risk class does not match the runtime tool"
     );
-    ensure!(row.14 == "active", "agent execution policy is not active");
+    ensure!(
+        authority.policy_state == "active",
+        "agent execution policy is not active"
+    );
     ensure!(
         tool.allowed_job_types
             .iter()
@@ -771,71 +816,76 @@ fn prepare_execution(
     );
     let incomplete_predecessors: i64 = transaction.query_row(
         "SELECT COUNT(*) FROM agent_runtime_plan_steps WHERE plan_id=?1 AND sequence_number<?2 AND state<>'completed'",
-        params![row.0, row.6],
+        params![authority.plan_id, authority.sequence_number],
         |result| result.get(0),
     )?;
     ensure!(
         incomplete_predecessors == 0,
         "runtime plan step cannot execute before its predecessors"
     );
-    enforce_tool_restrictions(&row.9, &tool.adapter_key)?;
+    enforce_tool_restrictions(&authority.tool_restrictions_json, &tool.adapter_key)?;
     enforce_autonomy_and_approval(
         &transaction,
-        &row.2,
-        &row.11,
-        &row.12,
+        &authority.agent_id,
+        &authority.risk_class,
+        &authority.approval_mode,
         &tool.approval_requirement,
     )?;
-    enforce_policy_execution_limit(&transaction, &row.2, &row.8, &row.10)?;
+    enforce_policy_execution_limit(
+        &transaction,
+        &authority.agent_id,
+        &authority.action_type,
+        &authority.policy_id,
+    )?;
     let attempt_number: i64 = transaction.query_row(
         "SELECT COALESCE(MAX(attempt_number),0)+1 FROM agent_runtime_attempts WHERE step_id=?1",
-        params![row.1],
+        params![authority.step_id],
         |result| result.get(0),
     )?;
     let attempt_id = Uuid::new_v4().to_string();
     let now = now_utc();
     transaction.execute(
         "UPDATE agent_runtime_plans SET state='running',updated_at_utc=?1 WHERE plan_id=?2 AND state='queued'",
-        params![now, row.0],
+        params![now, authority.plan_id],
     )?;
     transaction.execute(
         "UPDATE agent_runtime_plan_steps SET state='running',started_at_utc=COALESCE(started_at_utc,?1),updated_at_utc=?1 WHERE step_id=?2",
-        params![now, row.1],
+        params![now, authority.step_id],
     )?;
     transaction.execute(
         "INSERT INTO agent_runtime_attempts (attempt_id,plan_id,step_id,job_id,worker_id,attempt_number,state,started_at_utc) VALUES (?1,?2,?3,?4,?5,?6,'running',?7)",
-        params![attempt_id, row.0, row.1, job.job_id, worker_id, attempt_number, now],
+        params![attempt_id, authority.plan_id, authority.step_id, job.job_id, worker_id, attempt_number, now],
     )?;
     record_event_tx(
         &transaction,
         EventEvidence {
-            plan_id: Some(&row.0),
-            step_id: Some(&row.1),
+            plan_id: Some(&authority.plan_id),
+            step_id: Some(&authority.step_id),
             job_id: Some(&job.job_id),
-            agent_id: Some(&row.2),
+            agent_id: Some(&authority.agent_id),
             event_type: "agent.runtime_step_started",
             outcome: "success",
             actor_type: "worker",
             actor_id: worker_id,
             detail_code: "authority_revalidated",
             metadata: json!({
-                "tool_key": tool.tool_key,
-                "adapter_key": tool.adapter_key,
-                "policy_id": row.10,
-                "sequence_number": row.6,
+                "tool_key": &tool.tool_key,
+                "adapter_key": &tool.adapter_key,
+                "policy_id": &authority.policy_id,
+                "sequence_number": authority.sequence_number,
                 "private_input_exposed": false
             }),
         },
     )?;
     transaction.commit()?;
     Ok(ExecutionContext {
-        plan_id: row.0,
-        step_id: row.1,
-        agent_id: row.2,
-        wrapper_id: row.3,
-        connection_id: row.4,
+        plan_id: authority.plan_id,
+        step_id: authority.step_id,
+        agent_id: authority.agent_id,
+        wrapper_id: authority.wrapper_id,
+        connection_id: authority.connection_id,
         tool,
-        action_type: row.8,
+        action_type: authority.action_type,
         attempt_id,
         attempt_number: attempt_number.max(1) as u32,
     })
