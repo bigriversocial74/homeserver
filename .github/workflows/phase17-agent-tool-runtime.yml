@@ -1,0 +1,72 @@
+name: Phase 17 Authorized Agent Tool Runtime
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/phase17-agent-tool-runtime.yml
+      - database/migrations/0025_authorized_agent_tool_runtime.sql
+      - docs/phase-17-authorized-agent-tool-runtime.md
+      - scripts/validate-wrapper-runtime.py
+      - scripts/validate-wrapper-privacy.py
+      - package.json
+      - crates/homeserver-service/src/app.rs
+      - crates/homeserver-service/src/app/wrapper_runtime.rs
+      - crates/homeserver-service/src/app/wrapper_agents.rs
+      - crates/homeserver-service/src/app/wrapper_jobs.rs
+      - crates/homeserver-service/src/app/wrapper_jobs_*.rs
+      - crates/homeserver-service/src/app/wrapper_privacy.rs
+  push:
+    branches:
+      - feature/phase-17-authorized-agent-tool-runtime
+      - main
+    paths:
+      - .github/workflows/phase17-agent-tool-runtime.yml
+      - database/migrations/0025_authorized_agent_tool_runtime.sql
+      - docs/phase-17-authorized-agent-tool-runtime.md
+      - scripts/validate-wrapper-runtime.py
+      - scripts/validate-wrapper-privacy.py
+      - package.json
+      - crates/homeserver-service/src/app.rs
+      - crates/homeserver-service/src/app/wrapper_runtime.rs
+      - crates/homeserver-service/src/app/wrapper_agents.rs
+      - crates/homeserver-service/src/app/wrapper_jobs.rs
+      - crates/homeserver-service/src/app/wrapper_jobs_*.rs
+      - crates/homeserver-service/src/app/wrapper_privacy.rs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homeserver-phase17-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Validate Phase 17 authority and runtime boundaries
+        run: python scripts/validate-wrapper-runtime.py
+      - name: Validate retained Phase 16E private boundaries
+        run: python scripts/validate-wrapper-privacy.py
+      - name: Validate retained frontend contracts and build
+        run: |
+          npm run check:frontend
+          npm run build
+      - name: Validate Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Compile and test HomeServer service
+        run: cargo test -p microgifter-homeserver-service
+      - name: Strict HomeServer service lint
+        run: cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings
