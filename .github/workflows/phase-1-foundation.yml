@@ -28,9 +28,10 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: package-lock.json
-      - name: Apply Phase 19 integration patches
+      - name: Apply Phase 19 integration and hostile-review patches
         run: |
           python scripts/phase19-integration-builder.py
+          python scripts/phase19-hardening-builder.py
           cargo fmt --all
       - name: Validate Phase 19 and retained boundaries
         run: |
@@ -49,7 +50,7 @@ jobs:
       - name: Commit permanent Phase 19 implementation
         shell: bash
         run: |
-          rm -f scripts/phase19-integration-builder.py
+          rm -f scripts/phase19-integration-builder.py scripts/phase19-hardening-builder.py
           rm -rf scripts/__pycache__
           git checkout origin/main -- .github/workflows/phase-1-foundation.yml
           git config user.name "github-actions[bot]"
