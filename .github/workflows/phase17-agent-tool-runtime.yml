@@ -16,6 +16,7 @@ on:
       - crates/homeserver-service/src/app/wrapper_jobs.rs
       - crates/homeserver-service/src/app/wrapper_jobs_*.rs
       - crates/homeserver-service/src/app/wrapper_privacy.rs
+      - crates/homeserver-service/tests/phase17_runtime_contract.rs
   push:
     branches:
       - feature/phase-17-authorized-agent-tool-runtime
@@ -34,6 +35,7 @@ on:
       - crates/homeserver-service/src/app/wrapper_jobs.rs
       - crates/homeserver-service/src/app/wrapper_jobs_*.rs
       - crates/homeserver-service/src/app/wrapper_privacy.rs
+      - crates/homeserver-service/tests/phase17_runtime_contract.rs
 
 permissions:
   contents: read
