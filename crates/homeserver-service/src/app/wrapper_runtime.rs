@@ -12,7 +12,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, sync::Arc, time::Duration as StdDuration};
+use std::{sync::Arc, time::Duration as StdDuration};
 use tokio::sync::watch;
 use tracing::{error, warn};
 use uuid::Uuid;
@@ -190,6 +190,7 @@ struct AdapterExecution {
 
 pub fn initialize(connection: &Connection) -> Result<()> {
     connection.execute_batch(MIGRATION)?;
+    fail_interrupted_attempts(connection)?;
     reconcile(connection)?;
     ensure_runtime_worker(connection)?;
     maintain_history(connection)?;
@@ -418,6 +419,7 @@ fn create_plan(state: &AppState, request: CreateRuntimePlanRequest) -> Result<St
     let plan_id = Uuid::new_v4().to_string();
     let correlation_id = Uuid::new_v4().to_string();
     let expires_at = timestamp(Utc::now() + Duration::minutes(i64::from(request.expires_minutes)));
+    let deferred_available_at = expires_at.clone();
     let plan_document = json!({
         "schema": "homeserver.agent-runtime-plan.v1",
         "plan_id": plan_id,
@@ -474,10 +476,20 @@ fn create_plan(state: &AppState, request: CreateRuntimePlanRequest) -> Result<St
                 .any(|value| value == &step.job.job_type),
             "runtime tool does not accept the requested job type"
         );
+        ensure!(
+            step.job.approval_id.is_none() && step.job.plan_hash.is_none(),
+            "approval-gated runtime jobs are not supported by the low-risk Phase 17 runtime"
+        );
         step.job.submitted_by_type = "agent".to_owned();
         step.job.submitted_by_id = agent_id.clone();
         step.job.correlation_id = Some(correlation_id.clone());
         step.job.causation_id = previous_job_id.clone();
+        step.job.priority = Some(5);
+        step.job.available_at_utc = if index == 0 {
+            None
+        } else {
+            Some(deferred_available_at.clone())
+        };
         step.job.expires_minutes = step.job.expires_minutes.min(request.expires_minutes);
         let connection_id = step.job.connection_id.clone();
         let response = match wrapper_jobs::submit_job(state, step.job) {
@@ -753,16 +765,28 @@ fn prepare_execution(
             .any(|value| value == &job.job_type),
         "runtime tool does not allow this job type"
     );
+    ensure!(
+        job.max_execution_seconds <= tool.max_execution_seconds,
+        "runtime job execution limit exceeds the tool catalog limit"
+    );
+    let incomplete_predecessors: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM agent_runtime_plan_steps WHERE plan_id=?1 AND sequence_number<?2 AND state<>'completed'",
+        params![row.0, row.6],
+        |result| result.get(0),
+    )?;
+    ensure!(
+        incomplete_predecessors == 0,
+        "runtime plan step cannot execute before its predecessors"
+    );
     enforce_tool_restrictions(&row.9, &tool.adapter_key)?;
     enforce_autonomy_and_approval(
         &transaction,
-        job,
         &row.2,
-        &row.10,
         &row.11,
         &row.12,
         &tool.approval_requirement,
     )?;
+    enforce_policy_execution_limit(&transaction, &row.2, &row.8, &row.10)?;
     let attempt_number: i64 = transaction.query_row(
         "SELECT COALESCE(MAX(attempt_number),0)+1 FROM agent_runtime_attempts WHERE step_id=?1",
         params![row.1],
@@ -819,9 +843,7 @@ fn prepare_execution(
 
 fn enforce_autonomy_and_approval(
     transaction: &Transaction<'_>,
-    job: &wrapper_jobs::JobSummary,
     agent_id: &str,
-    policy_id: &str,
     risk_class: &str,
     approval_mode: &str,
     approval_requirement: &str,
@@ -831,43 +853,49 @@ fn enforce_autonomy_and_approval(
         params![agent_id],
         |row| row.get(0),
     )?;
-    let required_autonomy = match risk_class {
-        "read_only" => 1,
-        "reversible" => 2,
-        "external_side_effect" => 3,
-        "high_risk" => 4,
-        _ => bail!("runtime risk class is invalid"),
-    };
     ensure!(
-        autonomy >= required_autonomy,
-        "agent autonomy level is below the runtime tool risk class"
+        matches!(risk_class, "read_only" | "reversible"),
+        "sensitive runtime tools remain on the Phase 16D proposal boundary"
     );
-    let requires_proposal = approval_requirement == "proposal"
-        || matches!(risk_class, "external_side_effect" | "high_risk")
-        || approval_mode != "none";
-    if !requires_proposal {
-        ensure!(
-            approval_requirement == "none" || approval_requirement == "policy",
-            "runtime approval requirement is invalid"
-        );
-        return Ok(());
-    }
-    let plan_hash = job
-        .plan_hash
-        .as_deref()
-        .context("approved runtime tool use is missing a plan hash")?;
-    let approval_id = job
-        .approval_id
-        .as_deref()
-        .context("approved runtime tool use is missing an approval ID")?;
-    let approved: i64 = transaction.query_row(
-        "SELECT COUNT(*) FROM agent_action_proposals p JOIN agent_action_approvals a ON a.proposal_id=p.proposal_id WHERE p.job_id=?1 AND p.agent_id=?2 AND p.policy_id=?3 AND p.plan_hash=?4 AND p.state='approved' AND a.approval_id=?5 AND a.plan_hash=?4 AND a.state='approved' AND a.expires_at_utc>?6",
-        params![job.job_id, agent_id, policy_id, plan_hash, approval_id, now_utc()],
+    ensure!(
+        approval_requirement != "proposal",
+        "runtime tools requiring proposals are not executable in Phase 17"
+    );
+    ensure!(
+        approval_mode == "none",
+        "Phase 17 runtime policies must be approval-free and low-risk"
+    );
+    ensure!(
+        autonomy >= 3,
+        "approval-free runtime execution requires scoped autonomy"
+    );
+    Ok(())
+}
+
+fn enforce_policy_execution_limit(
+    transaction: &Transaction<'_>,
+    agent_id: &str,
+    action_type: &str,
+    policy_id: &str,
+) -> Result<()> {
+    let (max_executions, window_seconds): (i64, i64) = transaction.query_row(
+        "SELECT max_executions,window_seconds FROM agent_execution_policies WHERE policy_id=?1 AND state='active'",
+        params![policy_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    ensure!(
+        max_executions > 0 && window_seconds > 0,
+        "runtime policy execution window is invalid"
+    );
+    let window_start = timestamp(Utc::now() - Duration::seconds(window_seconds));
+    let completed: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM agent_runtime_receipts r JOIN agent_runtime_plan_steps s ON s.step_id=r.step_id JOIN agent_runtime_plans p ON p.plan_id=r.plan_id WHERE p.agent_id=?1 AND s.action_type=?2 AND r.outcome='completed' AND r.completed_at_utc>=?3",
+        params![agent_id, action_type, window_start],
         |row| row.get(0),
     )?;
     ensure!(
-        approved == 1,
-        "runtime tool approval is missing, stale, or mismatched"
+        completed < max_executions,
+        "runtime policy execution limit reached"
     );
     Ok(())
 }
@@ -1017,6 +1045,10 @@ fn finalize_success(
     transaction.execute(
         "UPDATE agent_runtime_plan_steps SET state='completed',private_result_hash=?1,safe_result_hash=?2,result_code=?3,completed_at_utc=?4,updated_at_utc=?4 WHERE step_id=?5",
         params![private_result_hash, receipt.safe_result_hash, receipt.result_code, now, context.step_id],
+    )?;
+    transaction.execute(
+        "UPDATE wrapper_jobs SET available_at_utc=?1,updated_at_utc=?1 WHERE job_id=(SELECT next.job_id FROM agent_runtime_plan_steps current JOIN agent_runtime_plan_steps next ON next.plan_id=current.plan_id AND next.sequence_number=current.sequence_number+1 WHERE current.step_id=?2) AND state='queued'",
+        params![now, context.step_id],
     )?;
     let runtime_receipt_id = Uuid::new_v4().to_string();
     let receipt_document = json!({
@@ -1205,14 +1237,18 @@ fn snapshot(state: &AppState) -> Result<RuntimeSnapshot> {
     })
 }
 
+fn fail_interrupted_attempts(connection: &Connection) -> Result<()> {
+    connection.execute(
+        "UPDATE agent_runtime_attempts SET state='failed',result_code='service_restarted',completed_at_utc=?1 WHERE state='running'",
+        params![now_utc()],
+    )?;
+    Ok(())
+}
+
 fn reconcile(connection: &Connection) -> Result<()> {
     let now = now_utc();
     connection.execute(
-        "UPDATE agent_runtime_attempts SET state='failed',result_code='service_restarted',completed_at_utc=?1 WHERE state='running'",
-        params![now],
-    )?;
-    connection.execute(
-        "UPDATE agent_runtime_plan_steps SET state=(SELECT j.state FROM wrapper_jobs j WHERE j.job_id=agent_runtime_plan_steps.job_id),failure_code=COALESCE(failure_code,(SELECT j.failure_code FROM wrapper_jobs j WHERE j.job_id=agent_runtime_plan_steps.job_id)),completed_at_utc=COALESCE(completed_at_utc,(SELECT j.completed_at_utc FROM wrapper_jobs j WHERE j.job_id=agent_runtime_plan_steps.job_id)),updated_at_utc=?1 WHERE state IN ('queued','leased','running')",
+        "UPDATE agent_runtime_plan_steps SET state=(SELECT CASE WHEN j.state='waiting' THEN 'queued' WHEN j.state='dead_letter' THEN 'failed' WHEN j.state='completed' AND NOT EXISTS (SELECT 1 FROM agent_runtime_receipts r WHERE r.step_id=agent_runtime_plan_steps.step_id) THEN 'failed' ELSE j.state END FROM wrapper_jobs j WHERE j.job_id=agent_runtime_plan_steps.job_id),failure_code=COALESCE(failure_code,(SELECT CASE WHEN j.state='completed' AND NOT EXISTS (SELECT 1 FROM agent_runtime_receipts r WHERE r.step_id=agent_runtime_plan_steps.step_id) THEN 'runtime_receipt_missing' WHEN j.state='dead_letter' THEN COALESCE(j.failure_code,'dead_letter') ELSE j.failure_code END FROM wrapper_jobs j WHERE j.job_id=agent_runtime_plan_steps.job_id)),completed_at_utc=COALESCE(completed_at_utc,(SELECT j.completed_at_utc FROM wrapper_jobs j WHERE j.job_id=agent_runtime_plan_steps.job_id)),updated_at_utc=?1 WHERE state IN ('queued','leased','running')",
         params![now],
     )?;
     connection.execute(
@@ -1274,7 +1310,7 @@ fn read_tools(connection: &Connection) -> Result<Vec<ToolSummary>> {
     let mut statement = connection.prepare(
         "SELECT tool_key,adapter_key,version,description,risk_class,approval_requirement,allowed_job_types_json,max_execution_seconds,state FROM agent_tool_catalog ORDER BY tool_key",
     )?;
-    statement
+    let values = statement
         .query_map([], |row| {
             Ok(ToolSummary {
                 tool_key: row.get(0)?,
@@ -1288,8 +1324,8 @@ fn read_tools(connection: &Connection) -> Result<Vec<ToolSummary>> {
                 state: row.get(8)?,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(values)
 }
 
 fn read_tool(connection: &Connection, tool_key: &str) -> Result<ToolRecord> {
@@ -1328,7 +1364,7 @@ fn read_plans(connection: &Connection) -> Result<Vec<RuntimePlanSummary>> {
     let mut statement = connection.prepare(
         "SELECT plan_id,agent_id,requested_by_user_id,title,objective,state,step_count,completed_step_count,correlation_id,plan_hash,expires_at_utc,failure_code,created_at_utc,updated_at_utc,completed_at_utc FROM agent_runtime_plans ORDER BY created_at_utc DESC,plan_id DESC LIMIT ?1",
     )?;
-    statement
+    let values = statement
         .query_map(params![MAX_PLANS], |row| {
             Ok(RuntimePlanSummary {
                 plan_id: row.get(0)?,
@@ -1348,15 +1384,15 @@ fn read_plans(connection: &Connection) -> Result<Vec<RuntimePlanSummary>> {
                 completed_at_utc: row.get(14)?,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(values)
 }
 
 fn read_steps(connection: &Connection) -> Result<Vec<RuntimeStepSummary>> {
     let mut statement = connection.prepare(
         "SELECT step_id,plan_id,sequence_number,job_id,tool_key,adapter_key,action_type,state,idempotency_key,argument_hash,private_result_hash,safe_result_hash,result_code,failure_code,created_at_utc,started_at_utc,completed_at_utc FROM agent_runtime_plan_steps ORDER BY created_at_utc DESC,plan_id DESC,sequence_number LIMIT 1000",
     )?;
-    statement
+    let values = statement
         .query_map([], |row| {
             Ok(RuntimeStepSummary {
                 step_id: row.get(0)?,
@@ -1378,15 +1414,15 @@ fn read_steps(connection: &Connection) -> Result<Vec<RuntimeStepSummary>> {
                 completed_at_utc: row.get(16)?,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(values)
 }
 
 fn read_receipts(connection: &Connection) -> Result<Vec<RuntimeReceiptSummary>> {
     let mut statement = connection.prepare(
         "SELECT receipt_id,plan_id,step_id,job_id,agent_id,wrapper_id,connection_id,tool_key,adapter_key,outcome,result_code,job_receipt_id,job_receipt_hash,safe_result_hash,runtime_receipt_hash,completed_at_utc FROM agent_runtime_receipts ORDER BY completed_at_utc DESC,receipt_id DESC LIMIT 500",
     )?;
-    statement
+    let values = statement
         .query_map([], |row| {
             Ok(RuntimeReceiptSummary {
                 receipt_id: row.get(0)?,
@@ -1407,8 +1443,8 @@ fn read_receipts(connection: &Connection) -> Result<Vec<RuntimeReceiptSummary>> 
                 completed_at_utc: row.get(15)?,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(values)
 }
 
 struct EventEvidence<'a> {
@@ -1533,6 +1569,7 @@ fn api_error(code: &'static str, error: anyhow::Error) -> (StatusCode, Json<ApiE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     #[test]
     fn runtime_job_types_are_unique() {
