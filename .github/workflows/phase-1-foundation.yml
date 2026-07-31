@@ -1,11 +1,10 @@
 name: Phase 20 Controlled Integration Builder
 
 on:
-  push:
-    branches:
-      - feature/phase-20-authorized-model-routing-inference-governance
+  pull_request:
     paths:
       - .github/workflows/phase-1-foundation.yml
+      - scripts/phase20-integrate.py
 
 permissions:
   contents: write
@@ -21,6 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: feature/phase-20-authorized-model-routing-inference-governance
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
