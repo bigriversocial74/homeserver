@@ -652,9 +652,12 @@ pub async fn integration_snapshot(state: Arc<AppState>) -> Result<AgentIntegrati
     };
     let integrations = {
         let task_state = state.clone();
-        tokio::task::spawn_blocking(move || read_integrations(&task_state.connection()?))
-            .await
-            .context("site integration snapshot task failed")??
+        tokio::task::spawn_blocking(move || {
+            let connection = task_state.connection()?;
+            read_integrations(&connection)
+        })
+        .await
+        .context("site integration snapshot task failed")??
     };
     let dismissed = {
         let connection = state.connection()?;
@@ -816,7 +819,10 @@ fn configure_site_integration(
     )?;
     let client_id = bounded_text(&request.client_id, 1, 240, "OAuth client ID")?;
     let scopes = normalize_scopes(&request.scopes)?;
-    let installation_id = crate::database::installation_id(&state.connection()?)?;
+    let installation_id = {
+        let connection = state.connection()?;
+        crate::database::installation_id(&connection)?
+    };
     let credential_key = format!("{installation_id}:agent-mcp:{}", request.connection_id);
     let connection = state.connection()?;
     connection.execute(
@@ -902,7 +908,8 @@ async fn refresh_tools(
                 "UPDATE agent_site_integrations SET state='connected',tool_catalog_json=?1,last_tool_sync_utc=?2,last_success_utc=?2,last_error=NULL,updated_at_utc=?2 WHERE connection_id=?3",
                 params![serde_json::to_string(&tools)?,now,connection_id],
             )?;
-            Ok(integration_by_id(&state.connection()?, connection_id)?.summary)
+            let connection = state.connection()?;
+            Ok(integration_by_id(&connection, connection_id)?.summary)
         }
         Err(error) => {
             mark_integration_error(&state, connection_id, &error)?;
