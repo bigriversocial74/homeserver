@@ -412,14 +412,15 @@ pub fn health_check(connection: &Connection) -> Result<()> {
 
 pub fn maintain_history(connection: &Connection) -> Result<()> {
     reconcile(connection)?;
-    connection.execute(
-        "DELETE FROM agent_supervised_action_events WHERE created_at_utc<strftime('%Y-%m-%dT%H:%M:%fZ','now','-365 days')",
+    let events: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM agent_supervised_action_events",
         [],
+        |row| row.get(0),
     )?;
-    connection.execute(
-        "DELETE FROM agent_supervised_action_events WHERE event_id NOT IN (SELECT event_id FROM agent_supervised_action_events ORDER BY created_at_utc DESC,event_id DESC LIMIT ?1)",
-        params![MAX_EVENTS],
-    )?;
+    ensure!(
+        events <= MAX_EVENTS,
+        "supervised action event retention requires archival"
+    );
     let receipts: i64 = connection.query_row(
         "SELECT COUNT(*) FROM agent_supervised_action_receipts",
         [],
@@ -750,6 +751,11 @@ fn fail_completed_proposal_job(
     failure_code: &str,
     error: &anyhow::Error,
 ) -> Result<()> {
+    ensure!(
+        job_receipt.safe_result_hash.is_some(),
+        "proposal-job receipt safe result hash is missing"
+    );
+    cancel_remaining_jobs(state, &context.plan_id, &context.step_id, failure_code)?;
     let connection = state.connection()?;
     let transaction = connection.unchecked_transaction()?;
     let now = now_utc();
@@ -779,6 +785,7 @@ fn fail_completed_proposal_job(
         "result_code": failure_code,
         "wrapper_job_receipt_id": job_receipt.receipt_id,
         "wrapper_job_receipt_hash": job_receipt.receipt_hash,
+        "wrapper_job_safe_result_hash": job_receipt.safe_result_hash.as_deref(),
         "completed_at_utc": now
     });
     let runtime_receipt_hash = hash_json(&runtime_document)?;
@@ -1301,6 +1308,10 @@ fn finalize_checkpoint(state: &AppState, checkpoint: &CheckpointRecord) -> Resul
         job_receipt.result_code == "action_proposal_job_completed",
         "proposal-job receipt result changed"
     );
+    ensure!(
+        job_receipt.safe_result_hash.is_some(),
+        "proposal-job receipt safe result hash is missing"
+    );
     let private_result_hash: String = transaction.query_row(
         "SELECT private_result_hash FROM wrapper_job_private_results WHERE job_id=?1",
         params![checkpoint.job_id],
@@ -1410,6 +1421,7 @@ fn write_terminal_receipts_tx(
         "result_code": result_code,
         "wrapper_job_receipt_id": job_receipt.receipt_id,
         "wrapper_job_receipt_hash": job_receipt.receipt_hash,
+        "wrapper_job_safe_result_hash": job_receipt.safe_result_hash.as_deref(),
         "action_receipt_id": action.map(|value| value.receipt_id.as_str()),
         "action_receipt_hash": action.map(|value| value.receipt_hash.as_str()),
         "safe_result_hash": safe_result_hash,
@@ -1442,6 +1454,7 @@ fn write_terminal_receipts_tx(
         "action_receipt_hash": action_receipt_hash,
         "wrapper_job_receipt_id": job_receipt.receipt_id,
         "wrapper_job_receipt_hash": job_receipt.receipt_hash,
+        "wrapper_job_safe_result_hash": job_receipt.safe_result_hash.as_deref(),
         "runtime_receipt_id": stored_runtime.0,
         "runtime_receipt_hash": stored_runtime.1,
         "runtime_plan_hash": checkpoint.runtime_plan_hash,
@@ -1485,6 +1498,10 @@ fn fail_checkpoint(
         params![checkpoint.proposal_id],
     )?;
     let job_receipt = read_wrapper_receipt_tx(&transaction, &checkpoint.job_id)?;
+    ensure!(
+        job_receipt.safe_result_hash.is_some(),
+        "proposal-job receipt safe result hash is missing"
+    );
     let stored_runtime = write_terminal_receipts_tx(
         &transaction,
         checkpoint,

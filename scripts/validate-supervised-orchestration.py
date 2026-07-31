@@ -105,3 +105,14 @@ for immutable_trigger in (
 ):
     if immutable_trigger not in migration_contract:
         raise SystemExit(f"missing immutable delete trigger: {immutable_trigger}")
+
+
+if "DELETE FROM agent_supervised_action_events" in source:
+    raise SystemExit("append-only supervised events still have a deletion path")
+if "supervised action event retention requires archival" not in source:
+    raise SystemExit("missing fail-closed supervised event archival boundary")
+if source.count("job_receipt.safe_result_hash.is_some()") < 3:
+    raise SystemExit("wrapper proposal-job safe-result evidence is not enforced")
+completed_failure = source[source.index("fn fail_completed_proposal_job("):source.index("fn proposal_job_context(")]
+if "cancel_remaining_jobs" not in completed_failure:
+    raise SystemExit("completed proposal failures do not cancel dependent jobs")

@@ -72,6 +72,14 @@ fn phase18_reuses_certified_phase16_and_phase17_contracts() {
     assert!(RUNTIME_SOURCE.contains("tool_key='action.supervised'"));
     assert!(!ORCHESTRATION_SOURCE.contains("std::process::Command"));
     assert!(!ORCHESTRATION_SOURCE.contains("tokio::process::Command"));
+    assert!(!ORCHESTRATION_SOURCE.contains("DELETE FROM agent_supervised_action_events"));
+    assert!(ORCHESTRATION_SOURCE.contains("supervised action event retention requires archival"));
+    assert!(
+        ORCHESTRATION_SOURCE
+            .matches("job_receipt.safe_result_hash.is_some()")
+            .count()
+            >= 3
+    );
 }
 
 #[test]
