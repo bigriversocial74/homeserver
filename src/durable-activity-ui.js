@@ -1,9 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 
 let workspace = null;
-let observer = null;
 let timer = null;
+let retryTimer = null;
 let queued = false;
+let loading = false;
+let loadError = null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -38,6 +40,10 @@ function relativeDate(value) {
 
 function humanize(value) {
   return String(value || "activity").replaceAll("_", " ").replaceAll(".", " ");
+}
+
+function isAgentPage() {
+  return window.location.hash.replace("#", "") === "agent";
 }
 
 function activity() {
@@ -85,8 +91,32 @@ function lifecycleSummary() {
   return `The current HomeServer service started ${formatDate(data.current_session_started_at_utc)}.`;
 }
 
+function renderLoading() {
+  return `<section class="hs-agent-system-message" id="hs-agent-away-message" data-durable-activity-card>
+    <div class="hs-agent-system-avatar">HS</div>
+    <article class="hs-agent-system-card">
+      <header class="hs-agent-system-head"><div><span class="hs-agent-kicker">Durable activity history</span><h2>Loading recent HomeServer activity</h2><p>Reading the local activity snapshot and service receipts.</p></div><span class="hs-agent-state-pill">Loading</span></header>
+      <div class="hs-agent-system-body"><div class="hs-agent-event-list"><div class="hs-agent-event"><i></i><span><strong>Connecting to the local service</strong><small>This section updates automatically when the Agent Workspace snapshot is ready.</small></span><time>Now</time></div></div></div>
+    </article>
+  </section>`;
+}
+
+function renderError() {
+  return `<section class="hs-agent-system-message" id="hs-agent-away-message" data-durable-activity-card>
+    <div class="hs-agent-system-avatar">HS</div>
+    <article class="hs-agent-system-card">
+      <header class="hs-agent-system-head"><div><span class="hs-agent-kicker">Durable activity history</span><h2>Activity history is temporarily unavailable</h2><p>The Agent page could not read the local activity snapshot. It will retry automatically.</p></div><span class="hs-agent-state-pill warn">Retrying</span></header>
+      <div class="hs-agent-system-body"><div class="hs-agent-event-list"><div class="hs-agent-event warn"><i></i><span><strong>Local activity request did not complete</strong><small>Agent Chat remains available while HomeServer retries the durable history request.</small></span><time>Current</time></div></div></div>
+    </article>
+  </section>`;
+}
+
 function render() {
+  if (loadError && !activity()) return renderError();
+  if (loading && !activity()) return renderLoading();
+
   const data = activity();
+  if (!data) return renderLoading();
   const messages = newMessages();
   const approvals = pendingApprovals();
   const events = recentEvents();
@@ -97,66 +127,73 @@ function render() {
       <div class="hs-agent-system-body">
         <div class="hs-agent-away-summary"><div><strong>${messages.length}</strong><span>new agent messages</span></div><div><strong>${approvals.length}</strong><span>tasks awaiting approval</span></div><div><strong>${events.length}</strong><span>service events</span></div></div>
         <div class="hs-agent-event-list">${events.length ? events.map((item) => `<div class="hs-agent-event ${eventTone(item.event_type)}"><i></i><span><strong>${escapeHtml(humanize(item.event_type))}</strong><small>${escapeHtml(item.message)}</small></span><time>${escapeHtml(relativeDate(item.created_at_utc))}</time></div>`).join("") : '<div class="hs-agent-event good"><i></i><span><strong>No new durable events require attention</strong><small>Service starts, clean stops, Control Center activity, backup, restore, update, pairing, and other recorded events will appear here.</small></span><time>Current</time></div>'}</div>
-        ${data?.current_session_started_at_utc ? `<p class="hs-agent-form-help">Current service session started: ${escapeHtml(formatDate(data.current_session_started_at_utc))}. Previous session clean: ${data.previous_session_clean ? "Yes" : "No or not yet known"}.</p>` : ""}
+        ${data.current_session_started_at_utc ? `<p class="hs-agent-form-help">Current service session started: ${escapeHtml(formatDate(data.current_session_started_at_utc))}. Previous session clean: ${data.previous_session_clean ? "Yes" : "No or not yet known"}.</p>` : ""}
       </div>
     </article>
   </section>`;
 }
 
-function observe() {
-  observer?.observe(document.querySelector("#app") || document.body, { childList: true, subtree: true });
-}
-
 function inject() {
-  if (window.location.hash.replace("#", "") !== "agent" || !workspace?.activity) return;
+  if (!isAgentPage()) return false;
   const current = document.querySelector("#hs-agent-away-message");
-  if (!current || current.hasAttribute("data-durable-activity-card")) return;
-  observer?.disconnect();
-  try {
-    current.outerHTML = render();
-  } finally {
-    observe();
-  }
+  const host = document.querySelector(".hs-chat-stream");
+  if (!current && !host) return false;
+
+  const markup = render();
+  if (current) current.outerHTML = markup;
+  else host.insertAdjacentHTML("afterbegin", markup);
+  return true;
 }
 
-function queueInject() {
+function queueInject(attempt = 0) {
   if (queued) return;
   queued = true;
   requestAnimationFrame(() => {
     queued = false;
-    inject();
+    const injected = inject();
+    if (!injected && isAgentPage() && attempt < 20) {
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => queueInject(attempt + 1), 75);
+    }
   });
 }
 
 async function refresh() {
-  if (window.location.hash.replace("#", "") !== "agent") return;
+  if (!isAgentPage()) return;
+  loading = true;
+  loadError = null;
+  queueInject();
   try {
     workspace = await invoke("homeserver_agent_workspace");
+  } catch (error) {
+    workspace = null;
+    loadError = String(error?.message || error || "activity history unavailable");
+    console.warn("HomeServer durable activity history unavailable", error);
+  } finally {
+    loading = false;
     queueInject();
-  } catch {
-    // Agent Chat already owns the visible service error state.
   }
 }
 
+window.addEventListener("homeserver:rendered", queueInject);
 window.addEventListener("homeserver-agent-route", () => setTimeout(() => void refresh(), 0));
 window.addEventListener("hashchange", () => {
-  if (window.location.hash.replace("#", "") === "agent") void refresh();
+  if (isAgentPage()) void refresh();
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && window.location.hash.replace("#", "") === "agent") void refresh();
+  if (document.visibilityState === "visible" && isAgentPage()) void refresh();
 });
 
-observer = new MutationObserver(queueInject);
-observe();
+queueInject();
 void refresh();
 timer = setInterval(() => {
-  if (document.visibilityState === "visible") void refresh();
+  if (document.visibilityState === "visible" && isAgentPage()) void refresh();
 }, 30000);
 
 window.__HOMESERVER_DURABLE_ACTIVITY_UI_V1__ = {
   refresh,
   stop() {
     clearInterval(timer);
-    observer?.disconnect();
+    clearTimeout(retryTimer);
   },
 };
