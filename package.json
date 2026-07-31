@@ -4,6 +4,7 @@
   "version": "0.1.4",
   "type": "module",
   "scripts": {
+    "preinstall": "python scripts/phase20-final-fix.py",
     "dev": "vite",
     "build": "vite build",
     "prepare:icons": "node scripts/prepare-icons.mjs",
