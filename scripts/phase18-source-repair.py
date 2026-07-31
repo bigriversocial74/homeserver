@@ -79,7 +79,14 @@ if "fn parse_utc(" not in text:
 
 path.write_text(text, encoding="utf-8")
 
+migration = root / "database/migrations/0026_supervised_action_orchestration.sql"
+for number, line in enumerate(migration.read_text(encoding="utf-8").splitlines(), start=1):
+    if 1 <= number <= 260:
+        print(f"PHASE18_SCHEMA {number:04d}: {line}")
+
 contract = root / "crates/homeserver-service/tests/phase18_supervised_orchestration_contract.rs"
 for number, line in enumerate(contract.read_text(encoding="utf-8").splitlines(), start=1):
-    if 90 <= number <= 170:
+    if 100 <= number <= 240:
         print(f"PHASE18_FIXTURE {number:04d}: {line}")
+
+raise RuntimeError("Phase 18 schema diagnostic complete")
