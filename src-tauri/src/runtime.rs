@@ -62,3 +62,76 @@ pub(crate) async fn homeserver_cancel_agent_runtime_plan(
     )
     .await
 }
+
+#[tauri::command]
+pub(crate) async fn homeserver_agent_schedules() -> Result<Value, String> {
+    get_json("/v1/agent-schedules").await
+}
+
+#[tauri::command]
+pub(crate) async fn homeserver_run_agent_scheduler_once() -> Result<Value, String> {
+    post_json("/v1/agent-schedules/run-once", &json!({})).await
+}
+
+async fn mutate_agent_schedule(
+    route: &str,
+    schedule_id: String,
+    confirmation: String,
+    reason: String,
+) -> Result<Value, String> {
+    post_json(
+        route,
+        &json!({
+            "schedule_id": schedule_id,
+            "actor_user_id": LOCAL_CONTROL_CENTER_ACTOR,
+            "confirmation": confirmation,
+            "reason": reason
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn homeserver_pause_agent_schedule(
+    schedule_id: String,
+    confirmation: String,
+    reason: String,
+) -> Result<Value, String> {
+    mutate_agent_schedule(
+        "/v1/agent-schedules/pause",
+        schedule_id,
+        confirmation,
+        reason,
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn homeserver_resume_agent_schedule(
+    schedule_id: String,
+    confirmation: String,
+    reason: String,
+) -> Result<Value, String> {
+    mutate_agent_schedule(
+        "/v1/agent-schedules/resume",
+        schedule_id,
+        confirmation,
+        reason,
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn homeserver_cancel_agent_schedule(
+    schedule_id: String,
+    confirmation: String,
+    reason: String,
+) -> Result<Value, String> {
+    mutate_agent_schedule(
+        "/v1/agent-schedules/cancel",
+        schedule_id,
+        confirmation,
+        reason,
+    )
+    .await
+}
