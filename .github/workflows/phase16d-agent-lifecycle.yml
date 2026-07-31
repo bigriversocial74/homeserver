@@ -5,61 +5,17 @@ on:
   push:
     branches:
       - feature/phase-16d-agent-lifecycle-action-policy
-      - feature/phase-16e-private-knowledge-egress
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: homeserver-phase16d-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  phase16e_integrate:
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/feature/phase-16e-private-knowledge-egress') || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'feature/phase-16e-private-knowledge-egress')
-    runs-on: windows-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: feature/phase-16e-private-knowledge-egress
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
-        with:
-          components: rustfmt
-      - name: Materialize and integrate Phase 16E
-        shell: bash
-        run: |
-          set -euo pipefail
-          base64 -d tools/phase16e-wrapper-privacy.rs.gz.b64 | gzip -d > crates/homeserver-service/src/app/wrapper_privacy.rs
-          cat tools/phase16e-integrate.part-* | base64 -d | gzip -d > /tmp/integrate_phase16e.py
-          python /tmp/integrate_phase16e.py
-          cargo fmt --all
-          python scripts/validate-wrapper-privacy.py
-      - name: Commit integrated Phase 16E source
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add crates/homeserver-service/src/app.rs \
-            crates/homeserver-service/src/app/wrapper_privacy.rs \
-            crates/homeserver-service/src/app/wrapper_jobs.rs \
-            crates/homeserver-service/src/app/wrapper_jobs_submit.rs \
-            crates/homeserver-service/src/app/wrapper_jobs_completion.rs \
-            crates/homeserver-service/src/app/wrapper_jobs_reconcile.rs \
-            crates/homeserver-service/src/app/wrapper_jobs_delivery.rs \
-            crates/homeserver-service/src/app/wrapper_jobs_read.rs
-          if git diff --cached --quiet; then
-            echo 'Phase 16E integration is already applied.'
-            exit 0
-          fi
-          git commit -m 'Integrate Phase 16E privacy and egress enforcement'
-          git push origin HEAD:feature/phase-16e-private-knowledge-egress
-
   contract:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.ref != 'feature/phase-16e-private-knowledge-egress'
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
