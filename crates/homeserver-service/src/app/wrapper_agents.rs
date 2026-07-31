@@ -1418,7 +1418,10 @@ pub(crate) fn agent_job_authority_is_current_tx(
         && !emergency_stop_active_tx(transaction, &agent_id, &connection_id)?)
 }
 
-fn create_proposal(connection: &Connection, request: CreateProposalRequest) -> Result<String> {
+pub(crate) fn create_proposal(
+    connection: &Connection,
+    request: CreateProposalRequest,
+) -> Result<String> {
     expire_and_reconcile(connection)?;
     ensure!(
         (1..=10_080).contains(&request.expires_minutes),
@@ -1670,6 +1673,25 @@ fn execute_proposal(
     connection: &Connection,
     request: ExecuteProposalRequest,
 ) -> Result<ActionReceiptSummary> {
+    execute_proposal_with_actor_type(connection, request, "local_user")
+}
+
+pub(crate) fn execute_proposal_as_orchestrator(
+    connection: &Connection,
+    request: ExecuteProposalRequest,
+) -> Result<ActionReceiptSummary> {
+    ensure!(
+        request.actor_user_id == "agent_orchestrator",
+        "supervised orchestration actor identity is invalid"
+    );
+    execute_proposal_with_actor_type(connection, request, "system")
+}
+
+fn execute_proposal_with_actor_type(
+    connection: &Connection,
+    request: ExecuteProposalRequest,
+    actor_type: &'static str,
+) -> Result<ActionReceiptSummary> {
     let proposal_id = validate_uuid(&request.proposal_id, "proposal ID")?;
     let plan_hash = validate_sha256(&request.plan_hash, "plan hash")?;
     let actor = bounded_text(&request.actor_user_id, 1, 160, "actor user ID")?;
@@ -1865,7 +1887,7 @@ fn execute_proposal(
             } else {
                 "error"
             },
-            actor_type: "local_user",
+            actor_type,
             actor_id: &actor,
             detail_code: result_code,
             metadata: json!({"receipt_hash": receipt_hash, "private_result_exposed": false}),
@@ -2691,6 +2713,10 @@ fn validate_restrictions(value: &Value, label: &str) -> Result<()> {
     let text = json_text(value)?;
     ensure!(text.len() <= 16 * 1024, "{label} exceeds the size limit");
     Ok(())
+}
+
+pub(crate) fn validate_safe_summary(value: &Value) -> Result<()> {
+    ensure_safe_value(value, 0)
 }
 
 fn ensure_safe_value(value: &Value, depth: usize) -> Result<()> {
