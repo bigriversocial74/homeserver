@@ -173,6 +173,6 @@ forbid(
 require(frontend_css, ["runtime-evidence-archive", "runtime-archive-grid"], "archive UI styles")
 require(package, ["validate-evidence-archive.py"], "permanent validator registration")
 require(workflow, ["Phase 21 Evidence Archive", "phase21_evidence_archive_contract", "-D warnings"], "permanent workflow")
-require(docs, ["Initial audit: **4.4/10**", "Source evidence is never deleted", "export-gated retention"], "Phase 21 documentation")
+require(docs, ["Initial audit: **4.4/10**", "Source evidence is never deleted", "Export-gated retention"], "Phase 21 documentation")
 
 print("Phase 21 tamper-evident evidence archive contract passed.")
