@@ -45,6 +45,9 @@ mod wrapper_jobs;
 #[path = "app/wrapper_agents.rs"]
 mod wrapper_agents;
 
+#[path = "app/wrapper_privacy.rs"]
+mod wrapper_privacy;
+
 use crate::{
     agent_runtime, backup, config::AppConfig, database, document_extraction, http, knowledge_vault,
     mcp_runtime, microgifter_connection, model_center, openrouter_provider, operational_data,
@@ -88,6 +91,8 @@ pub async fn run(
     wrapper_agents::initialize(&connection)?;
     operational_data::initialize(&connection)?;
     knowledge_vault::initialize(&connection, &config)?;
+    wrapper_privacy::initialize(&connection)?;
+    wrapper_privacy::maintain_history(&connection)?;
     document_extraction::initialize(&connection)?;
     model_center::initialize(&connection)?;
     openrouter_provider::initialize(&connection)?;
@@ -193,6 +198,7 @@ pub async fn run(
             .merge(wrapper_grants::router(state.clone()))
             .merge(wrapper_jobs::router(state.clone()))
             .merge(wrapper_agents::router(state.clone()))
+            .merge(wrapper_privacy::router(state.clone()))
             .merge(knowledge_vault::router(state.clone()))
             .merge(model_center::router(state.clone()))
             .merge(openrouter_provider::router(state.clone()))

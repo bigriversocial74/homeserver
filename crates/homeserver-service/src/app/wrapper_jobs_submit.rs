@@ -169,6 +169,20 @@ pub fn submit_job(state: &AppState, request: SubmitJobRequest) -> Result<Submitt
     } else {
         None
     };
+    let privacy_binding = wrapper_privacy::validate_job_privacy_submission(
+        &connection,
+        &connection_id,
+        &grant_id,
+        authorization.grant_revision,
+        &capability_key,
+        &operation,
+        &submitted_by_type,
+        &submitted_by_id,
+        request.private_selector_id.as_deref(),
+        request.purpose.as_deref(),
+        request.output_schema.as_deref(),
+        request.remote_model_provider.as_deref(),
+    )?;
     let connection_authority_revision =
         current_connection_authority_revision(&connection, &connection_id)?;
     let constraints = job_grant_constraints(
@@ -259,6 +273,9 @@ pub fn submit_job(state: &AppState, request: SubmitJobRequest) -> Result<Submitt
     )?;
     if let Some(binding) = agent_binding.as_ref() {
         wrapper_agents::bind_agent_job_tx(&transaction, &job_id, binding)?;
+    }
+    if let Some(binding) = privacy_binding.as_ref() {
+        wrapper_privacy::bind_job_privacy_tx(&transaction, &job_id, binding)?;
     }
     let job = job_record_by_id_tx(&transaction, &job_id)?;
     record_job_event(
