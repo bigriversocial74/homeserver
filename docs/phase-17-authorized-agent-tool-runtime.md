@@ -126,7 +126,7 @@ The snapshot exposes tool, plan, step, and receipt metadata. It explicitly repor
 - `private_inputs_exposed: false`
 - `private_results_exposed: false`
 - `direct_tool_bypass_allowed: false`
-- `phase16e_gress_required: true`
+- `phase16e_egress_required: true`
 
 ## Control Center visibility
 
