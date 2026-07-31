@@ -126,7 +126,7 @@ The snapshot exposes tool, plan, step, and receipt metadata. It explicitly repor
 - `private_inputs_exposed: false`
 - `private_results_exposed: false`
 - `direct_tool_bypass_allowed: false`
-- `phase16e_egress_required: true`
+- `phase16e_gress_required: true`
 
 ## Control Center visibility
 
@@ -141,7 +141,7 @@ The page uses a narrow trusted Tauri bridge because browser-originated requests 
 - immutable runtime receipt hashes linked to Phase 16C evidence;
 - explicit privacy indicators confirming that private inputs and full private results are hidden, direct tool bypass is disabled, and Phase 16E egress remains mandatory.
 
-Operators can refresh state, run one bounded runtime cycle, open the supervised Agent Control Center, and cancel an active runtime plan only after entering the exact `CANCEL PLAN <plan_id>` confirmation. No raw private job input or full result is rendered.
+Operators can refresh state, run one bounded runtime cycle, open the supervised Agent Control Center, and cancel an active runtime plan only after entering the exact `CANCEL PLAN <plan_id>` confirmation. The trusted native bridge pins cancellation evidence to the `local_control_center` actor; browser JavaScript cannot supply or replace the audit identity. No raw private job input or full result is rendered.
 
 ## Deployment
 
