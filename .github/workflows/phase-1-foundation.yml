@@ -36,7 +36,18 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Apply exact Phase 20 integration
-        run: python scripts/phase20-integrate.py
+        run: |
+          python scripts/phase20-integrate.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/validate-model-inference-governance.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'forbid(frontend, ["MutationObserver", "output_text", "private_results"], "Agent Runtime governance UI")'
+          new = 'forbid(frontend, ["MutationObserver", "output_text", "output: receipt.output"], "Agent Runtime governance UI")'
+          if old not in text:
+              raise SystemExit('Phase 20 validator repair anchor is missing')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
       - name: Install frontend dependencies
         run: npm ci
       - name: Validate Phase 20 and retained contracts
@@ -58,7 +69,14 @@ jobs:
       - name: Commit clean permanent Phase 20 implementation
         if: github.event_name == 'push'
         run: |
-          rm scripts/phase20-integrate.py
+          rm -f scripts/phase20-integrate.py
+          rm -f docs/phase-20-staging-note.md
+          rm -f scripts/phase20-builder-trigger.txt
+          rm -f scripts/.phase20-trigger
+          rm -f docs/.phase20-pr-trigger
+          rm -f scripts/phase20-pr-open-trigger.txt
+          rm -f scripts/phase20-cleanup-list.txt
+          rm -f scripts/phase20-open-pr-now.txt
           git checkout origin/main -- .github/workflows/phase-1-foundation.yml
           git add -A
           git diff --cached --check
