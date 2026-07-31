@@ -46,7 +46,11 @@ pub(crate) async fn homeserver_agent_prompt(request: Value) -> Result<Value, Str
 
 #[tauri::command]
 pub(crate) async fn homeserver_create_agent_goal(request: Value) -> Result<Value, String> {
-    post_json("/v1/agent/goals", &request).await
+    match request.get("action").and_then(Value::as_str) {
+        Some("rename_thread") => post_json("/v1/agent/threads/rename", &request).await,
+        Some("delete_thread") => post_json("/v1/agent/threads/delete", &request).await,
+        _ => post_json("/v1/agent/goals", &request).await,
+    }
 }
 
 #[tauri::command]
