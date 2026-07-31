@@ -45,6 +45,29 @@ const MAX_PACKAGE_HARD_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_ARCHIVES_SNAPSHOT: i64 = 100;
 const MAX_EVENTS_SNAPSHOT: i64 = 100;
 const ARCHIVE_DIRECTORY: &str = "evidence-archives";
+const REVIEWED_EVIDENCE_TABLES: &[&str] = &[
+    "service_events",
+    "wrapper_events",
+    "wrapper_grant_events",
+    "wrapper_authorization_receipts",
+    "wrapper_job_events",
+    "wrapper_job_execution_receipts",
+    "agent_action_receipts",
+    "agent_lifecycle_events",
+    "private_knowledge_access_receipts",
+    "agent_runtime_receipts",
+    "agent_runtime_events",
+    "agent_runtime_audit_records",
+    "agent_supervised_action_receipts",
+    "agent_supervised_compensation_receipts",
+    "agent_supervised_action_events",
+    "agent_schedule_event_inbox",
+    "agent_schedule_receipts",
+    "agent_schedule_audit_events",
+    "model_provider_usage_receipts",
+    "model_inference_receipts",
+    "model_inference_events",
+];
 const PACKAGE_CONTENT_TYPE: &str = "application/vnd.microgifter.homeserver-evidence-archive";
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
@@ -304,6 +327,13 @@ pub fn health_check(connection: &Connection, config: &AppConfig) -> Result<()> {
         "evidence archive source membership is ambiguous"
     );
 
+    let policy = latest_policy(connection)?;
+    ensure!(
+        hash_policy(&policy)? == policy.policy_hash,
+        "evidence archive policy hash is invalid"
+    );
+    verify_archive_chain(connection)?;
+
     let latest = connection
         .query_row(
             "SELECT storage_path,package_sha256 FROM evidence_archives a JOIN evidence_archive_storage s ON s.archive_id=a.archive_id WHERE a.state='verified' AND s.state IN ('present','exported') ORDER BY a.archive_sequence DESC LIMIT 1",
@@ -538,18 +568,20 @@ fn update_policy(
         |row| row.get(0),
     )?;
     let revision = previous_revision.max(0) as u64 + 1;
-    let document = json!({
-        "schema": "homeserver.evidence-archive-policy.v1",
-        "policy_revision": revision,
-        "enabled": request.enabled,
-        "interval_hours": request.interval_hours,
-        "max_records_per_archive": request.max_records_per_archive,
-        "retention_count": request.retention_count,
-        "max_package_bytes": request.max_package_bytes,
-        "created_by_user_id": &actor,
-        "reason": &reason
-    });
-    let policy_hash = hash_json(&document)?;
+    let policy_record = PolicyRecord {
+        policy_id: String::new(),
+        policy_revision: revision,
+        enabled: request.enabled,
+        interval_hours: request.interval_hours,
+        max_records_per_archive: request.max_records_per_archive,
+        retention_count: request.retention_count,
+        max_package_bytes: request.max_package_bytes,
+        policy_hash: String::new(),
+        created_by_user_id: actor.clone(),
+        reason: reason.clone(),
+        created_at_utc: String::new(),
+    };
+    let policy_hash = hash_policy(&policy_record)?;
     let policy_id = Uuid::new_v4().to_string();
     let now = now_utc();
     let transaction = connection.unchecked_transaction()?;
@@ -1579,6 +1611,63 @@ fn latest_policy(connection: &Connection) -> Result<PolicyRecord> {
         .context("evidence archive policy is unavailable")
 }
 
+fn hash_policy(policy: &PolicyRecord) -> Result<String> {
+    hash_json(&json!({
+        "schema": "homeserver.evidence-archive-policy.v1",
+        "policy_revision": policy.policy_revision,
+        "enabled": policy.enabled,
+        "interval_hours": policy.interval_hours,
+        "max_records_per_archive": policy.max_records_per_archive,
+        "retention_count": policy.retention_count,
+        "max_package_bytes": policy.max_package_bytes,
+        "created_by_user_id": policy.created_by_user_id,
+        "reason": policy.reason
+    }))
+}
+
+fn verify_archive_chain(connection: &Connection) -> Result<()> {
+    let mut statement = connection.prepare(
+        "SELECT archive_id,archive_sequence,previous_archive_id,previous_archive_hash,manifest_sha256 FROM evidence_archives WHERE state='verified' ORDER BY archive_sequence,archive_id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+        ))
+    })?;
+    let archives = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut previous_id = None::<String>;
+    let mut previous_manifest_hash = ZERO_HASH.to_owned();
+    let mut previous_sequence = 0_i64;
+    for (archive_id, sequence, recorded_previous_id, recorded_previous_hash, manifest_hash) in
+        archives
+    {
+        ensure!(
+            sequence > previous_sequence,
+            "evidence archive sequence is not strictly increasing"
+        );
+        ensure!(
+            recorded_previous_id == previous_id,
+            "evidence archive predecessor identity is invalid"
+        );
+        ensure!(
+            recorded_previous_hash == previous_manifest_hash,
+            "evidence archive predecessor hash is invalid"
+        );
+        ensure!(
+            manifest_hash.len() == 64,
+            "evidence archive manifest hash is invalid"
+        );
+        previous_sequence = sequence;
+        previous_id = Some(archive_id);
+        previous_manifest_hash = manifest_hash;
+    }
+    Ok(())
+}
+
 fn latest_verified_archive(connection: &Connection) -> Result<Option<(String, String)>> {
     let archive = connection
         .query_row(
@@ -1789,30 +1878,7 @@ fn write_atomic(temporary: &Path, final_path: &Path, bytes: &[u8]) -> Result<()>
 }
 
 fn is_allowed_evidence_table(table: &str) -> bool {
-    if table == "service_events" {
-        return true;
-    }
-    if table.starts_with("evidence_archive_") || !valid_identifier(table) {
-        return false;
-    }
-    let safe_suffix = table.ends_with("_events")
-        || table.ends_with("_receipts")
-        || table.ends_with("_audit_records");
-    if !safe_suffix {
-        return false;
-    }
-    let forbidden = [
-        "private_results",
-        "private_inputs",
-        "messages",
-        "documents",
-        "payloads",
-        "credentials",
-        "secrets",
-        "tokens",
-        "sync_queue",
-    ];
-    !forbidden.iter().any(|marker| table.contains(marker))
+    REVIEWED_EVIDENCE_TABLES.contains(&table)
 }
 
 fn quote_identifier(value: &str) -> Result<String> {
@@ -2022,17 +2088,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn evidence_allowlist_rejects_private_content_tables() {
+    fn evidence_allowlist_is_explicit_and_rejects_future_suffix_matches() {
+        assert!(is_allowed_evidence_table("wrapper_authorization_receipts"));
         assert!(is_allowed_evidence_table("agent_runtime_receipts"));
         assert!(is_allowed_evidence_table("model_inference_events"));
         assert!(is_allowed_evidence_table(
-            "private_knowledge_egress_receipts"
+            "private_knowledge_access_receipts"
         ));
         assert!(!is_allowed_evidence_table(
             "model_inference_private_results"
         ));
         assert!(!is_allowed_evidence_table("agent_messages"));
-        assert!(!is_allowed_evidence_table("wrapper_job_payloads"));
+        assert!(!is_allowed_evidence_table("future_private_events"));
+        assert!(!is_allowed_evidence_table("future_secret_receipts"));
         assert!(!is_allowed_evidence_table("evidence_archive_events"));
     }
 

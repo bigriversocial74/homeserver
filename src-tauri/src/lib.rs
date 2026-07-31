@@ -20,6 +20,7 @@ use microgifter_homeserver_core::{
 };
 use rfd::AsyncFileDialog;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 #[cfg(desktop)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -419,6 +420,7 @@ async fn homeserver_export_evidence_archive(
     if package_sha256.len() != 64 || !package_sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("Evidence archive package hash is invalid.".to_owned());
     }
+    let expected_package_sha256 = package_sha256.to_ascii_lowercase();
     let Some(destination) = AsyncFileDialog::new()
         .add_filter("Microgifter evidence archive", &["mgha"])
         .set_file_name(&file_name)
@@ -457,6 +459,7 @@ async fn homeserver_export_evidence_archive(
         .map_err(|error| error.to_string())?;
     let mut stream = response.bytes_stream();
     let mut total_bytes = 0_u64;
+    let mut package_hasher = Sha256::new();
     let transfer_result = async {
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|error| error.to_string())?;
@@ -466,6 +469,7 @@ async fn homeserver_export_evidence_archive(
             if total_bytes > MAX_EVIDENCE_ARCHIVE_BYTES {
                 return Err("Evidence archive export exceeds the package size limit.".to_owned());
             }
+            package_hasher.update(&chunk);
             output
                 .write_all(&chunk)
                 .await
@@ -483,12 +487,21 @@ async fn homeserver_export_evidence_archive(
         let _ = tokio::fs::remove_file(&destination_path).await;
         return Err(error);
     }
+    drop(output);
+    let downloaded_package_sha256 = hex::encode(package_hasher.finalize());
+    if downloaded_package_sha256 != expected_package_sha256 {
+        let _ = tokio::fs::remove_file(&destination_path).await;
+        return Err(
+            "Evidence archive export hash verification failed; the incomplete file was removed."
+                .to_owned(),
+        );
+    }
 
     let receipt: serde_json::Value = post_json(
         "/v1/evidence-archives/exports",
         &serde_json::json!({
             "archive_id": archive_id,
-            "package_sha256": package_sha256,
+            "package_sha256": expected_package_sha256,
             "destination_file_name": file_name,
             "actor_user_id": "local_control_center",
             "confirmation": format!("EXPORT EVIDENCE ARCHIVE {}", archive_id)

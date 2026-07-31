@@ -7,7 +7,7 @@
 
 ## Purpose
 
-Phases 16 through 20 create immutable authority decisions, approvals, execution receipts, scheduling evidence, and governed inference receipts. Phase 21 gives that evidence an independently verifiable, machine-encrypted archive and export boundary without weakening or deleting the source records.
+Phases 16 through 20 create immutable authority decisions, approvals, execution receipts, scheduling evidence, and governed inference receipts. Phase 21 gives that evidence a machine-encrypted archive and export boundary that is fully verifiable by the originating HomeServer and externally verifiable by package SHA-256 without weakening or deleting the source records.
 
 ## Safety boundary
 
@@ -111,3 +111,13 @@ No Microgifter, VP3, POD, or wrapper MySQL import is required.
 - strict Windows and workspace lint
 - complete HomeServer Production Quality
 - verified installer, LocalSystem security, signed update, and forced rollback
+
+
+## Final trust hardening
+
+- Evidence admission is an explicit reviewed table allowlist. A future table is excluded even when its name ends in `_events`, `_receipts`, or `_audit_records` until a code review adds it.
+- The seeded policy hash is the canonical SHA-256 of the complete default policy document, and every active policy is recomputed during health checks.
+- Health checks verify the complete sequence of verified archive predecessor identities and manifest hashes.
+- Archive idempotency, policy binding, predecessor identity, sequence, managed filename/path, encryption mode, actor, and creation timestamp are immutable at the SQLite layer.
+- The desktop computes SHA-256 while streaming every exported byte, deletes a mismatched file, and records an export receipt only after the downloaded digest equals the verified package digest.
+- `.mgha` contents are fully decryptable and chain-verifiable by the originating HomeServer installation. Other systems can independently verify the exported package bytes against the displayed or recorded SHA-256 without receiving the machine encryption key.

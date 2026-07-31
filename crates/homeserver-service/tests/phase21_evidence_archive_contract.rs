@@ -35,7 +35,10 @@ fn default_policy_is_bounded_and_machine_local() {
     assert!((100..=50_000).contains(&policy.2));
     assert!((1..=365).contains(&policy.3));
     assert!((1_048_576..=268_435_456).contains(&policy.4));
-    assert_eq!(policy.5.len(), 64);
+    assert_eq!(
+        policy.5,
+        "faeef059a975afe172c0640813d05d2331a71e48224df64d138a44e837b2c84f"
+    );
 }
 
 #[test]
@@ -94,6 +97,9 @@ fn archive_policy_members_exports_and_events_are_immutable() {
         "UPDATE evidence_archive_policies SET interval_hours=2 WHERE policy_revision=1",
         "DELETE FROM evidence_archive_policies WHERE policy_revision=1",
         "UPDATE evidence_archives SET package_sha256='eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' WHERE archive_sequence=1",
+        "UPDATE evidence_archives SET previous_archive_hash='eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' WHERE archive_sequence=1",
+        "UPDATE evidence_archives SET archive_sequence=2 WHERE archive_sequence=1",
+        "UPDATE evidence_archives SET storage_path='C:/other.mgha' WHERE archive_sequence=1",
         "DELETE FROM evidence_archives WHERE archive_sequence=1",
         "UPDATE evidence_archive_members SET source_key='receipt-2' WHERE ordinal=1",
         "DELETE FROM evidence_archive_members WHERE ordinal=1",

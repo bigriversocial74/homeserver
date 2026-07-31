@@ -66,6 +66,24 @@ CREATE INDEX IF NOT EXISTS idx_evidence_archives_recent
 CREATE INDEX IF NOT EXISTS idx_evidence_archives_state
   ON evidence_archives (state, created_at_utc DESC, archive_id DESC);
 
+CREATE TRIGGER IF NOT EXISTS trg_evidence_archives_authority_immutable
+BEFORE UPDATE ON evidence_archives
+WHEN NEW.idempotency_key IS NOT OLD.idempotency_key
+  OR NEW.policy_id IS NOT OLD.policy_id
+  OR NEW.policy_revision IS NOT OLD.policy_revision
+  OR NEW.previous_archive_id IS NOT OLD.previous_archive_id
+  OR NEW.previous_archive_hash IS NOT OLD.previous_archive_hash
+  OR NEW.archive_sequence IS NOT OLD.archive_sequence
+  OR NEW.file_name IS NOT OLD.file_name
+  OR NEW.storage_path IS NOT OLD.storage_path
+  OR NEW.encryption IS NOT OLD.encryption
+  OR NEW.created_by_type IS NOT OLD.created_by_type
+  OR NEW.created_by_id IS NOT OLD.created_by_id
+  OR NEW.created_at_utc IS NOT OLD.created_at_utc
+BEGIN
+  SELECT RAISE(ABORT,'evidence archive authority and chain identity are immutable');
+END;
+
 CREATE TRIGGER IF NOT EXISTS trg_evidence_archives_terminal_immutable
 BEFORE UPDATE ON evidence_archives
 WHEN OLD.state IN ('verified','failed')
@@ -200,7 +218,7 @@ INSERT OR IGNORE INTO evidence_archive_policies (
   retention_count,max_package_bytes,policy_hash,created_by_user_id,reason,created_at_utc
 ) VALUES (
   '00000000-0000-4000-8000-000000000029',1,1,24,5000,30,67108864,
-  '610b795bf96f1b5a42962f2931f320034974b6cf294945d1e9c44a78159ecdf1',
+  'faeef059a975afe172c0640813d05d2331a71e48224df64d138a44e837b2c84f',
   'system','Phase 21 safe local evidence archive default',
   strftime('%Y-%m-%dT%H:%M:%fZ','now')
 );
