@@ -24,4 +24,5 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-autostart = "2"
 tokio.workspace = true
 tokio-util.workspace = true
+uuid.workspace = true
 zeroize.workspace = true
