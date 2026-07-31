@@ -20,9 +20,20 @@ replace_once(
         models,
         plan,""",
     """        operational,
-        models: _,
         plan,""",
-    "retired direct model snapshot",
+    "retired model context destructure",
+)
+replace_once(
+    "crates/homeserver-service/src/agent_runtime.rs",
+    "            models: models.as_ref(),\n",
+    "",
+    "retired model context constructor",
+)
+replace_once(
+    "crates/homeserver-service/src/agent_runtime.rs",
+    "    models: Option<&'a model_center::ModelCenterSnapshot>,\n",
+    "",
+    "retired model context field",
 )
 
 openrouter_path = ROOT / "crates/homeserver-service/src/openrouter_provider.rs"
