@@ -1,0 +1,78 @@
+name: Phase 21 Startup Diagnostic
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/phase21-startup-diagnostic.yml
+      - crates/homeserver-service/**
+      - database/migrations/0029_tamper_evident_evidence_archive.sql
+      - Cargo.toml
+      - Cargo.lock
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase21-startup-diagnostic-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+      - name: Build exact HomeServer service
+        shell: pwsh
+        run: cargo build --release --package microgifter-homeserver-service --locked
+      - name: Capture startup failure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $data = Join-Path $env:RUNNER_TEMP ("phase21-startup-" + [guid]::NewGuid().ToString("N"))
+          $stdout = Join-Path $env:RUNNER_TEMP "phase21-service-stdout.log"
+          $stderr = Join-Path $env:RUNNER_TEMP "phase21-service-stderr.log"
+          $env:MG_HOMESERVER_DATA_DIR = $data
+          $env:MG_HOMESERVER_NAME = "Phase 21 Startup Diagnostic"
+          $start = @{
+            FilePath = "target/release/microgifter-homeserver-service.exe"
+            ArgumentList = "console"
+            RedirectStandardOutput = $stdout
+            RedirectStandardError = $stderr
+            PassThru = $true
+            WindowStyle = "Hidden"
+          }
+          $process = Start-Process @start
+          try {
+            for ($attempt = 0; $attempt -lt 60; $attempt++) {
+              if ($process.HasExited) {
+                Write-Host "Service exited with code $($process.ExitCode)"
+                if (Test-Path $stdout) { Write-Host "--- stdout ---"; Get-Content $stdout }
+                if (Test-Path $stderr) { Write-Host "--- stderr ---"; Get-Content $stderr }
+                if (Test-Path $data) {
+                  Write-Host "--- data directory files ---"
+                  Get-ChildItem $data -Recurse -Force | ForEach-Object { Write-Host $_.FullName }
+                  Get-ChildItem $data -Recurse -File -Include *.log,*.txt | ForEach-Object {
+                    Write-Host "--- $($_.FullName) ---"
+                    Get-Content $_.FullName -ErrorAction SilentlyContinue
+                  }
+                }
+                throw "HomeServer startup diagnostic captured exit code $($process.ExitCode)"
+              }
+              try {
+                $health = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:47831/healthz" -TimeoutSec 2
+                if ($health.StatusCode -eq 204) {
+                  Write-Host "HomeServer became healthy."
+                  exit 0
+                }
+              } catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            throw "HomeServer did not become healthy within the diagnostic boundary"
+          } finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
