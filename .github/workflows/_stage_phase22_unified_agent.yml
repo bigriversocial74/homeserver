@@ -33,7 +33,15 @@ jobs:
           node-version: 22
           cache: npm
       - name: Apply integration wiring
-        run: python .github/scripts/apply_phase22_unified_agent.py
+        run: |
+          python .github/scripts/apply_phase22_unified_agent.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/validate-unified-agent-orchestration.py')
+          value = path.read_text(encoding='utf-8')
+          value = value.replace('    "operational_data" checked",\n', '    \'value="operational_data" checked\',\n')
+          path.write_text(value, encoding='utf-8')
+          PY
       - name: Format Rust
         run: cargo fmt --all
       - name: Validate frontend and integration contract
