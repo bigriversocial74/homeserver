@@ -1,0 +1,100 @@
+name: Phase 17 Native Repair Once
+
+on:
+  push:
+    branches:
+      - feature/phase-17-authorized-agent-tool-runtime
+    paths:
+      - .github/workflows/phase17-native-repair-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-17-authorized-agent-tool-runtime
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+      - name: Repair owned query results and runtime limits
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          path = Path("crates/homeserver-service/src/app/wrapper_runtime.rs")
+          text = path.read_text(encoding="utf-8")
+
+          for name in ("read_tools", "read_plans", "read_steps", "read_receipts"):
+              marker = f"fn {name}("
+              start = text.index(marker)
+              next_start = text.find("\nfn ", start + len(marker))
+              if next_start < 0:
+                  next_start = len(text)
+              block = text[start:next_start]
+              first = "    statement\n        .query_map"
+              suffix = "        .collect::<rusqlite::Result<Vec<_>>>()\n        .map_err(Into::into)"
+              if block.count(first) != 1 or block.count(suffix) != 1:
+                  raise SystemExit(f"unexpected query shape in {name}")
+              block = block.replace(first, "    let values = statement\n        .query_map", 1)
+              block = block.replace(
+                  suffix,
+                  "        .collect::<rusqlite::Result<Vec<_>>>()?;\n    Ok(values)",
+                  1,
+              )
+              text = text[:start] + block + text[next_start:]
+
+          old = "        step.job.causation_id = previous_job_id.clone();\n        step.job.expires_minutes = step.job.expires_minutes.min(request.expires_minutes);"
+          new = "        step.job.causation_id = previous_job_id.clone();\n        step.job.priority = Some(5);\n        step.job.expires_minutes = step.job.expires_minutes.min(request.expires_minutes);"
+          if text.count(old) != 1:
+              raise SystemExit("unexpected runtime plan priority shape")
+          text = text.replace(old, new, 1)
+
+          old = '''    ensure!(
+              tool.allowed_job_types
+                  .iter()
+                  .any(|value| value == &job.job_type),
+              "runtime tool does not allow this job type"
+          );
+          enforce_tool_restrictions(&row.9, &tool.adapter_key)?;'''
+          new = '''    ensure!(
+              tool.allowed_job_types
+                  .iter()
+                  .any(|value| value == &job.job_type),
+              "runtime tool does not allow this job type"
+          );
+          ensure!(
+              job.max_execution_seconds <= tool.max_execution_seconds,
+              "runtime job execution limit exceeds the tool catalog limit"
+          );
+          enforce_tool_restrictions(&row.9, &tool.adapter_key)?;'''
+          if text.count(old) != 1:
+              raise SystemExit("unexpected runtime execution-limit shape")
+          text = text.replace(old, new, 1)
+
+          old = "use std::{collections::BTreeSet, sync::Arc, time::Duration as StdDuration};"
+          new = "use std::{sync::Arc, time::Duration as StdDuration};"
+          if text.count(old) != 1:
+              raise SystemExit("unexpected BTreeSet import shape")
+          text = text.replace(old, new, 1)
+
+          old = "mod tests {\n    use super::*;"
+          new = "mod tests {\n    use super::*;\n    use std::collections::BTreeSet;"
+          if text.count(old) != 1:
+              raise SystemExit("unexpected test module shape")
+          text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding="utf-8")
+          '@ | python -
+          cargo fmt --all
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/homeserver-service/src/app/wrapper_runtime.rs
+          git commit -m "Repair Phase 17 native runtime compilation"
+          git push origin HEAD:feature/phase-17-authorized-agent-tool-runtime
