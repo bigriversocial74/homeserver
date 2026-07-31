@@ -659,9 +659,12 @@ pub async fn integration_snapshot(state: Arc<AppState>) -> Result<AgentIntegrati
         .await
         .context("site integration snapshot task failed")??
     };
-    let dismissed = {
+    let (dismissed, last_user_prompt_at_utc) = {
         let connection = state.connection()?;
-        dismissed_prompt_keys(&connection)?
+        (
+            dismissed_prompt_keys(&connection)?,
+            last_user_prompt_at_utc(&connection)?,
+        )
     };
     let guidance = build_guidance(
         &health,
@@ -671,6 +674,7 @@ pub async fn integration_snapshot(state: Arc<AppState>) -> Result<AgentIntegrati
         &clouds,
         &backups,
         &integrations,
+        last_user_prompt_at_utc.as_deref(),
     );
     let active_prompt = guidance
         .iter()
@@ -1039,6 +1043,7 @@ fn build_guidance(
     clouds: &cloud_registry::CloudConnectionsSnapshot,
     backups: &microgifter_homeserver_core::BackupCatalog,
     integrations: &[SiteIntegrationSummary],
+    last_user_prompt_at_utc: Option<&str>,
 ) -> Vec<AgentGuidanceItem> {
     let mut items = Vec::new();
     let service_ready = health
@@ -1135,11 +1140,11 @@ fn build_guidance(
             65,
         ));
     }
-    if items.is_empty() {
+    if items.is_empty() && daily_brief_due(last_user_prompt_at_utc) {
         items.push(guidance(
             "daily_brief",
-            "Your HomeServer is ready",
-            "Ask for a daily brief across system health, Knowledge Vault, connected sites, goals, schedules, approvals, and recent activity.",
+            "Your HomeServer daily brief is ready",
+            "Review system health, Knowledge Vault, connected sites, goals, schedules, approvals, and recent activity in one conversation.",
             "Start daily brief",
             "agent:prompt:Give me my HomeServer daily brief.",
             10,
@@ -1353,6 +1358,33 @@ fn map_integration_record(row: &Row<'_>) -> rusqlite::Result<IntegrationRecord> 
         credential_key: row.get(13)?,
         pending_expires_at_utc: row.get(15)?,
     })
+}
+
+fn last_user_prompt_at_utc(connection: &Connection) -> Result<Option<String>> {
+    connection
+        .query_row(
+            "SELECT last_user_prompt_at_utc FROM agent_engagement_state WHERE singleton_id=1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
+}
+
+pub fn record_user_engagement(state: &AppState) -> Result<()> {
+    let now = now_string();
+    state.connection()?.execute(
+        "UPDATE agent_engagement_state SET last_user_prompt_at_utc=?1,onboarding_completed_at_utc=COALESCE(onboarding_completed_at_utc,?1),engagement_revision=engagement_revision+1,updated_at_utc=?1 WHERE singleton_id=1",
+        params![now],
+    )?;
+    Ok(())
+}
+
+fn daily_brief_due(last_user_prompt_at_utc: Option<&str>) -> bool {
+    last_user_prompt_at_utc
+        .and_then(|value| parse_time(value).ok())
+        .map_or(true, |value| {
+            value <= Utc::now() - ChronoDuration::hours(18)
+        })
 }
 
 fn dismissed_prompt_keys(connection: &Connection) -> Result<Vec<String>> {

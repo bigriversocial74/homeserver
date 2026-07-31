@@ -16,6 +16,7 @@ let modelTestResult = null;
 let mcpSnapshot = null;
 let mcpCredential = null;
 let mcpBridgePath = null;
+let agentIntegrationSnapshot = null;
 let notice = null;
 let busy = false;
 let activePage = window.location.hash.replace("#", "") || "dashboard";
@@ -171,6 +172,8 @@ function notificationItems() {
   if (!lastBackup()) items.push({ tone: "warning", icon: "backup", title: "No protected backup yet", detail: "Create a verified local recovery point.", page: "backups" });
   if (modelSnapshot?.runtime?.state !== "running") items.push({ tone: "warning", icon: "model", title: "Model runtime is offline", detail: "Open Model Center to install or start Ollama.", page: "models" });
   if (updateDisplayState() === "not_configured") items.push({ tone: "info", icon: "update", title: "Release channel setup needed", detail: "Configure the signed HomeServer update source.", page: "system" });
+  const agentPrompt = agentIntegrationSnapshot?.active_prompt;
+  if (agentPrompt) items.push({ tone: "info", icon: "integrations", title: agentPrompt.title, detail: agentPrompt.message, page: "agent" });
   if (!items.length) items.push({ tone: "success", icon: "shield", title: "HomeServer is healthy", detail: "No active system alerts require attention.", page: "dashboard" });
   return items;
 }
@@ -1102,9 +1105,10 @@ async function loadAll(clearNotice = true) {
     invoke("homeserver_models"),
     invoke("homeserver_mcp"),
     invoke("homeserver_mcp_bridge_path"),
+    invoke("homeserver_agent_integrations"),
     invoke("control_center_autostart_enabled"),
   ]);
-  if (results[9].status === "fulfilled") desktopAutostartEnabled = Boolean(results[9].value);
+  if (results[10].status === "fulfilled") desktopAutostartEnabled = Boolean(results[10].value);
   if (results[0].status === "rejected") {
     statusSnapshot = null;
     if (activePage === "agent") {
@@ -1132,6 +1136,7 @@ async function loadAll(clearNotice = true) {
   modelSnapshot = results[6].status === "fulfilled" ? results[6].value : modelSnapshot;
   mcpSnapshot = results[7].status === "fulfilled" ? results[7].value : mcpSnapshot;
   mcpBridgePath = results[8].status === "fulfilled" ? results[8].value : mcpBridgePath;
+  agentIntegrationSnapshot = results[9].status === "fulfilled" ? results[9].value : agentIntegrationSnapshot;
 
   const health = {
     service: "online",

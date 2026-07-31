@@ -788,6 +788,7 @@ async fn handle_prompt(
             "actor_id": actor_id,
         }),
     )?;
+    agent_integrations::record_user_engagement(&state)?;
 
     let cloud_snapshot = {
         let cloud_state = state.clone();
