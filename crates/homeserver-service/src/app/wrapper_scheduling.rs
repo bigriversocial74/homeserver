@@ -12,7 +12,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, sync::Arc, time::Duration as StdDuration};
+use std::{sync::Arc, time::Duration as StdDuration};
 use tokio::sync::watch;
 use tracing::{error, warn};
 use uuid::Uuid;
@@ -62,6 +62,13 @@ struct ApiError {
 }
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
+type NormalizedTrigger = (
+    Option<String>,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScheduleSummary {
@@ -262,7 +269,6 @@ struct ScheduleRecord {
     wrapper_id: String,
     connection_id: String,
     connection_authority_revision: i64,
-    created_by_user_id: String,
     state: String,
     trigger_kind: String,
     run_at_utc: Option<String>,
@@ -285,11 +291,9 @@ struct ScheduleRecord {
 #[derive(Debug, Clone)]
 struct RunRecord {
     run_id: String,
-    schedule_id: String,
     trigger_kind: String,
     trigger_token: String,
     event_id: Option<String>,
-    scheduled_for_utc: String,
     authority_hash: String,
     template_hash: String,
 }
@@ -389,7 +393,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/agent-schedules/pause", post(pause_schedule_handler))
         .route("/v1/agent-schedules/resume", post(resume_schedule_handler))
         .route("/v1/agent-schedules/cancel", post(cancel_schedule_handler))
-        .route("/v1/agent-schedules/events/record", post(record_event_handler))
+        .route(
+            "/v1/agent-schedules/events/record",
+            post(record_event_handler),
+        )
         .route("/v1/agent-schedules/run-once", post(run_once_handler))
         .layer(DefaultBodyLimit::max(MAX_CONTROL_BODY_BYTES))
         .with_state(state)
@@ -523,12 +530,7 @@ fn create_schedule(state: &AppState, mut request: CreateScheduleRequest) -> Resu
         (1..=525_600).contains(&request.expires_minutes),
         "schedule expiration must be between one minute and one year"
     );
-    let actor = bounded_text(
-        &request.created_by_user_id,
-        1,
-        160,
-        "created-by user ID",
-    )?;
+    let actor = bounded_text(&request.created_by_user_id, 1, 160, "created-by user ID")?;
     let title = bounded_text(&request.title, 1, 180, "schedule title")?;
     let description = bounded_text(&request.description, 0, 2000, "schedule description")?;
     let agent_id = validate_uuid(&request.plan_template.agent_id, "agent ID")?;
@@ -552,7 +554,9 @@ fn create_schedule(state: &AppState, mut request: CreateScheduleRequest) -> Resu
         debounce_seconds <= 86_400,
         "schedule debounce cannot exceed one day"
     );
-    let max_runs = request.max_runs.unwrap_or(if trigger_kind == "one_time" { 1 } else { 1000 });
+    let max_runs = request
+        .max_runs
+        .unwrap_or(if trigger_kind == "one_time" { 1 } else { 1000 });
     ensure!(
         (1..=100_000).contains(&max_runs),
         "schedule max runs is invalid"
@@ -623,7 +627,7 @@ fn create_schedule(state: &AppState, mut request: CreateScheduleRequest) -> Resu
     let authority_hash = hash_text(&authority_json);
     let template_json = canonical_json(&request.plan_template)?;
     ensure!(
-        template_json.as_bytes().len() <= MAX_TEMPLATE_BYTES,
+        template_json.len() <= MAX_TEMPLATE_BYTES,
         "schedule private plan template exceeds the size limit"
     );
     let template_hash = hash_text(&template_json);
@@ -663,12 +667,17 @@ fn create_schedule(state: &AppState, mut request: CreateScheduleRequest) -> Resu
     )?;
     transaction.execute(
         "INSERT INTO agent_schedule_private_templates (schedule_id,classification,template_json,template_bytes,created_at_utc) VALUES (?1,'private',?2,?3,?4)",
-        params![schedule_id, template_json, template_json.as_bytes().len() as i64, now_text],
+        params![schedule_id, template_json, template_json.len() as i64, now_text],
     )?;
     if trigger_kind == "event" {
+        let current_event_sequence: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(event_sequence),0) FROM agent_schedule_event_inbox",
+            [],
+            |row| row.get(0),
+        )?;
         transaction.execute(
-            "INSERT INTO agent_schedule_cursors (schedule_id,last_event_sequence,updated_at_utc) VALUES (?1,0,?2)",
-            params![schedule_id, now_text],
+            "INSERT INTO agent_schedule_cursors (schedule_id,last_event_sequence,updated_at_utc) VALUES (?1,?2,?3)",
+            params![schedule_id, current_event_sequence, now_text],
         )?;
     }
     record_audit_tx(
@@ -696,7 +705,7 @@ fn normalize_trigger(
     trigger_kind: &str,
     now: DateTime<Utc>,
     expires_at: DateTime<Utc>,
-) -> Result<(Option<String>, Option<i64>, Option<String>, Option<String>, Option<String>)> {
+) -> Result<NormalizedTrigger> {
     match trigger_kind {
         "one_time" => {
             let value = trigger
@@ -784,6 +793,7 @@ fn capture_authority(
         params![agent_id, connection_id, now],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
     )?;
+    ensure_no_emergency_stop(connection, agent_id, &row.3, connection_id, &now)?;
     let mut bindings = Vec::with_capacity(steps.len());
     for (index, step) in steps.iter().enumerate() {
         let binding: (String, i64, String, i64, String, i64) = connection.query_row(
@@ -835,8 +845,8 @@ fn capture_authority(
 }
 
 fn revalidate_authority(connection: &Connection, schedule: &ScheduleRecord) -> Result<()> {
-    let document: AuthorityDocument =
-        serde_json::from_str(&schedule.authority_json).context("schedule authority snapshot is invalid")?;
+    let document: AuthorityDocument = serde_json::from_str(&schedule.authority_json)
+        .context("schedule authority snapshot is invalid")?;
     ensure!(
         hash_text(&schedule.authority_json) == schedule.authority_hash,
         "schedule authority snapshot hash changed"
@@ -870,6 +880,13 @@ fn revalidate_authority(connection: &Connection, schedule: &ScheduleRecord) -> R
         authority_count == 1,
         "schedule agent, assignment, or connection authority changed"
     );
+    ensure_no_emergency_stop(
+        connection,
+        &schedule.agent_id,
+        &schedule.wrapper_id,
+        &schedule.connection_id,
+        &now,
+    )?;
     for binding in &document.bindings {
         let count: i64 = connection.query_row(
             "SELECT COUNT(*) FROM agent_capability_bindings b JOIN wrapper_capability_grants g ON g.grant_id=b.grant_id JOIN agent_execution_policies p ON p.policy_id=?1 WHERE b.binding_id=?2 AND b.assignment_id=?3 AND b.grant_id=?4 AND b.grant_revision=?5 AND b.capability_key=?6 AND b.state='active' AND b.expires_at_utc>?11 AND g.connection_id=?7 AND g.wrapper_id=?8 AND g.grant_revision=?9 AND g.state='active' AND g.not_before_utc<=?11 AND g.expires_at_utc>?11 AND p.agent_id=?12 AND p.policy_revision=?10 AND p.action_type=?13 AND p.state='active' AND p.not_before_utc<=?11 AND p.expires_at_utc>?11 AND EXISTS (SELECT 1 FROM json_each(b.allowed_operations_json) WHERE value=?14) AND EXISTS (SELECT 1 FROM json_each(g.allowed_operations_json) WHERE value=?14)",
@@ -899,8 +916,34 @@ fn revalidate_authority(connection: &Connection, schedule: &ScheduleRecord) -> R
     Ok(())
 }
 
+fn ensure_no_emergency_stop(
+    connection: &Connection,
+    agent_id: &str,
+    wrapper_id: &str,
+    connection_id: &str,
+    now: &str,
+) -> Result<()> {
+    let active_stops: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM agent_emergency_stops WHERE state='active' AND (expires_at_utc IS NULL OR expires_at_utc>?4) AND (scope_type='global' OR (scope_type='agent' AND agent_id=?1) OR (scope_type='wrapper' AND wrapper_id=?2) OR (scope_type='connection' AND connection_id=?3))",
+        params![agent_id, wrapper_id, connection_id, now],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        active_stops == 0,
+        "schedule authority is blocked by an active emergency stop"
+    );
+    Ok(())
+}
+
 fn pause_schedule(state: &AppState, request: ScheduleReferenceRequest) -> Result<()> {
-    mutate_schedule_state(state, request, "PAUSE SCHEDULE", "active", "paused", "schedule_paused")
+    mutate_schedule_state(
+        state,
+        request,
+        "PAUSE SCHEDULE",
+        "active",
+        "paused",
+        "schedule_paused",
+    )
 }
 
 fn resume_schedule(state: &AppState, request: ScheduleReferenceRequest) -> Result<()> {
@@ -951,7 +994,8 @@ fn resume_schedule(state: &AppState, request: ScheduleReferenceRequest) -> Resul
         "authority_revalidated",
         json!({"reason": reason}),
     )?;
-    transaction.commit()
+    transaction.commit()?;
+    Ok(())
 }
 
 fn cancel_schedule(state: &AppState, request: ScheduleReferenceRequest) -> Result<()> {
@@ -994,7 +1038,8 @@ fn cancel_schedule(state: &AppState, request: ScheduleReferenceRequest) -> Resul
         "cancelled_by_authority",
         json!({"reason": reason}),
     )?;
-    transaction.commit()
+    transaction.commit()?;
+    Ok(())
 }
 
 fn mutate_schedule_state(
@@ -1031,7 +1076,8 @@ fn mutate_schedule_state(
         event_type,
         json!({"reason": reason}),
     )?;
-    transaction.commit()
+    transaction.commit()?;
+    Ok(())
 }
 
 fn record_safe_event(state: &AppState, request: RecordSafeEventRequest) -> Result<String> {
@@ -1041,12 +1087,16 @@ fn record_safe_event(state: &AppState, request: RecordSafeEventRequest) -> Resul
         &["wrapper", "runtime", "orchestration", "cloud", "system"],
         "event source type",
     )?;
+    ensure!(
+        source_type == expected_source_type(&topic)?,
+        "safe event source type does not match its topic"
+    );
     let source_id = bounded_text(&request.source_id, 1, 180, "event source ID")?;
     let event_key = bounded_text(&request.event_key, 1, 240, "event key")?;
-    ensure_safe_metadata(&request.safe_metadata)?;
+    ensure_safe_metadata(&topic, &request.safe_metadata)?;
     let metadata_json = canonical_json(&request.safe_metadata)?;
     ensure!(
-        metadata_json.as_bytes().len() <= MAX_SAFE_EVENT_BYTES,
+        metadata_json.len() <= MAX_SAFE_EVENT_BYTES,
         "safe event metadata exceeds the size limit"
     );
     let occurred_at = request
@@ -1126,7 +1176,9 @@ fn process_cycle(state: &AppState) -> Result<usize> {
             "SELECT run_id FROM agent_schedule_runs WHERE state='queued' ORDER BY created_at_utc,run_id LIMIT ?1",
         )?;
         let rows = statement
-            .query_map(params![MAX_RUNS_PER_CYCLE as i64], |row| row.get::<_, String>(0))?
+            .query_map(params![MAX_RUNS_PER_CYCLE as i64], |row| {
+                row.get::<_, String>(0)
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows
     };
@@ -1208,11 +1260,19 @@ fn queue_time_trigger(connection: &Connection, schedule_id: &str) -> Result<()> 
             "misfire_skipped",
             None,
         )?;
-        advance_time_schedule(connection, &schedule, now)?;
+        if schedule.trigger_kind == "one_time" {
+            complete_schedule(connection, &schedule.schedule_id, "misfire_skipped")?;
+        } else {
+            advance_time_schedule(connection, &schedule, now)?;
+        }
         return Ok(());
     }
     if handle_overlap(connection, &schedule, None, &scheduled_for)? {
-        advance_time_schedule(connection, &schedule, now)?;
+        if schedule.trigger_kind == "one_time" {
+            complete_schedule(connection, &schedule.schedule_id, "overlap_skipped")?;
+        } else {
+            advance_time_schedule(connection, &schedule, now)?;
+        }
         return Ok(());
     }
     create_queued_run(connection, &schedule, None, &scheduled_for)?;
@@ -1231,7 +1291,9 @@ fn advance_time_schedule(
         )?;
         return Ok(());
     }
-    let seconds = schedule.interval_seconds.context("interval schedule is missing interval")?;
+    let seconds = schedule
+        .interval_seconds
+        .context("interval schedule is missing interval")?;
     let current = parse_utc(
         schedule
             .next_fire_at_utc
@@ -1253,7 +1315,9 @@ fn queue_event_runs(connection: &Connection) -> Result<()> {
             "SELECT schedule_id FROM agent_schedule_definitions WHERE state='active' AND trigger_kind='event' ORDER BY updated_at_utc,schedule_id LIMIT ?1",
         )?;
         let rows = statement
-            .query_map(params![MAX_RUNS_PER_CYCLE as i64], |row| row.get::<_, String>(0))?
+            .query_map(params![MAX_RUNS_PER_CYCLE as i64], |row| {
+                row.get::<_, String>(0)
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows
     };
@@ -1332,12 +1396,20 @@ fn handle_overlap_tx(
     event_id: Option<&str>,
     scheduled_for: &str,
 ) -> Result<bool> {
-    let active: i64 = transaction.query_row(
-        "SELECT COUNT(*) FROM agent_schedule_runs WHERE schedule_id=?1 AND state IN ('queued','creating_plan')",
+    let creating: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM agent_schedule_runs WHERE schedule_id=?1 AND state='creating_plan'",
         params![schedule.schedule_id],
         |row| row.get(0),
     )?;
-    if active == 0 {
+    let queued: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM agent_schedule_runs WHERE schedule_id=?1 AND state='queued'",
+        params![schedule.schedule_id],
+        |row| row.get(0),
+    )?;
+    if creating == 0 && queued == 0 {
+        return Ok(false);
+    }
+    if schedule.overlap_policy == "queue_one" && creating > 0 && queued == 0 {
         return Ok(false);
     }
     let code = if schedule.overlap_policy == "queue_one" {
@@ -1491,11 +1563,9 @@ fn create_terminal_run_tx(
         schedule,
         &RunRecord {
             run_id: run_id.clone(),
-            schedule_id: schedule.schedule_id.clone(),
             trigger_kind: schedule.trigger_kind.clone(),
             trigger_token: trigger,
             event_id: event_id.map(str::to_owned),
-            scheduled_for_utc: scheduled_for.to_owned(),
             authority_hash: schedule.authority_hash.clone(),
             template_hash: schedule.template_hash.clone(),
         },
@@ -1537,10 +1607,7 @@ fn process_queued_run(state: &AppState, run_id: &str) -> Result<()> {
     };
     let result = (|| -> Result<(String, String)> {
         let connection = state.connection()?;
-        ensure!(
-            schedule.state == "active",
-            "schedule is no longer active"
-        );
+        ensure!(schedule.state == "active", "schedule is no longer active");
         ensure!(
             parse_utc(&schedule.expires_at_utc, "schedule expiration")? > Utc::now(),
             "schedule expired before plan creation"
@@ -1553,13 +1620,18 @@ fn process_queued_run(state: &AppState, run_id: &str) -> Result<()> {
         let mut plan: wrapper_runtime::CreateRuntimePlanRequest =
             serde_json::from_str(&template_json).context("schedule plan template is invalid")?;
         plan.requested_by_user_id = format!("agent_scheduler:{run_id}");
-        plan.expires_minutes = plan.expires_minutes.min(
-            remaining_minutes(&schedule.expires_at_utc)?.clamp(1, 10_080) as u32,
-        );
+        plan.expires_minutes = plan
+            .expires_minutes
+            .min(remaining_minutes(&schedule.expires_at_utc)?.clamp(1, 10_080) as u32);
         for (index, step) in plan.steps.iter_mut().enumerate() {
             step.job.idempotency_key = format!(
                 "schedule-{}",
-                hash_text(&format!("{}:{}:{}", schedule.schedule_id, run.trigger_token, index + 1))
+                hash_text(&format!(
+                    "{}:{}:{}",
+                    schedule.schedule_id,
+                    run.trigger_token,
+                    index + 1
+                ))
             );
             step.job.submitted_by_type = "agent".to_owned();
             step.job.submitted_by_id = schedule.agent_id.clone();
@@ -1570,6 +1642,27 @@ fn process_queued_run(state: &AppState, run_id: &str) -> Result<()> {
             step.job.plan_hash = None;
         }
         let plan_id = wrapper_runtime::create_plan(state, plan)?;
+        let post_creation_authority = (|| -> Result<()> {
+            let connection = state.connection()?;
+            let current_schedule = read_schedule(&connection, &schedule.schedule_id)?;
+            ensure!(
+                current_schedule.state == "active",
+                "schedule changed during runtime plan creation"
+            );
+            revalidate_authority(&connection, &current_schedule)
+        })();
+        if let Err(error) = post_creation_authority {
+            wrapper_runtime::cancel_plan_as_system(
+                state,
+                wrapper_runtime::RuntimePlanReferenceRequest {
+                    plan_id: plan_id.clone(),
+                    actor_user_id: SCHEDULER_ACTOR.to_owned(),
+                    confirmation: format!("CANCEL PLAN {plan_id}"),
+                    reason: "schedule authority changed during plan creation".to_owned(),
+                },
+            )?;
+            return Err(error).context("schedule authority changed during plan creation");
+        }
         let connection = state.connection()?;
         let plan_hash: String = connection.query_row(
             "SELECT plan_hash FROM agent_runtime_plans WHERE plan_id=?1",
@@ -1579,9 +1672,17 @@ fn process_queued_run(state: &AppState, run_id: &str) -> Result<()> {
         Ok((plan_id, plan_hash))
     })();
     match result {
-        Ok((plan_id, plan_hash)) => finalize_run_success(state, &schedule, &run, &plan_id, &plan_hash),
+        Ok((plan_id, plan_hash)) => {
+            finalize_run_success(state, &schedule, &run, &plan_id, &plan_hash)
+        }
         Err(error) => {
-            finalize_run_failure(state, &schedule, &run, "schedule_authority_or_plan_failed", &error)?;
+            finalize_run_failure(
+                state,
+                &schedule,
+                &run,
+                "schedule_authority_or_plan_failed",
+                &error,
+            )?;
             Err(error)
         }
     }
@@ -1630,7 +1731,8 @@ fn finalize_run_success(
             "phase18_supervision_required": true
         }),
     )?;
-    transaction.commit()
+    transaction.commit()?;
+    Ok(())
 }
 
 fn finalize_run_failure(
@@ -1657,7 +1759,7 @@ fn finalize_run_failure(
         None,
     )?;
     transaction.execute(
-        "UPDATE agent_schedule_definitions SET state='failed',next_fire_at_utc=NULL,failure_code=?1,completed_at_utc=?2,updated_at_utc=?2 WHERE schedule_id=?3",
+        "UPDATE agent_schedule_definitions SET state='failed',next_fire_at_utc=NULL,failure_code=?1,completed_at_utc=?2,updated_at_utc=?2 WHERE schedule_id=?3 AND state='active'",
         params![failure_code, now, schedule.schedule_id],
     )?;
     record_audit_tx(
@@ -1671,7 +1773,8 @@ fn finalize_run_failure(
         failure_code,
         json!({"error_hash": hash_text(&error.to_string())}),
     )?;
-    transaction.commit()
+    transaction.commit()?;
+    Ok(())
 }
 
 fn write_receipt_tx(
@@ -1748,7 +1851,9 @@ fn reconcile_interrupted_runs(connection: &Connection) -> Result<()> {
             "SELECT run_id,schedule_id FROM agent_schedule_runs WHERE state='creating_plan'",
         )?;
         let rows = statement
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows
     };
@@ -1889,7 +1994,10 @@ fn snapshot(state: &AppState) -> Result<ScheduleSnapshot> {
         runs: read_runs(&connection)?,
         events: read_events(&connection)?,
         receipts: read_receipts(&connection)?,
-        allowed_event_topics: EVENT_TOPICS.iter().map(|value| (*value).to_owned()).collect(),
+        allowed_event_topics: EVENT_TOPICS
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect(),
         private_templates_exposed: false,
         private_event_payloads_exposed: false,
         direct_execution_allowed: false,
@@ -1902,10 +2010,10 @@ fn read_schedules(connection: &Connection) -> Result<Vec<ScheduleSummary>> {
     let mut statement = connection.prepare(
         "SELECT schedule_id,agent_id,agent_revision,assignment_id,assignment_revision,wrapper_id,connection_id,connection_authority_revision,created_by_user_id,title,description,state,trigger_kind,run_at_utc,interval_seconds,event_topic,event_source_id,misfire_policy,overlap_policy,debounce_seconds,max_runs,run_count,template_hash,authority_hash,next_fire_at_utc,last_fired_at_utc,expires_at_utc,failure_code,created_at_utc,updated_at_utc,completed_at_utc FROM agent_schedule_definitions ORDER BY updated_at_utc DESC,schedule_id DESC LIMIT 250",
     )?;
-    statement
+    let rows = statement
         .query_map([], schedule_summary_from_row)?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 fn schedule_summary_from_row(row: &Row<'_>) -> rusqlite::Result<ScheduleSummary> {
@@ -1924,7 +2032,9 @@ fn schedule_summary_from_row(row: &Row<'_>) -> rusqlite::Result<ScheduleSummary>
         state: row.get(11)?,
         trigger_kind: row.get(12)?,
         run_at_utc: row.get(13)?,
-        interval_seconds: row.get::<_, Option<i64>>(14)?.map(|value| value.max(0) as u32),
+        interval_seconds: row
+            .get::<_, Option<i64>>(14)?
+            .map(|value| value.max(0) as u32),
         event_topic: row.get(15)?,
         event_source_id: row.get(16)?,
         misfire_policy: row.get(17)?,
@@ -1948,7 +2058,7 @@ fn read_runs(connection: &Connection) -> Result<Vec<ScheduleRunSummary>> {
     let mut statement = connection.prepare(
         "SELECT run_id,schedule_id,trigger_kind,trigger_token,event_id,scheduled_for_utc,state,authority_hash,template_hash,plan_id,plan_hash,outcome,result_code,failure_code,created_at_utc,started_at_utc,completed_at_utc FROM agent_schedule_runs ORDER BY created_at_utc DESC,run_id DESC LIMIT 500",
     )?;
-    statement
+    let rows = statement
         .query_map([], |row| {
             Ok(ScheduleRunSummary {
                 run_id: row.get(0)?,
@@ -1970,15 +2080,15 @@ fn read_runs(connection: &Connection) -> Result<Vec<ScheduleRunSummary>> {
                 completed_at_utc: row.get(16)?,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 fn read_events(connection: &Connection) -> Result<Vec<SafeEventSummary>> {
     let mut statement = connection.prepare(
         "SELECT event_sequence,event_id,topic,source_type,source_id,event_key,safe_metadata_json,payload_hash,occurred_at_utc,received_at_utc FROM agent_schedule_event_inbox ORDER BY event_sequence DESC LIMIT 250",
     )?;
-    statement
+    let rows = statement
         .query_map([], |row| {
             let metadata: String = row.get(6)?;
             Ok(SafeEventSummary {
@@ -1994,15 +2104,15 @@ fn read_events(connection: &Connection) -> Result<Vec<SafeEventSummary>> {
                 received_at_utc: row.get(9)?,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 fn read_receipts(connection: &Connection) -> Result<Vec<ScheduleReceiptSummary>> {
     let mut statement = connection.prepare(
         "SELECT receipt_id,schedule_id,run_id,agent_id,assignment_id,wrapper_id,connection_id,trigger_kind,trigger_token,event_id,outcome,result_code,authority_hash,template_hash,plan_id,plan_hash,receipt_hash,completed_at_utc FROM agent_schedule_receipts ORDER BY completed_at_utc DESC,receipt_id DESC LIMIT 500",
     )?;
-    statement
+    let rows = statement
         .query_map([], |row| {
             Ok(ScheduleReceiptSummary {
                 receipt_id: row.get(0)?,
@@ -2025,14 +2135,14 @@ fn read_receipts(connection: &Connection) -> Result<Vec<ScheduleReceiptSummary>>
                 completed_at_utc: row.get(17)?,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 fn read_schedule(connection: &Connection, schedule_id: &str) -> Result<ScheduleRecord> {
     connection
         .query_row(
-            "SELECT schedule_id,agent_id,agent_revision,assignment_id,assignment_revision,wrapper_id,connection_id,connection_authority_revision,created_by_user_id,state,trigger_kind,run_at_utc,interval_seconds,event_topic,event_source_id,misfire_policy,overlap_policy,debounce_seconds,max_runs,run_count,template_hash,authority_snapshot_json,authority_hash,next_fire_at_utc,last_fired_at_utc,expires_at_utc FROM agent_schedule_definitions WHERE schedule_id=?1",
+            "SELECT schedule_id,agent_id,agent_revision,assignment_id,assignment_revision,wrapper_id,connection_id,connection_authority_revision,state,trigger_kind,run_at_utc,interval_seconds,event_topic,event_source_id,misfire_policy,overlap_policy,debounce_seconds,max_runs,run_count,template_hash,authority_snapshot_json,authority_hash,next_fire_at_utc,last_fired_at_utc,expires_at_utc FROM agent_schedule_definitions WHERE schedule_id=?1",
             params![schedule_id],
             schedule_record_from_row,
         )
@@ -2042,7 +2152,7 @@ fn read_schedule(connection: &Connection, schedule_id: &str) -> Result<ScheduleR
 fn read_schedule_tx(transaction: &Transaction<'_>, schedule_id: &str) -> Result<ScheduleRecord> {
     transaction
         .query_row(
-            "SELECT schedule_id,agent_id,agent_revision,assignment_id,assignment_revision,wrapper_id,connection_id,connection_authority_revision,created_by_user_id,state,trigger_kind,run_at_utc,interval_seconds,event_topic,event_source_id,misfire_policy,overlap_policy,debounce_seconds,max_runs,run_count,template_hash,authority_snapshot_json,authority_hash,next_fire_at_utc,last_fired_at_utc,expires_at_utc FROM agent_schedule_definitions WHERE schedule_id=?1",
+            "SELECT schedule_id,agent_id,agent_revision,assignment_id,assignment_revision,wrapper_id,connection_id,connection_authority_revision,state,trigger_kind,run_at_utc,interval_seconds,event_topic,event_source_id,misfire_policy,overlap_policy,debounce_seconds,max_runs,run_count,template_hash,authority_snapshot_json,authority_hash,next_fire_at_utc,last_fired_at_utc,expires_at_utc FROM agent_schedule_definitions WHERE schedule_id=?1",
             params![schedule_id],
             schedule_record_from_row,
         )
@@ -2059,31 +2169,30 @@ fn schedule_record_from_row(row: &Row<'_>) -> rusqlite::Result<ScheduleRecord> {
         wrapper_id: row.get(5)?,
         connection_id: row.get(6)?,
         connection_authority_revision: row.get(7)?,
-        created_by_user_id: row.get(8)?,
-        state: row.get(9)?,
-        trigger_kind: row.get(10)?,
-        run_at_utc: row.get(11)?,
-        interval_seconds: row.get(12)?,
-        event_topic: row.get(13)?,
-        event_source_id: row.get(14)?,
-        misfire_policy: row.get(15)?,
-        overlap_policy: row.get(16)?,
-        debounce_seconds: row.get(17)?,
-        max_runs: row.get(18)?,
-        run_count: row.get(19)?,
-        template_hash: row.get(20)?,
-        authority_json: row.get(21)?,
-        authority_hash: row.get(22)?,
-        next_fire_at_utc: row.get(23)?,
-        last_fired_at_utc: row.get(24)?,
-        expires_at_utc: row.get(25)?,
+        state: row.get(8)?,
+        trigger_kind: row.get(9)?,
+        run_at_utc: row.get(10)?,
+        interval_seconds: row.get(11)?,
+        event_topic: row.get(12)?,
+        event_source_id: row.get(13)?,
+        misfire_policy: row.get(14)?,
+        overlap_policy: row.get(15)?,
+        debounce_seconds: row.get(16)?,
+        max_runs: row.get(17)?,
+        run_count: row.get(18)?,
+        template_hash: row.get(19)?,
+        authority_json: row.get(20)?,
+        authority_hash: row.get(21)?,
+        next_fire_at_utc: row.get(22)?,
+        last_fired_at_utc: row.get(23)?,
+        expires_at_utc: row.get(24)?,
     })
 }
 
 fn read_run(connection: &Connection, run_id: &str) -> Result<RunRecord> {
     connection
         .query_row(
-            "SELECT run_id,schedule_id,trigger_kind,trigger_token,event_id,scheduled_for_utc,authority_hash,template_hash FROM agent_schedule_runs WHERE run_id=?1",
+            "SELECT run_id,trigger_kind,trigger_token,event_id,authority_hash,template_hash FROM agent_schedule_runs WHERE run_id=?1",
             params![run_id],
             run_record_from_row,
         )
@@ -2093,7 +2202,7 @@ fn read_run(connection: &Connection, run_id: &str) -> Result<RunRecord> {
 fn read_run_tx(transaction: &Transaction<'_>, run_id: &str) -> Result<RunRecord> {
     transaction
         .query_row(
-            "SELECT run_id,schedule_id,trigger_kind,trigger_token,event_id,scheduled_for_utc,authority_hash,template_hash FROM agent_schedule_runs WHERE run_id=?1",
+            "SELECT run_id,trigger_kind,trigger_token,event_id,authority_hash,template_hash FROM agent_schedule_runs WHERE run_id=?1",
             params![run_id],
             run_record_from_row,
         )
@@ -2103,13 +2212,11 @@ fn read_run_tx(transaction: &Transaction<'_>, run_id: &str) -> Result<RunRecord>
 fn run_record_from_row(row: &Row<'_>) -> rusqlite::Result<RunRecord> {
     Ok(RunRecord {
         run_id: row.get(0)?,
-        schedule_id: row.get(1)?,
-        trigger_kind: row.get(2)?,
-        trigger_token: row.get(3)?,
-        event_id: row.get(4)?,
-        scheduled_for_utc: row.get(5)?,
-        authority_hash: row.get(6)?,
-        template_hash: row.get(7)?,
+        trigger_kind: row.get(1)?,
+        trigger_token: row.get(2)?,
+        event_id: row.get(3)?,
+        authority_hash: row.get(4)?,
+        template_hash: row.get(5)?,
     })
 }
 
@@ -2137,7 +2244,8 @@ fn record_audit(
         detail_code,
         metadata,
     )?;
-    transaction.commit()
+    transaction.commit()?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2216,50 +2324,88 @@ fn remaining_minutes(expires_at: &str) -> Result<i64> {
         .max(1))
 }
 
-fn ensure_safe_metadata(value: &Value) -> Result<()> {
-    fn visit(value: &Value, keys: &mut BTreeSet<String>, depth: usize) -> Result<()> {
-        ensure!(depth <= 12, "safe event metadata is nested too deeply");
-        match value {
-            Value::Object(map) => {
-                ensure!(map.len() <= 128, "safe event metadata contains too many fields");
-                for (key, child) in map {
-                    let normalized = key.to_ascii_lowercase();
-                    ensure!(
-                        !FORBIDDEN_EVENT_KEYS
-                            .iter()
-                            .any(|forbidden| normalized.contains(forbidden)),
-                        "safe event metadata contains a forbidden private field"
-                    );
-                    keys.insert(normalized);
-                    visit(child, keys, depth + 1)?;
-                }
-            }
-            Value::Array(items) => {
-                ensure!(items.len() <= 128, "safe event metadata array is too large");
-                for child in items {
-                    visit(child, keys, depth + 1)?;
-                }
-            }
-            Value::String(text) => {
-                ensure!(
-                    text.chars().count() <= 1000,
-                    "safe event metadata string is too long"
-                );
-            }
-            Value::Null | Value::Bool(_) | Value::Number(_) => {}
-        }
-        Ok(())
+fn expected_source_type(topic: &str) -> Result<&'static str> {
+    match topic {
+        "wrapper.job.completed" => Ok("wrapper"),
+        "runtime.plan.completed" => Ok("runtime"),
+        "supervised.action.completed" => Ok("orchestration"),
+        "cloud.sync.completed" => Ok("cloud"),
+        _ => bail!("safe event topic has no source contract"),
     }
-    let mut keys = BTreeSet::new();
-    visit(value, &mut keys, 0)
+}
+
+fn allowed_safe_event_fields(topic: &str) -> Result<&'static [&'static str]> {
+    match topic {
+        "wrapper.job.completed" => Ok(&[
+            "job_id",
+            "connection_id",
+            "outcome",
+            "result_code",
+            "receipt_hash",
+        ]),
+        "runtime.plan.completed" => Ok(&[
+            "plan_id",
+            "agent_id",
+            "outcome",
+            "result_code",
+            "receipt_hash",
+        ]),
+        "supervised.action.completed" => Ok(&[
+            "checkpoint_id",
+            "proposal_id",
+            "outcome",
+            "result_code",
+            "receipt_hash",
+        ]),
+        "cloud.sync.completed" => Ok(&[
+            "connection_id",
+            "operation_type",
+            "outcome",
+            "result_code",
+            "receipt_hash",
+        ]),
+        _ => bail!("safe event topic has no metadata contract"),
+    }
+}
+
+fn ensure_safe_metadata(topic: &str, value: &Value) -> Result<()> {
+    let allowed = allowed_safe_event_fields(topic)?;
+    let object = value
+        .as_object()
+        .context("safe event metadata must be an object")?;
+    ensure!(
+        object.len() <= allowed.len(),
+        "safe event metadata contains too many fields"
+    );
+    for (key, child) in object {
+        let normalized = key.to_ascii_lowercase();
+        ensure!(
+            allowed.iter().any(|candidate| *candidate == normalized),
+            "safe event metadata field is not allowed for this topic"
+        );
+        ensure!(
+            !FORBIDDEN_EVENT_KEYS
+                .iter()
+                .any(|forbidden| normalized.contains(forbidden)),
+            "safe event metadata contains a forbidden private field"
+        );
+        match child {
+            Value::String(text) => ensure!(
+                text.chars().count() <= 500,
+                "safe event metadata string is too long"
+            ),
+            Value::Null | Value::Bool(_) | Value::Number(_) => {}
+            Value::Object(_) | Value::Array(_) => {
+                bail!("safe event metadata values must be primitive")
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_choice(value: &str, allowed: &[&str], label: &str) -> Result<String> {
     let value = bounded_text(value, 1, 160, label)?;
-    ensure!(
-        allowed.iter().any(|candidate| *candidate == value.as_str()),
-        "{label} is not allowed"
-    );
+    ensure!(allowed.contains(&value.as_str()), "{label} is not allowed");
     Ok(value)
 }
 

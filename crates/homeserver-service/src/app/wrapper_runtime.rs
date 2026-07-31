@@ -130,14 +130,14 @@ pub struct RuntimeSnapshot {
     pub phase16e_egress_required: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RuntimePlanStepRequest {
     pub tool_key: String,
     pub action_type: String,
     pub job: wrapper_jobs::SubmitJobRequest,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CreateRuntimePlanRequest {
     pub agent_id: String,
     pub requested_by_user_id: String,
@@ -622,7 +622,22 @@ fn mark_plan_build_failed(
     )
 }
 
-fn cancel_plan(state: &AppState, request: RuntimePlanReferenceRequest) -> Result<()> {
+pub(crate) fn cancel_plan(state: &AppState, request: RuntimePlanReferenceRequest) -> Result<()> {
+    cancel_plan_with_actor(state, request, "local_user")
+}
+
+pub(crate) fn cancel_plan_as_system(
+    state: &AppState,
+    request: RuntimePlanReferenceRequest,
+) -> Result<()> {
+    cancel_plan_with_actor(state, request, "system")
+}
+
+fn cancel_plan_with_actor(
+    state: &AppState,
+    request: RuntimePlanReferenceRequest,
+    actor_type: &'static str,
+) -> Result<()> {
     let plan_id = validate_uuid(&request.plan_id, "plan ID")?;
     let actor = bounded_text(&request.actor_user_id, 1, 160, "actor user ID")?;
     let reason = bounded_text(&request.reason, 1, 500, "cancellation reason")?;
@@ -662,7 +677,7 @@ fn cancel_plan(state: &AppState, request: RuntimePlanReferenceRequest) -> Result
             agent_id: Some(&agent_id),
             event_type: "agent.runtime_plan_cancelled",
             outcome: "warning",
-            actor_type: "local_user",
+            actor_type,
             actor_id: &actor,
             detail_code: "cancelled_by_authority",
             metadata: json!({"reason": reason}),

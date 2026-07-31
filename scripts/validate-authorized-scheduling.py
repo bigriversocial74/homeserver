@@ -122,3 +122,46 @@ if "DELETE FROM agent_schedule_audit_events" in source:
     raise SystemExit("schedule audit events have a deletion path")
 
 print("Phase 19 authorized scheduling validation passed")
+
+
+for required in (
+    "SELECT COALESCE(MAX(event_sequence),0)",
+    "safe event source type does not match its topic",
+    "safe event metadata field is not allowed for this topic",
+    "safe event metadata values must be primitive",
+    "schedule changed during runtime plan creation",
+    "wrapper_runtime::cancel_plan",
+):
+    if required not in source:
+        raise SystemExit(f"missing Phase 19 hostile-review repair: {required}")
+if "VALUES (?1,0,?2)" in source:
+    raise SystemExit("event schedules replay pre-creation events")
+queue_one_block = source[source.index("fn handle_overlap_tx("):source.index("fn create_queued_run(")]
+if "creating > 0 && queued == 0" not in queue_one_block:
+    raise SystemExit("queue_one does not preserve one deferred run")
+if source.count("complete_schedule(connection, &schedule.schedule_id") < 2:
+    raise SystemExit("one-time skipped schedules do not terminate cleanly")
+
+
+for required in (
+    "schedule authority is blocked by an active emergency stop",
+    "wrapper_runtime::cancel_plan_as_system",
+):
+    if required not in source:
+        raise SystemExit(f"missing Phase 19 emergency or cancellation authority: {required}")
+if "pub(crate) fn cancel_plan_as_system" not in runtime:
+    raise SystemExit("runtime does not expose a system-only cancellation path")
+
+
+for immutable_trigger in (
+    "trg_agent_schedule_definitions_immutable_fields",
+    "trg_agent_schedule_definitions_no_delete",
+    "trg_agent_schedule_private_templates_no_update",
+    "trg_agent_schedule_private_templates_no_delete",
+    "trg_agent_schedule_runs_terminal_no_update",
+    "trg_agent_schedule_runs_no_delete",
+):
+    if immutable_trigger not in migration:
+        raise SystemExit(f"missing Phase 19 immutable storage trigger: {immutable_trigger}")
+if "WHERE schedule_id=?3 AND state='active'" not in source:
+    raise SystemExit("schedule cancellation or pause can be overwritten by a failed plan creation")

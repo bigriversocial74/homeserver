@@ -10,8 +10,9 @@ const JOB_AUTHORITY_MIGRATION: &str =
     include_str!("../../../database/migrations/0022a_wrapper_job_authority_snapshots.sql");
 const AGENT_MIGRATION: &str =
     include_str!("../../../database/migrations/0023_wrapper_agents_and_action_approvals.sql");
+const VAULT_MIGRATION: &str = include_str!("../../../database/migrations/0005_knowledge_vault.sql");
 const PRIVACY_MIGRATION: &str =
-    include_str!("../../../database/migrations/0024_private_context_and_result_egress.sql");
+    include_str!("../../../database/migrations/0024_private_knowledge_boundary.sql");
 const RUNTIME_MIGRATION: &str =
     include_str!("../../../database/migrations/0025_authorized_agent_tool_runtime.sql");
 const ORCHESTRATION_MIGRATION: &str =
@@ -38,12 +39,15 @@ fn initialize_contract_database() -> Connection {
         JOB_MIGRATION,
         JOB_AUTHORITY_MIGRATION,
         AGENT_MIGRATION,
+        VAULT_MIGRATION,
         PRIVACY_MIGRATION,
         RUNTIME_MIGRATION,
         ORCHESTRATION_MIGRATION,
         SCHEDULING_MIGRATION,
     ] {
-        connection.execute_batch(migration).expect("apply contract migration");
+        connection
+            .execute_batch(migration)
+            .expect("apply contract migration");
     }
     connection
 }
@@ -87,6 +91,12 @@ fn migration_registers_authorized_scheduler_contract() {
         "trg_agent_schedule_receipts_no_delete",
         "trg_agent_schedule_audit_no_update",
         "trg_agent_schedule_audit_no_delete",
+        "trg_agent_schedule_definitions_immutable_fields",
+        "trg_agent_schedule_definitions_no_delete",
+        "trg_agent_schedule_private_templates_no_update",
+        "trg_agent_schedule_private_templates_no_delete",
+        "trg_agent_schedule_runs_terminal_no_update",
+        "trg_agent_schedule_runs_no_delete",
     ] {
         let count: i64 = connection
             .query_row(
@@ -197,6 +207,12 @@ fn immutable_schedule_evidence_rejects_update_and_delete() {
         "DELETE FROM agent_schedule_receipts WHERE receipt_id='88888888-8888-4888-8888-888888888888'",
         "UPDATE agent_schedule_audit_events SET detail_code='changed' WHERE audit_event_id='99999999-9999-4999-8999-999999999999'",
         "DELETE FROM agent_schedule_audit_events WHERE audit_event_id='99999999-9999-4999-8999-999999999999'",
+        "UPDATE agent_schedule_definitions SET authority_hash='dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' WHERE schedule_id='11111111-1111-4111-8111-111111111111'",
+        "DELETE FROM agent_schedule_definitions WHERE schedule_id='11111111-1111-4111-8111-111111111111'",
+        r#"UPDATE agent_schedule_private_templates SET template_json='{"changed":true}' WHERE schedule_id='11111111-1111-4111-8111-111111111111'"#,
+        "DELETE FROM agent_schedule_private_templates WHERE schedule_id='11111111-1111-4111-8111-111111111111'",
+        "UPDATE agent_schedule_runs SET result_code='changed' WHERE run_id='77777777-7777-4777-8777-777777777777'",
+        "DELETE FROM agent_schedule_runs WHERE run_id='77777777-7777-4777-8777-777777777777'",
     ] {
         assert!(connection.execute(sql, []).is_err(), "{sql} must fail");
     }
@@ -222,6 +238,16 @@ fn scheduler_preserves_phase_16_through_18_authority_boundaries() {
         "reconcile_interrupted_runs",
         "runtime_plan_recovered",
         "retention requires archival",
+        "SELECT COALESCE(MAX(event_sequence),0)",
+        "safe event source type does not match its topic",
+        "safe event metadata field is not allowed for this topic",
+        "safe event metadata values must be primitive",
+        "schedule changed during runtime plan creation",
+        "wrapper_runtime::cancel_plan",
+        "state='creating_plan'",
+        "state='queued'",
+        "schedule authority is blocked by an active emergency stop",
+        "wrapper_runtime::cancel_plan_as_system",
     ] {
         assert!(SCHEDULING_SOURCE.contains(required), "missing {required}");
     }
@@ -234,7 +260,10 @@ fn scheduler_preserves_phase_16_through_18_authority_boundaries() {
         "cmd.exe",
         "webhook",
     ] {
-        assert!(!SCHEDULING_SOURCE.contains(forbidden), "forbidden {forbidden}");
+        assert!(
+            !SCHEDULING_SOURCE.contains(forbidden),
+            "forbidden {forbidden}"
+        );
     }
     assert!(APP_SOURCE.contains("wrapper_scheduling::initialize"));
     assert!(APP_SOURCE.contains("wrapper_scheduling::run"));

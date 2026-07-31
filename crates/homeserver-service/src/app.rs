@@ -54,6 +54,9 @@ mod wrapper_runtime;
 #[path = "app/wrapper_orchestration.rs"]
 mod wrapper_orchestration;
 
+#[path = "app/wrapper_scheduling.rs"]
+mod wrapper_scheduling;
+
 #[path = "app/wrapper_runtime_policy.rs"]
 mod wrapper_runtime_policy;
 
@@ -104,6 +107,7 @@ pub async fn run(
     wrapper_privacy::maintain_history(&connection)?;
     wrapper_runtime::initialize(&connection)?;
     wrapper_orchestration::initialize(&connection)?;
+    wrapper_scheduling::initialize(&connection)?;
     document_extraction::initialize(&connection)?;
     model_center::initialize(&connection)?;
     openrouter_provider::initialize(&connection)?;
@@ -181,6 +185,8 @@ pub async fn run(
         tokio::spawn(wrapper_runtime::run(state.clone(), shutdown.clone()));
     let supervised_action_orchestration_worker =
         tokio::spawn(wrapper_orchestration::run(state.clone(), shutdown.clone()));
+    let agent_schedule_worker =
+        tokio::spawn(wrapper_scheduling::run(state.clone(), shutdown.clone()));
     let review_intelligence_worker = tokio::spawn(run_review_intelligence_scheduler(
         state.clone(),
         shutdown.clone(),
@@ -216,6 +222,7 @@ pub async fn run(
             .merge(wrapper_privacy::router(state.clone()))
             .merge(wrapper_runtime::router(state.clone()))
             .merge(wrapper_orchestration::router(state.clone()))
+            .merge(wrapper_scheduling::router(state.clone()))
             .merge(wrapper_runtime_policy::router(state.clone()))
             .merge(knowledge_vault::router(state.clone()))
             .merge(model_center::router(state.clone()))
@@ -245,6 +252,7 @@ pub async fn run(
     pod_provider_worker.abort();
     agent_tool_runtime_worker.abort();
     supervised_action_orchestration_worker.abort();
+    agent_schedule_worker.abort();
     review_intelligence_worker.abort();
     result?;
     Ok(())
@@ -291,6 +299,9 @@ async fn run_backup_scheduler(state: Arc<AppState>, mut shutdown: watch::Receive
                         }
                         if let Err(error) = wrapper_runtime::maintain_history(&connection) {
                             warn!(?error, "scheduled agent tool runtime retention failed");
+                        }
+                        if let Err(error) = wrapper_scheduling::maintain_history(&connection) {
+                            warn!(?error, "scheduled agent scheduling retention failed");
                         }
                     }
                     scheduled_state.create_automatic_backup_if_due()

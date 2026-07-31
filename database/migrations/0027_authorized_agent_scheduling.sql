@@ -179,6 +179,67 @@ CREATE TABLE IF NOT EXISTS agent_scheduler_state (
   updated_at_utc TEXT NOT NULL
 );
 
+CREATE TRIGGER IF NOT EXISTS trg_agent_schedule_definitions_immutable_fields
+BEFORE UPDATE ON agent_schedule_definitions
+WHEN NEW.agent_id IS NOT OLD.agent_id
+  OR NEW.agent_revision IS NOT OLD.agent_revision
+  OR NEW.assignment_id IS NOT OLD.assignment_id
+  OR NEW.assignment_revision IS NOT OLD.assignment_revision
+  OR NEW.wrapper_id IS NOT OLD.wrapper_id
+  OR NEW.connection_id IS NOT OLD.connection_id
+  OR NEW.connection_authority_revision IS NOT OLD.connection_authority_revision
+  OR NEW.created_by_user_id IS NOT OLD.created_by_user_id
+  OR NEW.title IS NOT OLD.title
+  OR NEW.description IS NOT OLD.description
+  OR NEW.trigger_kind IS NOT OLD.trigger_kind
+  OR NEW.run_at_utc IS NOT OLD.run_at_utc
+  OR NEW.interval_seconds IS NOT OLD.interval_seconds
+  OR NEW.event_topic IS NOT OLD.event_topic
+  OR NEW.event_source_id IS NOT OLD.event_source_id
+  OR NEW.misfire_policy IS NOT OLD.misfire_policy
+  OR NEW.overlap_policy IS NOT OLD.overlap_policy
+  OR NEW.debounce_seconds IS NOT OLD.debounce_seconds
+  OR NEW.max_runs IS NOT OLD.max_runs
+  OR NEW.template_hash IS NOT OLD.template_hash
+  OR NEW.authority_snapshot_json IS NOT OLD.authority_snapshot_json
+  OR NEW.authority_hash IS NOT OLD.authority_hash
+  OR NEW.expires_at_utc IS NOT OLD.expires_at_utc
+  OR NEW.created_at_utc IS NOT OLD.created_at_utc
+BEGIN
+  SELECT RAISE(ABORT, 'agent schedule authority and trigger fields are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_agent_schedule_definitions_no_delete
+BEFORE DELETE ON agent_schedule_definitions
+BEGIN
+  SELECT RAISE(ABORT, 'agent schedule definitions are retained evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_agent_schedule_private_templates_no_update
+BEFORE UPDATE ON agent_schedule_private_templates
+BEGIN
+  SELECT RAISE(ABORT, 'agent schedule private templates are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_agent_schedule_private_templates_no_delete
+BEFORE DELETE ON agent_schedule_private_templates
+BEGIN
+  SELECT RAISE(ABORT, 'agent schedule private templates are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_agent_schedule_runs_terminal_no_update
+BEFORE UPDATE ON agent_schedule_runs
+WHEN OLD.state IN ('completed','skipped','failed','interrupted')
+BEGIN
+  SELECT RAISE(ABORT, 'terminal agent schedule runs are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_agent_schedule_runs_no_delete
+BEFORE DELETE ON agent_schedule_runs
+BEGIN
+  SELECT RAISE(ABORT, 'agent schedule runs are retained evidence');
+END;
+
 CREATE TRIGGER IF NOT EXISTS trg_agent_schedule_event_inbox_no_update
 BEFORE UPDATE ON agent_schedule_event_inbox
 BEGIN

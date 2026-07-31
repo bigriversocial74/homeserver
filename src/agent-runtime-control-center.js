@@ -9,6 +9,7 @@ const runtimeState = {
   runtime: null,
   authority: null,
   orchestration: null,
+  scheduling: null,
   busy: false,
   error: null,
   lastLoadedAt: 0,
@@ -223,6 +224,26 @@ function renderSupervisedCheckpoints() {
   }).join("")}</div></section>`;
 }
 
+function renderSchedules() {
+  const schedules = values(runtimeState.scheduling?.schedules);
+  const runs = values(runtimeState.scheduling?.runs);
+  const receipts = values(runtimeState.scheduling?.receipts);
+  if (!schedules.length) {
+    return `<section class="panel runtime-schedules-panel"><div class="panel-title"><div>${icon("activity", 18)}<div><h2>Authorized Schedules</h2><p>Time and safe-event triggers create fresh Phase 17/18 plans only after exact authority revalidation.</p></div></div><span>0 schedules</span></div><div class="runtime-empty compact"><strong>No authorized schedules</strong><p>Paired wrappers and trusted local clients can submit authority-bound runtime-plan templates.</p></div></section>`;
+  }
+  const latestRun = new Map();
+  for (const run of runs) if (!latestRun.has(run.schedule_id)) latestRun.set(run.schedule_id, run);
+  return `<section class="panel runtime-schedules-panel"><div class="panel-title"><div>${icon("activity", 18)}<div><h2>Authorized Schedules</h2><p>Misfire, overlap, debounce, event cursors, and immutable Phase 17/18 plan-creation evidence.</p></div></div><span>${schedules.filter((schedule) => schedule.state === "active").length} active</span></div><div class="runtime-schedule-grid">${schedules.slice(0, 30).map((schedule) => {
+    const run = latestRun.get(schedule.schedule_id);
+    const timing = schedule.trigger_kind === "event"
+      ? `${humanize(schedule.event_topic)}${schedule.event_source_id ? ` · ${schedule.event_source_id}` : ""}`
+      : schedule.next_fire_at_utc
+        ? `Next ${formatDate(schedule.next_fire_at_utc)}`
+        : "No future trigger";
+    return `<article class="runtime-schedule-card ${statusTone(schedule.state)}"><header><div><span>${escapeHtml(humanize(schedule.trigger_kind))}</span><h3>${escapeHtml(schedule.title)}</h3></div>${statusBadge(schedule.state)}</header><p>${escapeHtml(schedule.description || "Authority-bound runtime plan schedule")}</p><dl><div><dt>Trigger</dt><dd>${escapeHtml(timing)}</dd></div><div><dt>Runs</dt><dd>${Number(schedule.run_count || 0)} / ${Number(schedule.max_runs || 0)}</dd></div><div><dt>Misfire</dt><dd>${escapeHtml(humanize(schedule.misfire_policy))}</dd></div><div><dt>Overlap</dt><dd>${escapeHtml(humanize(schedule.overlap_policy))}</dd></div><div><dt>Authority</dt><dd class="mono">${escapeHtml(compactHash(schedule.authority_hash))}</dd></div><div><dt>Template</dt><dd class="mono">${escapeHtml(compactHash(schedule.template_hash))}</dd></div></dl><footer><span>${run ? `${escapeHtml(humanize(run.state))} · ${escapeHtml(humanize(run.result_code || run.failure_code || "pending"))}` : `${receipts.filter((receipt) => receipt.schedule_id === schedule.schedule_id).length} receipts`}</span><div>${schedule.state === "active" ? `<button class="button secondary" type="button" data-schedule-pause="${escapeHtml(schedule.schedule_id)}" data-schedule-title="${escapeHtml(schedule.title)}">Pause</button>` : ""}${schedule.state === "paused" ? `<button class="button secondary" type="button" data-schedule-resume="${escapeHtml(schedule.schedule_id)}" data-schedule-title="${escapeHtml(schedule.title)}">Resume</button>` : ""}${["active", "paused", "failed"].includes(schedule.state) ? `<button class="button danger" type="button" data-schedule-cancel="${escapeHtml(schedule.schedule_id)}" data-schedule-title="${escapeHtml(schedule.title)}">Cancel</button>` : ""}</div></footer></article>`;
+  }).join("")}</div><div class="runtime-schedule-boundary"><strong>Phase 17/18 plan creation only</strong><span>Private templates and full event payloads remain hidden. The scheduler cannot invoke tools, proposals, approvals, or result egress directly.</span></div></section>`;
+}
+
 function renderReceipts() {
   const receipts = values(runtimeState.runtime?.receipts);
   if (!receipts.length) return `<div class="runtime-empty compact"><strong>No runtime receipts</strong><p>Immutable per-step evidence will appear after work completes or fails.</p></div>`;
@@ -236,6 +257,7 @@ function renderRuntimePage() {
   if (!canvas) return;
   const runtime = runtimeState.runtime || {};
   const orchestration = runtimeState.orchestration || {};
+  const scheduling = runtimeState.scheduling || {};
   const tools = values(runtime.tools);
   const receipts = values(runtime.receipts);
   const agents = values(runtimeState.authority?.agents);
@@ -254,6 +276,7 @@ function renderRuntimePage() {
       </section>
       ${renderSafetyBoundary(runtime)}
       ${renderSupervisedCheckpoints(orchestration)}
+      ${renderSchedules(scheduling)}
       <section class="runtime-primary-grid"><article class="panel runtime-plans-panel"><div class="panel-title"><div>${icon("activity", 18)}<div><h2>Runtime Plans</h2><p>Ordered low-risk work submitted through the Phase 16C job contract.</p></div></div><span>${values(runtime.plans).length} plans</span></div>${renderPlans()}</article><article class="panel runtime-tools-panel"><div class="panel-title"><div>${icon("apps", 18)}<div><h2>Tool Catalog</h2><p>HomeServer-owned, versioned, risk-classified adapters.</p></div></div><span>${tools.length} tools</span></div>${renderTools()}</article></section>
       ${renderAuthority()}
       <section class="runtime-bottom-grid"><article class="panel"><div class="panel-title"><div>${icon("activity", 18)}<div><h2>Step Queue & History</h2><p>Exact order, state, tool, result code, and completion time.</p></div></div><span>${values(runtime.steps).length} steps</span></div>${renderStepQueue()}</article><article class="panel"><div class="panel-title"><div>${icon("logs", 18)}<div><h2>Immutable Runtime Receipts</h2><p>Hash-only evidence linked to the Phase 16C job receipt.</p></div></div><span>${receipts.length} receipts</span></div>${renderReceipts()}</article></section>
@@ -271,10 +294,12 @@ async function refreshRuntime(quiet = false) {
     invoke("homeserver_agent_runtime"),
     invoke("homeserver_agent_authority"),
     invoke("homeserver_action_orchestration"),
+    invoke("homeserver_agent_schedules"),
   ]);
   if (results[0].status === "fulfilled") runtimeState.runtime = results[0].value;
   if (results[1].status === "fulfilled") runtimeState.authority = results[1].value;
   if (results[2].status === "fulfilled") runtimeState.orchestration = results[2].value;
+  if (results[3].status === "fulfilled") runtimeState.scheduling = results[3].value;
   const errors = results.filter((result) => result.status === "rejected").map((result) => String(result.reason));
   runtimeState.error = errors.length ? errors.join(" · ") : null;
   runtimeState.lastLoadedAt = Date.now();
@@ -290,6 +315,7 @@ async function runOneCycle() {
   try {
     await invoke("homeserver_run_agent_runtime_once");
     runtimeState.orchestration = await invoke("homeserver_run_action_orchestration_once");
+    runtimeState.scheduling = await invoke("homeserver_run_agent_scheduler_once");
     runtimeState.runtime = await invoke("homeserver_agent_runtime");
     runtimeState.authority = await invoke("homeserver_agent_authority");
     runtimeState.lastLoadedAt = Date.now();
@@ -315,6 +341,34 @@ async function cancelRuntimePlan(button) {
   try {
     runtimeState.runtime = await invoke("homeserver_cancel_agent_runtime_plan", {
       planId,
+      confirmation,
+      reason: reason.trim(),
+    });
+    runtimeState.lastLoadedAt = Date.now();
+  } catch (error) {
+    runtimeState.error = String(error);
+  } finally {
+    runtimeState.busy = false;
+    renderRuntimePage();
+  }
+}
+
+async function mutateSchedule(button, action) {
+  if (runtimeState.busy) return;
+  const attribute = `schedule${action[0].toUpperCase()}${action.slice(1)}`;
+  const scheduleId = button.dataset[attribute] || "";
+  const title = button.dataset.scheduleTitle || "this schedule";
+  const command = `${action.toUpperCase()} SCHEDULE ${scheduleId}`;
+  const confirmation = window.prompt(`Type ${command} to ${action} ${title}:`);
+  if (confirmation !== command) return;
+  const reason = window.prompt(`Reason to ${action} this schedule:`, `${humanize(action)} from Agent Runtime Control Center`);
+  if (reason === null || !reason.trim()) return;
+  runtimeState.busy = true;
+  runtimeState.error = null;
+  renderRuntimePage();
+  try {
+    runtimeState.scheduling = await invoke(`homeserver_${action}_agent_schedule`, {
+      scheduleId,
       confirmation,
       reason: reason.trim(),
     });
@@ -385,6 +439,24 @@ document.addEventListener("click", (event) => {
   if (rollbackButton) {
     event.preventDefault();
     void rollbackSupervisedCheckpoint(rollbackButton);
+    return;
+  }
+  const pauseSchedule = event.target.closest("[data-schedule-pause]");
+  if (pauseSchedule) {
+    event.preventDefault();
+    void mutateSchedule(pauseSchedule, "pause");
+    return;
+  }
+  const resumeSchedule = event.target.closest("[data-schedule-resume]");
+  if (resumeSchedule) {
+    event.preventDefault();
+    void mutateSchedule(resumeSchedule, "resume");
+    return;
+  }
+  const cancelSchedule = event.target.closest("[data-schedule-cancel]");
+  if (cancelSchedule) {
+    event.preventDefault();
+    void mutateSchedule(cancelSchedule, "cancel");
     return;
   }
   const agentButton = event.target.closest("[data-runtime-open-agent]");
