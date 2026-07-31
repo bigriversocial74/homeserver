@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import hashlib
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +23,11 @@ def forbid(source: str, markers: list[str], label: str) -> None:
             raise SystemExit(f"Phase 21 validation failed: forbidden {label}: {marker}")
 
 
+def canonical_sha256(value: object) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 migration = read("database/migrations/0029_tamper_evident_evidence_archive.sql")
 service = read("crates/homeserver-service/src/evidence_archive.rs")
 app = read("crates/homeserver-service/src/app.rs")
@@ -34,6 +41,20 @@ package = read("package.json")
 workflow = read(".github/workflows/phase21-evidence-archive.yml")
 docs = read("docs/phase-21-tamper-evident-evidence-archive.md")
 
+default_policy_hash = canonical_sha256(
+    {
+        "schema": "homeserver.evidence-archive-policy.v1",
+        "policy_revision": 1,
+        "enabled": True,
+        "interval_hours": 24,
+        "max_records_per_archive": 5000,
+        "retention_count": 30,
+        "max_package_bytes": 67108864,
+        "created_by_user_id": "system",
+        "reason": "Phase 21 safe local evidence archive default",
+    }
+)
+
 require(
     migration,
     [
@@ -46,7 +67,7 @@ require(
         "trg_evidence_archive_policies_no_update",
         "trg_evidence_archives_authority_immutable",
         "trg_evidence_archives_terminal_immutable",
-        "faeef059a975afe172c0640813d05d2331a71e48224df64d138a44e837b2c84f",
+        default_policy_hash,
         "trg_evidence_archive_members_no_delete",
         "trg_evidence_archive_exports_no_delete",
         "trg_evidence_archive_events_no_delete",
@@ -140,6 +161,7 @@ require(
     tests,
     [
         "default_policy_is_bounded_and_machine_local",
+        default_policy_hash,
         "archive_policy_members_exports_and_events_are_immutable",
         "storage_retention_requires_exported_state_and_cannot_reverse_pruning",
         "migration_registers_archive_contract_once",
