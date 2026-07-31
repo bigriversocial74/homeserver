@@ -80,6 +80,8 @@ CREATE TABLE IF NOT EXISTS model_inference_requests (
   authority_hash TEXT NOT NULL CHECK(length(authority_hash)=64),
   input_chars INTEGER NOT NULL CHECK(input_chars BETWEEN 1 AND 30000),
   max_output_tokens INTEGER NOT NULL CHECK(max_output_tokens BETWEEN 16 AND 4096),
+  reserved_tokens INTEGER NOT NULL DEFAULT 0 CHECK(reserved_tokens BETWEEN 0 AND 1000000000),
+  reserved_spend_microusd INTEGER NOT NULL DEFAULT 0 CHECK(reserved_spend_microusd BETWEEN 0 AND 1000000000000),
   state TEXT NOT NULL CHECK(state IN ('reserved','running','completed','failed','cancelled','interrupted')),
   selected_provider TEXT,
   selected_model TEXT,
@@ -227,6 +229,40 @@ CREATE TRIGGER IF NOT EXISTS trg_model_routing_policy_no_delete
 BEFORE DELETE ON model_routing_policies
 BEGIN
   SELECT RAISE(ABORT,'model routing policies are retained evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_model_inference_request_authority_immutable
+BEFORE UPDATE ON model_inference_requests
+WHEN NEW.idempotency_key IS NOT OLD.idempotency_key
+  OR NEW.request_hash IS NOT OLD.request_hash
+  OR NEW.subject_type IS NOT OLD.subject_type
+  OR NEW.subject_id IS NOT OLD.subject_id
+  OR NEW.agent_id IS NOT OLD.agent_id
+  OR NEW.agent_revision IS NOT OLD.agent_revision
+  OR NEW.assignment_id IS NOT OLD.assignment_id
+  OR NEW.assignment_revision IS NOT OLD.assignment_revision
+  OR NEW.wrapper_id IS NOT OLD.wrapper_id
+  OR NEW.connection_id IS NOT OLD.connection_id
+  OR NEW.connection_authority_revision IS NOT OLD.connection_authority_revision
+  OR NEW.policy_id IS NOT OLD.policy_id
+  OR NEW.policy_revision IS NOT OLD.policy_revision
+  OR NEW.policy_hash IS NOT OLD.policy_hash
+  OR NEW.purpose IS NOT OLD.purpose
+  OR NEW.purpose_hash IS NOT OLD.purpose_hash
+  OR NEW.data_classification IS NOT OLD.data_classification
+  OR NEW.provider_order_json IS NOT OLD.provider_order_json
+  OR NEW.requested_model IS NOT OLD.requested_model
+  OR NEW.privacy_selector_id IS NOT OLD.privacy_selector_id
+  OR NEW.prompt_hash IS NOT OLD.prompt_hash
+  OR NEW.context_hash IS NOT OLD.context_hash
+  OR NEW.authority_hash IS NOT OLD.authority_hash
+  OR NEW.input_chars IS NOT OLD.input_chars
+  OR NEW.max_output_tokens IS NOT OLD.max_output_tokens
+  OR NEW.reserved_tokens IS NOT OLD.reserved_tokens
+  OR NEW.reserved_spend_microusd IS NOT OLD.reserved_spend_microusd
+  OR NEW.created_at_utc IS NOT OLD.created_at_utc
+BEGIN
+  SELECT RAISE(ABORT,'model inference request authority and budget reservation are immutable');
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_model_inference_request_terminal_immutable

@@ -41,6 +41,43 @@ fn default_policy_is_local_only_and_remote_denied() {
 }
 
 #[test]
+fn active_request_authority_and_budget_reservation_are_immutable() {
+    let connection = database();
+    connection
+        .execute(
+            "INSERT INTO model_inference_requests (
+               request_id,idempotency_key,request_hash,subject_type,subject_id,
+               policy_id,policy_revision,policy_hash,purpose,purpose_hash,
+               data_classification,provider_order_json,prompt_hash,context_hash,
+               authority_hash,input_chars,max_output_tokens,reserved_tokens,
+               reserved_spend_microusd,state,created_at_utc
+             ) VALUES (
+               '50000000-0000-4000-8000-000000000020','phase20-active-reservation',
+               'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+               'local_control_center','local_control_center',
+               '00000000-0000-4000-8000-000000000020',1,
+               '113e81b53bfb95b1d9496660cca07b44865aafdbf8c54e57076515600be10a51',
+               'agent_workspace','6428a32c45677cf7ec4f6d2384fc81b5a62372106031a537bd4d313410e7d0c6',
+               'private_derived','[\"ollama\"]',
+               'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+               'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+               'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+               18,128,133,0,'reserved','2026-07-31T12:00:00.000Z'
+             )",
+            [],
+        )
+        .expect("active request");
+    for sql in [
+        "UPDATE model_inference_requests SET requested_model='ollama:other' WHERE request_id='50000000-0000-4000-8000-000000000020'",
+        "UPDATE model_inference_requests SET authority_hash='eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' WHERE request_id='50000000-0000-4000-8000-000000000020'",
+        "UPDATE model_inference_requests SET reserved_tokens=1 WHERE request_id='50000000-0000-4000-8000-000000000020'",
+        "UPDATE model_inference_requests SET reserved_spend_microusd=1 WHERE request_id='50000000-0000-4000-8000-000000000020'",
+    ] {
+        assert!(connection.execute(sql, []).is_err(), "active authority mutation unexpectedly succeeded: {sql}");
+    }
+}
+
+#[test]
 fn policy_authority_rejects_update_and_delete() {
     let connection = database();
     assert!(connection

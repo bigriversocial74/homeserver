@@ -7,7 +7,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
-use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Row, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -755,16 +755,6 @@ async fn attempt_provider(
                 result.output.len() <= MAX_PRIVATE_OUTPUT_BYTES,
                 "model output exceeds the private result limit"
             );
-            let window_usage = policy_usage(&connection, policy)?;
-            ensure!(
-                window_usage.1.saturating_add(result.total_tokens) <= policy.max_total_tokens,
-                "model inference token budget would be exceeded"
-            );
-            ensure!(
-                window_usage.2.saturating_add(result.reported_cost_microusd)
-                    <= policy.max_spend_microusd,
-                "model inference spending budget would be exceeded"
-            );
             complete_success(
                 &connection,
                 request_id,
@@ -821,8 +811,34 @@ fn complete_success(
     ensure!(!output.is_empty(), "model returned an empty result");
     let output_hash = hash_text(output);
     let completed_at = now_utc();
-    let transaction = connection.unchecked_transaction()?;
-    transaction.execute(
+    let transaction = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)?;
+    let (reserved_tokens, reserved_spend_microusd): (i64, i64) = transaction
+        .query_row(
+            "SELECT reserved_tokens,reserved_spend_microusd FROM model_inference_requests WHERE request_id=?1 AND state='running'",
+            params![request_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .context("running inference reservation was not found")?;
+    let charged_tokens = if result.total_tokens == 0 {
+        nonnegative_u64(reserved_tokens)
+    } else {
+        result.total_tokens
+    };
+    let reserved_spend = nonnegative_u64(reserved_spend_microusd);
+    let usage = policy_usage(&transaction, policy, Some(request_id))?;
+    ensure!(
+        usage.1.saturating_add(charged_tokens) <= policy.max_total_tokens,
+        "model inference token budget would be exceeded"
+    );
+    ensure!(
+        result.reported_cost_microusd <= reserved_spend,
+        "model inference spending exceeded its atomic reservation"
+    );
+    ensure!(
+        usage.2.saturating_add(result.reported_cost_microusd) <= policy.max_spend_microusd,
+        "model inference spending budget would be exceeded"
+    );
+    let attempt_changed = transaction.execute(
         "UPDATE model_inference_attempts SET state='succeeded',prompt_tokens=?1,completion_tokens=?2,total_tokens=?3,reported_cost_microusd=?4,output_hash=?5,completed_at_utc=?6 WHERE attempt_id=?7 AND state='running'",
         params![
             result.prompt_tokens as i64,
@@ -834,14 +850,22 @@ fn complete_success(
             attempt_id
         ],
     )?;
+    ensure!(
+        attempt_changed == 1,
+        "running model inference attempt was not found"
+    );
     transaction.execute(
         "INSERT INTO model_inference_private_results (request_id,classification,output_text,output_bytes,output_hash,created_at_utc) VALUES (?1,'private',?2,?3,?4,?5)",
         params![request_id,output,output.len() as i64,output_hash,completed_at],
     )?;
-    transaction.execute(
+    let request_changed = transaction.execute(
         "UPDATE model_inference_requests SET state='completed',selected_provider=?1,selected_model=?2,result_hash=?3,completed_at_utc=?4 WHERE request_id=?5 AND state='running'",
         params![result.provider_key,result.model_id,output_hash,completed_at,request_id],
     )?;
+    ensure!(
+        request_changed == 1,
+        "running model inference request was not found"
+    );
     let receipt_id = write_receipt_tx(
         &transaction,
         request_id,
@@ -857,7 +881,7 @@ fn complete_success(
         Some(&output_hash),
         result.prompt_tokens,
         result.completion_tokens,
-        result.total_tokens,
+        charged_tokens,
         result.reported_cost_microusd,
         &completed_at,
     )?;
@@ -888,7 +912,7 @@ fn complete_success(
         output_hash,
         prompt_tokens: result.prompt_tokens,
         completion_tokens: result.completion_tokens,
-        total_tokens: result.total_tokens,
+        total_tokens: charged_tokens,
         reported_cost_microusd: result.reported_cost_microusd,
         policy_id: policy.policy_id.clone(),
         policy_revision: policy.policy_revision,
@@ -969,24 +993,43 @@ fn reserve_request(
     String,
     Option<GovernedInferenceResult>,
 )> {
-    let usage = policy_usage(connection, policy)?;
+    let provider_order = effective_provider_order(policy, request)?;
+    let max_output_tokens = request
+        .max_output_tokens
+        .unwrap_or(policy.max_output_tokens);
+    let reserved_tokens = u64::from(input_chars)
+        .div_ceil(4)
+        .saturating_add(u64::from(max_output_tokens));
+    let request_id = Uuid::new_v4().to_string();
+    let now = now_utc();
+    let transaction = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)?;
+    let usage = policy_usage(&transaction, policy, None)?;
     ensure!(
         usage.0 < policy.max_requests,
         "model inference request budget has been reached"
     );
     ensure!(
-        usage.1 < policy.max_total_tokens,
+        usage.1.saturating_add(reserved_tokens) <= policy.max_total_tokens,
         "model inference token budget has been reached"
     );
-    ensure!(
-        usage.2 < policy.max_spend_microusd || policy.max_spend_microusd == 0,
-        "model inference spending budget has been reached"
-    );
-    let request_id = Uuid::new_v4().to_string();
-    let now = now_utc();
-    let transaction = connection.unchecked_transaction()?;
+    let remote_authorized = provider_order
+        .iter()
+        .any(|provider| provider == "openrouter");
+    let reserved_spend = if remote_authorized {
+        let remaining = policy
+            .max_spend_microusd
+            .checked_sub(usage.2)
+            .context("model inference spending budget has been reached")?;
+        ensure!(
+            remaining > 0,
+            "model inference spending budget has been reached"
+        );
+        remaining
+    } else {
+        0
+    };
     transaction.execute(
-        "INSERT INTO model_inference_requests (request_id,idempotency_key,request_hash,subject_type,subject_id,agent_id,agent_revision,assignment_id,assignment_revision,wrapper_id,connection_id,connection_authority_revision,policy_id,policy_revision,policy_hash,purpose,purpose_hash,data_classification,provider_order_json,requested_model,privacy_selector_id,prompt_hash,context_hash,authority_hash,input_chars,max_output_tokens,state,created_at_utc) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,'reserved',?27)",
+        "INSERT INTO model_inference_requests (request_id,idempotency_key,request_hash,subject_type,subject_id,agent_id,agent_revision,assignment_id,assignment_revision,wrapper_id,connection_id,connection_authority_revision,policy_id,policy_revision,policy_hash,purpose,purpose_hash,data_classification,provider_order_json,requested_model,privacy_selector_id,prompt_hash,context_hash,authority_hash,input_chars,max_output_tokens,reserved_tokens,reserved_spend_microusd,state,created_at_utc) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,'reserved',?29)",
         params![
             request_id,
             request.idempotency_key,
@@ -1006,14 +1049,16 @@ fn reserve_request(
             request.purpose,
             policy.purpose_hash,
             request.data_classification,
-            serde_json::to_string(&effective_provider_order(policy, request)?)?,
+            serde_json::to_string(&provider_order)?,
             request.model,
             request.privacy_selector_id,
             prompt_hash,
             request.context_hash,
             authority_hash,
             input_chars as i64,
-            request.max_output_tokens.unwrap_or(policy.max_output_tokens) as i64,
+            max_output_tokens as i64,
+            reserved_tokens as i64,
+            reserved_spend as i64,
             now
         ],
     )?;
@@ -1030,6 +1075,8 @@ fn reserve_request(
             "authority_hash": authority_hash,
             "request_hash": request_hash,
             "data_classification": request.data_classification,
+            "reserved_tokens": reserved_tokens,
+            "reserved_spend_microusd": reserved_spend,
             "private_prompt_exposed": false
         }),
     )?;
@@ -1264,6 +1311,10 @@ fn revoke_policy(state: &AppState, request: PolicyReferenceRequest) -> Result<()
         params![now,policy_id],
     )?;
     ensure!(changed == 1, "active model routing policy was not found");
+    transaction.execute(
+        "UPDATE model_inference_attempts SET state='cancelled',failure_code='policy_revoked',completed_at_utc=?1 WHERE state='running' AND request_id IN (SELECT request_id FROM model_inference_requests WHERE policy_id=?2 AND state IN ('reserved','running'))",
+        params![now,policy_id],
+    )?;
     transaction.execute(
         "UPDATE model_inference_requests SET state='cancelled',failure_code='policy_revoked',completed_at_utc=?1 WHERE policy_id=?2 AND state IN ('reserved','running')",
         params![now,policy_id],
@@ -1718,6 +1769,7 @@ fn effective_provider_order(
             providers.retain(|provider| provider == "ollama");
         }
     }
+    ensure_model_provider_is_unambiguous(request.model.as_deref(), providers.len())?;
     if !policy.allow_fallback {
         providers.truncate(1);
     }
@@ -1728,22 +1780,38 @@ fn effective_provider_order(
     Ok(providers)
 }
 
-fn policy_usage(connection: &Connection, policy: &PolicyRecord) -> Result<(u64, u64, u64)> {
+fn ensure_model_provider_is_unambiguous(model: Option<&str>, provider_count: usize) -> Result<()> {
+    if let Some(model) = model {
+        let qualified = model.starts_with("ollama:") || model.starts_with("openrouter:");
+        ensure!(
+            qualified || provider_count == 1,
+            "model ID must be provider-qualified when multiple providers are authorized"
+        );
+    }
+    Ok(())
+}
+
+fn policy_usage(
+    connection: &Connection,
+    policy: &PolicyRecord,
+    exclude_request_id: Option<&str>,
+) -> Result<(u64, u64, u64)> {
     let start = Utc::now() - Duration::seconds(i64::from(policy.window_seconds));
+    let start = timestamp(start);
     let (requests, tokens, spend): (i64, i64, i64) = connection.query_row(
-        "SELECT COUNT(*),COALESCE(SUM(total_tokens),0),COALESCE(SUM(reported_cost_microusd),0) FROM model_inference_receipts WHERE policy_id=?1 AND completed_at_utc>=?2",
-        params![policy.policy_id,timestamp(start)],
+        "SELECT COUNT(*),COALESCE(SUM(total_tokens),0),COALESCE(SUM(reported_cost_microusd),0) FROM model_inference_receipts WHERE policy_id=?1 AND completed_at_utc>=?2 AND (?3 IS NULL OR request_id<>?3)",
+        params![policy.policy_id,start,exclude_request_id],
         |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
     )?;
-    let active: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM model_inference_requests WHERE policy_id=?1 AND state IN ('reserved','running') AND created_at_utc>=?2",
-        params![policy.policy_id,timestamp(start)],
-        |row| row.get(0),
+    let (active, reserved_tokens, reserved_spend): (i64, i64, i64) = connection.query_row(
+        "SELECT COUNT(*),COALESCE(SUM(reserved_tokens),0),COALESCE(SUM(reserved_spend_microusd),0) FROM model_inference_requests WHERE policy_id=?1 AND state IN ('reserved','running') AND created_at_utc>=?2 AND (?3 IS NULL OR request_id<>?3)",
+        params![policy.policy_id,start,exclude_request_id],
+        |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
     )?;
     Ok((
         (requests + active).max(0) as u64,
-        tokens.max(0) as u64,
-        spend.max(0) as u64,
+        (tokens + reserved_tokens).max(0) as u64,
+        (spend + reserved_spend).max(0) as u64,
     ))
 }
 
@@ -2382,6 +2450,13 @@ mod tests {
     #[test]
     fn secret_classification_is_never_model_authority() {
         assert!(normalize_classes(&["secret".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn unqualified_models_require_one_authorized_provider() {
+        assert!(ensure_model_provider_is_unambiguous(Some("llama3.2:3b"), 2).is_err());
+        assert!(ensure_model_provider_is_unambiguous(Some("llama3.2:3b"), 1).is_ok());
+        assert!(ensure_model_provider_is_unambiguous(Some("ollama:llama3.2:3b"), 2).is_ok());
     }
 
     #[test]

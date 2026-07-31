@@ -49,7 +49,10 @@ def main() -> int:
             "CREATE TABLE IF NOT EXISTS model_inference_receipts",
             "CREATE TABLE IF NOT EXISTS model_inference_events",
             "trg_model_routing_policy_authority_immutable",
+            "trg_model_inference_request_authority_immutable",
             "trg_model_inference_request_terminal_immutable",
+            "reserved_tokens",
+            "reserved_spend_microusd",
             "trg_model_inference_private_result_no_delete",
             "trg_model_inference_receipt_no_delete",
             "trg_model_inference_event_no_delete",
@@ -79,6 +82,9 @@ def main() -> int:
             "approved_remote_provider='openrouter'",
             "private_source",
             "policy_usage",
+            "TransactionBehavior::Immediate",
+            "model ID must be provider-qualified when multiple providers are authorized",
+            "model_inference_attempts SET state='cancelled',failure_code='policy_revoked'",
             "idempotency key was reused with a different request",
             "generate_governed_response",
             "model_center::generate_text",
@@ -198,7 +204,7 @@ def main() -> int:
         ],
         "Phase 20 exact-head workflow",
     )
-    require(tests, ["terminal_requests_attempts_results_receipts_and_events_are_immutable", "default_policy_is_local_only_and_remote_denied"], "Phase 20 native tests")
+    require(tests, ["terminal_requests_attempts_results_receipts_and_events_are_immutable", "active_request_authority_and_budget_reservation_are_immutable", "default_policy_is_local_only_and_remote_denied"], "Phase 20 native tests")
     require(docs, ["Initial audit: **6.2/10**", "No Microgifter, VP3, or POD MySQL import is required"], "Phase 20 documentation")
 
     print("Phase 20 authorized model routing and inference governance contract passed.")

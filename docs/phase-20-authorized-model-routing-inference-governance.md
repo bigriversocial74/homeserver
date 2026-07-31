@@ -102,3 +102,12 @@ The HomeServer service applies it automatically. No Microgifter, VP3, or POD MyS
 - strict service and workspace lint
 - complete HomeServer Production Quality
 - verified installer, LocalSystem security, signed update, and forced rollback
+
+
+## Final concurrency and workspace hardening
+
+- Request count, estimated token use, and remote spending are reserved inside a SQLite `IMMEDIATE` transaction before provider execution.
+- Active request authority and budget reservations are immutable; terminal requests, attempts, private results, receipts, and events remain immutable evidence.
+- Policy revocation atomically cancels both active requests and their running provider attempts.
+- An unqualified model ID is rejected whenever more than one provider remains authorized, preventing accidental cross-provider fallback.
+- Agent Workspace uses one shell-owned, coalesced route lifecycle with stale-refresh suppression, eliminating the former double-load and loading-state flicker.
