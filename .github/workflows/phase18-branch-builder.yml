@@ -6,6 +6,11 @@ on:
       - feature/phase-18-supervised-action-orchestration
     paths:
       - .github/workflows/phase18-branch-builder.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/phase18-branch-builder.yml
 
 permissions:
   contents: write
@@ -23,6 +28,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
+          ref: feature/phase-18-supervised-action-orchestration
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           components: rustfmt, clippy
@@ -64,4 +70,4 @@ jobs:
           git commit -m "Build Phase 18 supervised action orchestration"
           git push
 
-# Complete payload trigger: 2026-07-31
+# Draft PR trigger: complete payload
