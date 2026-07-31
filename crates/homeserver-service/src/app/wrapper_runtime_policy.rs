@@ -94,6 +94,10 @@ fn create_policy(
         APPROVAL_MODES.contains(&approval_mode.as_str()),
         "runtime policy approval mode is invalid"
     );
+    ensure!(
+        approval_mode == "none",
+        "Phase 17 runtime policies must be approval-free and low-risk"
+    );
     let max_executions = request.max_executions.unwrap_or(100);
     ensure!(
         (1..=10_000).contains(&max_executions),
@@ -120,6 +124,14 @@ fn create_policy(
         )
         .context("runtime tool was not found")?;
     ensure!(tool_state == "active", "runtime tool is not active");
+    ensure!(
+        matches!(risk_class.as_str(), "read_only" | "reversible"),
+        "sensitive tools remain on the Phase 16D proposal boundary"
+    );
+    ensure!(
+        approval_requirement != "proposal",
+        "proposal-gated tools are not executable in the Phase 17 runtime"
+    );
 
     let (agent_state, autonomy_level, agent_expires): (String, i64, String) = transaction
         .query_row(
@@ -132,25 +144,10 @@ fn create_policy(
         agent_state == "active",
         "runtime policy agent is not active"
     );
-    let required_autonomy = match risk_class.as_str() {
-        "read_only" => 1,
-        "reversible" => 2,
-        "external_side_effect" => 3,
-        "high_risk" => 4,
-        _ => anyhow::bail!("runtime tool risk class is invalid"),
-    };
     ensure!(
-        autonomy_level >= required_autonomy,
-        "agent autonomy level is below the runtime tool risk class"
+        autonomy_level >= 3,
+        "approval-free runtime policy requires scoped autonomy"
     );
-    if approval_requirement == "proposal"
-        || matches!(risk_class.as_str(), "external_side_effect" | "high_risk")
-    {
-        ensure!(
-            approval_mode != "none",
-            "this runtime tool requires an approval-gated policy"
-        );
-    }
 
     let now = Utc::now();
     let requested_expires = now + Duration::minutes(i64::from(request.expires_minutes));
