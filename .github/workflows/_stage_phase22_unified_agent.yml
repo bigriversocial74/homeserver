@@ -1,0 +1,50 @@
+name: Stage Phase 22 Unified Agent
+
+on:
+  push:
+    branches:
+      - feature/unified-homeserver-agent-orchestration
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stage-phase22-unified-agent
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/unified-homeserver-agent-orchestration
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          components: rustfmt
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply integration wiring
+        run: python .github/scripts/apply_phase22_unified_agent.py
+      - name: Format Rust
+        run: cargo fmt --all
+      - name: Validate frontend and integration contract
+        run: |
+          node --check src/homeserver-agent-chat.js
+          python scripts/validate-unified-agent-orchestration.py
+      - name: Remove temporary staging files
+        run: |
+          rm -f .github/scripts/apply_phase22_unified_agent.py
+          rm -f .github/workflows/_stage_phase22_unified_agent.yml
+      - name: Commit permanent integration files
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Wire unified HomeServer Agent orchestration"
+          git push origin HEAD:feature/unified-homeserver-agent-orchestration
