@@ -5,8 +5,12 @@ index = (root / "index.html").read_text(encoding="utf-8")
 main = (root / "src" / "main.js").read_text(encoding="utf-8")
 chat = (root / "src" / "homeserver-agent-chat.js").read_text(encoding="utf-8")
 css = (root / "src" / "homeserver-agent-chat.css").read_text(encoding="utf-8")
+shared = (root / "src" / "shared-sidebar.js").read_text(encoding="utf-8")
+shared_css = (root / "src" / "shared-sidebar.css").read_text(encoding="utf-8")
 legacy = (root / "src" / "agent-workspace.js").read_text(encoding="utf-8")
 durable = (root / "src" / "durable-activity-ui.js").read_text(encoding="utf-8")
+activity = (root / "crates" / "homeserver-service" / "src" / "activity.rs").read_text(encoding="utf-8")
+tauri_agent = (root / "src-tauri" / "src" / "agent.rs").read_text(encoding="utf-8")
 observer_modules = {
     "Operational Data": (root / "src" / "operational-data.js").read_text(encoding="utf-8"),
     "Review Intelligence": (root / "src" / "review-intelligence.js").read_text(encoding="utf-8"),
@@ -52,6 +56,42 @@ required_durable = [
     'loadError = String(error?.message || error || "activity history unavailable")',
     'if (!injected && isAgentPage() && attempt < 20)',
 ]
+required_shared = [
+    'import { icon, logoMark } from "./icons.js"',
+    '["agent", "HomeServer Agent", "integrations"]',
+    '["home", "Home", "home"]',
+    '["dashboard", "Dashboard", "dashboard"]',
+    '["models", "Model Center", "model"]',
+    '["apps", "Apps", "apps"]',
+    '["knowledge", "Knowledge Vault", "vault"]',
+    'data-shared-chat-rename',
+    'data-shared-chat-delete',
+    'action: "rename_thread"',
+    'action: "delete_thread"',
+    'invoke("homeserver_create_agent_goal", { request })',
+    'document.querySelector(\'[data-homeserver-agent-host="true"]\')',
+    'observer.observe(host, { childList: true, subtree: true })',
+    'window.addEventListener("homeserver:rendered", scheduleDecorate)',
+]
+required_shared_css = [
+    '.shared-agent-sidebar.app-sidebar',
+    '.shared-chat-row',
+    '.shared-chat-actions',
+    '.shared-sidebar-navigation',
+]
+required_activity = [
+    '.route("/v1/agent/threads/rename", post(rename_agent_thread))',
+    '.route("/v1/agent/threads/delete", post(delete_agent_thread))',
+    'fn rename_thread_record(',
+    'fn delete_thread_record(',
+    'request.confirmation == "DELETE"',
+    "ON DELETE CASCADE",
+]
+required_tauri_agent = [
+    'Some("rename_thread") => post_json("/v1/agent/threads/rename", &request).await',
+    'Some("delete_thread") => post_json("/v1/agent/threads/delete", &request).await',
+]
+
 for value in required_main:
     if value not in main:
         raise SystemExit(f"Missing resilient Agent Chat shell contract: {value}")
@@ -64,11 +104,37 @@ for value in required_css:
 for value in required_durable:
     if value not in durable:
         raise SystemExit(f"Missing durable Agent activity lifecycle contract: {value}")
+for value in required_shared:
+    if value not in shared:
+        raise SystemExit(f"Missing shared HomeServer sidebar contract: {value}")
+for value in required_shared_css:
+    if value not in shared_css:
+        raise SystemExit(f"Missing shared sidebar layout contract: {value}")
+for value in required_activity:
+    if value not in activity:
+        raise SystemExit(f"Missing Agent chat service contract: {value}")
+for value in required_tauri_agent:
+    if value not in tauri_agent:
+        raise SystemExit(f"Missing Agent chat desktop bridge contract: {value}")
+
+requested_order = [
+    '["agent", "HomeServer Agent", "integrations"]',
+    '["home", "Home", "home"]',
+    '["dashboard", "Dashboard", "dashboard"]',
+    '["models", "Model Center", "model"]',
+    '["apps", "Apps", "apps"]',
+    '["knowledge", "Knowledge Vault", "vault"]',
+]
+positions = [shared.index(value) for value in requested_order]
+if positions != sorted(positions):
+    raise SystemExit("Requested HomeServer sidebar order is not preserved")
 
 if '/src/agent-workspace.js' in index:
     raise SystemExit("Legacy Agent Workspace is still loaded beside Agent Chat")
 if '/src/durable-activity-ui.js' not in index:
     raise SystemExit("Durable Agent activity UI is not loaded")
+if '/src/shared-sidebar.js' not in index:
+    raise SystemExit("Shared HomeServer sidebar is not loaded")
 if 'const legacyAgentWorkspaceDisabled = true;' not in legacy:
     raise SystemExit("Legacy Agent Workspace is not deterministically disabled")
 if 'MutationObserver' in legacy:
@@ -77,6 +143,8 @@ if 'MutationObserver' in durable:
     raise SystemExit("Durable Agent activity still races the Agent route through an app-wide observer")
 if 'current.hasAttribute("data-durable-activity-card")' in durable:
     raise SystemExit("Durable Agent activity still refuses to repaint an existing card")
+if 'observer.observe(document.body' in shared or 'observer.observe(document.querySelector("#app")' in shared:
+    raise SystemExit("Shared sidebar watches the complete application DOM instead of the Agent host")
 
 for name, source in observer_modules.items():
     if 'MutationObserver' in source:
@@ -104,4 +172,4 @@ if 'window.setTimeout(() => mount(true), 0)' in chat:
 if 'event.target.closest("[data-page]")' in main:
     raise SystemExit("Competing delegated Control Center router remains")
 
-print("HomeServer uses one coalesced Agent route lifecycle with a repaintable durable activity card and no duplicate app-wide observer network.")
+print("HomeServer uses one ordered shared sidebar, persistent Agent chat rename/delete controls, a repaintable durable activity card, and no duplicate app-wide observer network.")
