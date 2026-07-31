@@ -32,6 +32,7 @@ jobs:
         run: |
           python scripts/phase19-integration-builder.py
           python scripts/phase19-hardening-builder.py
+          python scripts/phase19-authority-builder.py
           cargo fmt --all
       - name: Validate Phase 19 and retained boundaries
         run: |
@@ -50,7 +51,7 @@ jobs:
       - name: Commit permanent Phase 19 implementation
         shell: bash
         run: |
-          rm -f scripts/phase19-integration-builder.py scripts/phase19-hardening-builder.py
+          rm -f scripts/phase19-integration-builder.py scripts/phase19-hardening-builder.py scripts/phase19-authority-builder.py
           rm -rf scripts/__pycache__
           git checkout origin/main -- .github/workflows/phase-1-foundation.yml
           git config user.name "github-actions[bot]"
