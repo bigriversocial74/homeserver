@@ -99,13 +99,13 @@ replace_once(
     process::Command,
     time::Duration,
 };""",
-    """use std::{
+    """#[cfg(windows)]
+use std::process::Command;
+use std::{
     fs,
     path::{Path, PathBuf},
     time::Duration,
-};
-#[cfg(windows)]
-use std::process::Command;""",
+};""",
     "updater Windows command import",
 )
 replace_once(
@@ -116,13 +116,13 @@ replace_once(
     path::{Path, PathBuf},
     process::Command,
 };""",
-    """use std::{
+    """#[cfg(windows)]
+use std::process::Command;
+use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
-};
-#[cfg(windows)]
-use std::process::Command;""",
+};""",
     "update apply Windows command import",
 )
 
