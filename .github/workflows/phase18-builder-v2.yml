@@ -1,15 +1,15 @@
-name: Phase 18 Builder V2
+name: Phase 18 Builder V3
 
 on:
   pull_request:
     branches: [main]
-    paths: [.github/workflows/phase18-builder-v2.yml]
+    paths: [.github/workflows/phase18-builder-v3.yml]
 
 permissions:
   contents: write
 
 concurrency:
-  group: phase18-builder-v2
+  group: phase18-builder-v3
   cancel-in-progress: true
 
 jobs:
@@ -29,7 +29,7 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: package-lock.json
-      - name: Assemble Phase 18
+      - name: Assemble and repair Phase 18
         shell: bash
         run: |
           python - <<'PY'
@@ -44,6 +44,7 @@ jobs:
           python scripts/phase18-branch-builder.py
           python - <<'PY'
           from pathlib import Path
+
           p = Path('crates/homeserver-service/src/app/wrapper_agents.rs')
           t = p.read_text()
           old = 'fn create_proposal(connection: &Connection, request: CreateProposalRequest) -> Result<String> {'
@@ -52,6 +53,7 @@ jobs:
               assert old in t
               t = t.replace(old, new, 1)
           p.write_text(t)
+
           p = Path('crates/homeserver-service/src/app/wrapper_runtime.rs')
           t = p.read_text()
           old = 'fn create_plan(state: &AppState, request: CreateRuntimePlanRequest) -> Result<String> {'
@@ -59,6 +61,53 @@ jobs:
           if new not in t:
               assert old in t
               t = t.replace(old, new, 1)
+          p.write_text(t)
+
+          p = Path('crates/homeserver-service/src/app/wrapper_orchestration.rs')
+          t = p.read_text()
+          scan = '''        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };'''
+          owned = '''        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };'''
+          assert t.count(scan) == 2
+          t = t.replace(scan, owned)
+          old = '''    if transaction
+        .query_row(
+            "SELECT compensation_receipt_id FROM agent_supervised_compensation_receipts WHERE checkpoint_id=?1",
+            params![&checkpoint_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .is_some()
+    {'''
+          new = '''    let existing_compensation_receipt: Option<String> = transaction
+        .query_row(
+            "SELECT compensation_receipt_id FROM agent_supervised_compensation_receipts WHERE checkpoint_id=?1",
+            params![&checkpoint_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if existing_compensation_receipt.is_some() {'''
+          assert old in t
+          t = t.replace(old, new, 1)
+          anchor = '''fn timestamp(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+'''
+          parser = anchor + '''
+fn parse_utc(value: &str, label: &str) -> Result<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .with_context(|| format!("{label} is invalid"))
+        .map(|value| value.with_timezone(&Utc))
+}
+'''
+          assert anchor in t and 'fn parse_utc(' not in t
+          t = t.replace(anchor, parser, 1)
           p.write_text(t)
           PY
           cargo fmt --all
@@ -78,8 +127,8 @@ jobs:
       - name: Commit clean implementation
         shell: bash
         run: |
-          rm -f scripts/.phase18-part-* scripts/.phase18-trigger scripts/phase18-branch-builder.py
-          rm -f .github/workflows/phase18-branch-builder.yml .github/workflows/phase18-builder-v2.yml
+          rm -f scripts/.phase18-* scripts/phase18-branch-builder.py docs/.phase18-staging-marker.md
+          rm -f .github/workflows/phase18-branch-builder.yml .github/workflows/phase18-builder-v2.yml .github/workflows/phase18-builder-v3.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
