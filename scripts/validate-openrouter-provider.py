@@ -21,6 +21,7 @@ def forbid(source: str, marker: str, label: str) -> None:
 migration = read("database/migrations/0016_openrouter_model_provider.sql")
 provider = read("crates/homeserver-service/src/openrouter_provider.rs")
 agent = read("crates/homeserver-service/src/agent_runtime.rs")
+governance = read("crates/homeserver-service/src/inference_governance.rs")
 app = read("crates/homeserver-service/src/app.rs")
 main = read("crates/homeserver-service/src/main.rs")
 tauri = read("src-tauri/src/openrouter.rs")
@@ -53,7 +54,7 @@ for marker in [
     '"data_collection": settings.data_collection',
     '"zdr": settings.zdr_only',
     "model_provider_usage_receipts",
-    "generate_agent_response",
+    "generate_governed_response",
 ]:
     require(provider, marker, "provider boundary")
 
@@ -69,7 +70,8 @@ for marker in [
 
 require(main, "mod openrouter_provider;", "module registration")
 require(main, "openrouter_provider::health_check", "health check")
-require(agent, "openrouter_provider::generate_agent_response", "Agent Workspace routing")
+require(agent, "inference_governance::infer", "Agent Workspace governed routing")
+require(governance, "openrouter_provider::generate_governed_response", "governed OpenRouter adapter")
 require(agent, '"openrouter_model_opt_in"', "Agent Workspace capability")
 
 for marker in [

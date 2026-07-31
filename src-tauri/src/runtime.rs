@@ -135,3 +135,61 @@ pub(crate) async fn homeserver_cancel_agent_schedule(
     )
     .await
 }
+
+#[tauri::command]
+pub(crate) async fn homeserver_model_governance() -> Result<Value, String> {
+    get_json("/v1/models/governance").await
+}
+
+#[tauri::command]
+pub(crate) async fn homeserver_create_model_policy(policy: Value) -> Result<Value, String> {
+    let mut object = policy
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "Model policy must be an object.".to_owned())?;
+    object.insert(
+        "created_by_user_id".to_owned(),
+        Value::String(LOCAL_CONTROL_CENTER_ACTOR.to_owned()),
+    );
+    object.insert(
+        "confirmation".to_owned(),
+        Value::String("CREATE MODEL POLICY".to_owned()),
+    );
+    post_json("/v1/models/governance/policies", &Value::Object(object)).await
+}
+
+#[tauri::command]
+pub(crate) async fn homeserver_revoke_model_policy(
+    policy_id: String,
+    confirmation: String,
+    reason: String,
+) -> Result<Value, String> {
+    post_json(
+        "/v1/models/governance/policies/revoke",
+        &json!({
+            "policy_id": policy_id,
+            "actor_user_id": LOCAL_CONTROL_CENTER_ACTOR,
+            "confirmation": confirmation,
+            "reason": reason
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn homeserver_cancel_model_inference(
+    request_id: String,
+    confirmation: String,
+    reason: String,
+) -> Result<Value, String> {
+    post_json(
+        "/v1/models/inference/cancel",
+        &json!({
+            "request_id": request_id,
+            "actor_user_id": LOCAL_CONTROL_CENTER_ACTOR,
+            "confirmation": confirmation,
+            "reason": reason
+        }),
+    )
+    .await
+}
