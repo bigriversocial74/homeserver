@@ -40,7 +40,37 @@ jobs:
       - name: Assemble permanent Phase 18 files
         shell: bash
         run: |
-          cat scripts/.phase18-part-* | base64 -d | gzip -d > scripts/phase18-branch-builder.py
+          python - <<'PY'
+          import base64
+          import gzip
+          import hashlib
+          from pathlib import Path
+
+          expected = {
+              '.phase18-part-00': (12000, 'ba55f602a8876f4b46285029973e914656fb1620a64b39350220783ba954a56b'),
+              '.phase18-part-01': (12000, '802861f6108e403eb53233971714f5b3a650b3684be858c589246f11ba60814d'),
+              '.phase18-part-02': (12000, 'bd4fb349166bcdb794debc65a92cdf9048ac2938d35b194a43b16d8b1a8c6199'),
+              '.phase18-part-03': (12000, '88dbb47541fc472b86f7a96b913b24fbf37ba792d03f0aad8c0916673e459112'),
+              '.phase18-part-04a': (2900, 'dfff6497892bdecac1e4a2f3e6272b2245efb31d472096281216c6521dd24542'),
+              '.phase18-part-04b': (2972, '8d03fc93ef3759004dc8b9e5205538f4f31a5f4364ae723e2acfd9d02f2136d4'),
+          }
+          root = Path('scripts')
+          payload_parts = []
+          for name, (expected_size, expected_sha) in expected.items():
+              path = root / name
+              data = path.read_bytes()
+              actual_sha = hashlib.sha256(data).hexdigest()
+              print(name, len(data), actual_sha)
+              if len(data) != expected_size or actual_sha != expected_sha:
+                  raise SystemExit(f'fragment integrity failure: {name}')
+              payload_parts.append(data.decode('ascii'))
+          encoded = ''.join(payload_parts)
+          compressed = base64.b64decode(encoded, validate=True)
+          builder = gzip.decompress(compressed)
+          if hashlib.sha256(builder).hexdigest() != '7657c1875fe526e6be3d8ae947200304447bf1ff3f7828f9440b811f00a69535':
+              raise SystemExit('decoded builder integrity failure')
+          (root / 'phase18-branch-builder.py').write_bytes(builder)
+          PY
           python scripts/phase18-branch-builder.py
           cargo fmt --all
       - name: Install frontend dependencies
@@ -62,7 +92,7 @@ jobs:
       - name: Commit verified Phase 18 implementation
         shell: bash
         run: |
-          rm -f scripts/.phase18-part-* scripts/phase18-branch-builder.py .github/workflows/phase18-branch-builder.yml
+          rm -f scripts/.phase18-part-* scripts/.phase18-trigger scripts/phase18-branch-builder.py .github/workflows/phase18-branch-builder.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
@@ -70,4 +100,4 @@ jobs:
           git commit -m "Build Phase 18 supervised action orchestration"
           git push
 
-# Draft PR trigger: complete payload
+# Integrity-verified payload trigger
