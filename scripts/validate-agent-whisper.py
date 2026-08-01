@@ -108,8 +108,11 @@ for token, label in (
 for token, label in (
     ("ubuntu-24.04", "Linux certification job"),
     ("windows-2025", "Windows certification job"),
+    ("build-essential", "Linux C++ build tools"),
+    ("libclang-dev", "Linux whisper.cpp binding prerequisites"),
     ("npm run check:frontend", "retained frontend validation"),
     ("npm run build", "production frontend build"),
+    ("npm run prepare:icons", "generated Tauri desktop resources"),
     ("cargo fmt --all -- --check", "Rust formatting gate"),
     (
         "cargo test -p microgifter-homeserver-control-center whisper::tests",
@@ -153,6 +156,9 @@ for temporary_path in (
     ROOT / ".github/workflows/phase23c-format.yml",
     ROOT / "scripts/apply-phase23c-worker-hardening.py",
     ROOT / ".github/workflows/phase23c-worker-hardening.yml",
+    ROOT / ".github/workflows/phase23c-native-diagnostics.yml",
+    ROOT / "phase23c-native-errors.txt",
+    ROOT / "phase23c-native-exit-code.txt",
 ):
     if temporary_path.exists():
         raise SystemExit(
@@ -163,6 +169,7 @@ for temporary_path in (
 print(
     "Phase 23C validates embedded whisper.cpp inference, verified local model import, "
     "bounded and zeroized PCM, partial/final transcript events, cancellation, durable "
-    "model/engine receipts, editable Agent Chat transcripts, cross-platform native "
-    "certification, permanent cleanup hygiene, and zero cloud speech egress."
+    "model/engine receipts, editable Agent Chat transcripts, generated desktop resources, "
+    "cross-platform native certification, permanent cleanup hygiene, and zero cloud "
+    "speech egress."
 )
