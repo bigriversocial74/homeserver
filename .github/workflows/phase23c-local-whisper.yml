@@ -8,12 +8,14 @@ on:
       - "src-tauri/Cargo.toml"
       - "src-tauri/src/lib.rs"
       - "src-tauri/src/whisper.rs"
+      - "src-tauri/icons/icon.ico.base64"
       - "crates/homeserver-service/src/audio_runtime.rs"
       - "src/homeserver-agent-vad.js"
       - "src/homeserver-whisper-codec.js"
       - "src/homeserver-whisper-queue.js"
       - "src/homeserver-agent-whisper.js"
       - "src/homeserver-agent-whisper.css"
+      - "scripts/prepare-icons.mjs"
       - "scripts/test-agent-whisper-codec.mjs"
       - "scripts/test-agent-whisper-queue.mjs"
       - "scripts/validate-agent-whisper.py"
@@ -71,6 +73,7 @@ jobs:
             .github/workflows/phase23c-callback-type-repair.yml \
             scripts/apply-phase23c-progress-type-repair.py \
             .github/workflows/phase23c-progress-type-repair.yml \
+            .github/workflows/phase23c-callback-option-repair.yml \
             .github/workflows/phase23c-whisper-errors.yml \
             phase23c-whisper-errors.txt \
             phase23c-whisper-exit.txt
@@ -80,6 +83,18 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Verify permanent callback and icon contracts
+        shell: bash
+        run: |
+          grep -F 'set_segment_callback_safe_lossy(move |data: SegmentCallbackData|' src-tauri/src/whisper.rs
+          grep -F 'set_progress_callback_safe(move |progress: i32|' src-tauri/src/whisper.rs
+          grep -F 'set_abort_callback_safe(move ||' src-tauri/src/whisper.rs
+          if grep -F 'callback_safe_lossy(Some(' src-tauri/src/whisper.rs; then exit 1; fi
+          if grep -F 'progress_callback_safe(Some(' src-tauri/src/whisper.rs; then exit 1; fi
+          if grep -F 'abort_callback_safe(Some(' src-tauri/src/whisper.rs; then exit 1; fi
+          grep -F 'const pngTarget' scripts/prepare-icons.mjs
+          grep -F 'ICO does not contain an embedded PNG icon' scripts/prepare-icons.mjs
 
       - name: Install Linux desktop prerequisites
         if: runner.os == 'Linux'
@@ -120,6 +135,20 @@ jobs:
 
       - name: Prepare generated desktop resources
         run: npm run prepare:icons
+
+      - name: Verify generated desktop icons
+        shell: bash
+        run: |
+          test -s src-tauri/icons/icon.ico
+          test -s src-tauri/icons/icon.png
+          node --input-type=module - <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const png = await readFile('src-tauri/icons/icon.png');
+          const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+          if (!png.subarray(0, signature.length).equals(signature)) {
+            throw new Error('Generated Tauri icon.png is not a PNG image');
+          }
+          NODE
 
       - name: Build packaged HomeServer binaries
         run: >-
