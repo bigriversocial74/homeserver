@@ -3,6 +3,8 @@ import { logoMark } from "./icons.js";
 import "./shared-sidebar.css";
 
 const AGENT_SIDEBAR_MODE = "chat-only";
+const PRIMARY_NAV_ORDER = ["agent", "home", "dashboard", "knowledge", "apps", "integrations"];
+const SYSTEM_NAV_ORDER = ["models", "backups", "sync", "settings", "system"];
 
 let observer = null;
 let observedHost = null;
@@ -19,7 +21,7 @@ function escapeHtml(value) {
 }
 
 function currentPage() {
-  return window.location.hash.replace("#", "") || "agent";
+  return window.location.hash.replace("#", "") || "dashboard";
 }
 
 function isAgentPage() {
@@ -107,6 +109,50 @@ function removeSidebarFooters() {
   ).forEach((element) => element.remove());
 }
 
+function createNavigationGroup(className, label, order, buttons) {
+  const group = document.createElement("div");
+  group.className = className;
+  group.setAttribute("role", "group");
+  group.setAttribute("aria-label", label);
+  order.forEach((page) => {
+    const button = buttons.get(page);
+    if (button) group.append(button);
+  });
+  return group;
+}
+
+function reorderMainSidebarNavigation() {
+  if (isAgentPage()) return;
+  const nav = document.querySelector(".app-sidebar > .primary-nav");
+  if (!nav || nav.dataset.navigationOrder === "primary-system-v1") return;
+
+  const buttons = new Map(
+    [...nav.querySelectorAll(":scope > .nav-item[data-page]")]
+      .map((button) => [button.dataset.page, button]),
+  );
+  if (!buttons.size) return;
+
+  const primaryGroup = createNavigationGroup(
+    "primary-nav-main",
+    "HomeServer main pages",
+    PRIMARY_NAV_ORDER,
+    buttons,
+  );
+  const systemGroup = createNavigationGroup(
+    "primary-nav-system",
+    "HomeServer system pages",
+    SYSTEM_NAV_ORDER,
+    buttons,
+  );
+  const knownPages = new Set([...PRIMARY_NAV_ORDER, ...SYSTEM_NAV_ORDER]);
+  buttons.forEach((button, page) => {
+    if (!knownPages.has(page)) primaryGroup.append(button);
+  });
+
+  nav.replaceChildren(primaryGroup, systemGroup);
+  nav.dataset.navigationOrder = "primary-system-v1";
+}
+
 function removeUnexpectedControlCenterUi() {
   removeSidebarFooters();
   if (!isAgentPage()) return;
@@ -151,6 +197,7 @@ function scheduleDecorate() {
   window.requestAnimationFrame(() => {
     scheduled = false;
     removeUnexpectedControlCenterUi();
+    reorderMainSidebarNavigation();
     decorateAgentSidebar();
     bindAgentObserver();
   });
@@ -180,5 +227,7 @@ window.__HOMESERVER_SHARED_SIDEBAR_V1__ = {
   mode: AGENT_SIDEBAR_MODE,
   refresh: scheduleDecorate,
   footerSections: "removed",
+  primaryNavigation: [...PRIMARY_NAV_ORDER],
+  systemNavigation: [...SYSTEM_NAV_ORDER],
 };
 window.__HOMESERVER_AGENT_SIDEBAR_CHAT_ONLY_V2__ = true;
