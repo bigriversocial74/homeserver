@@ -450,8 +450,7 @@ fn save_segment(
         "audio session ID is too long"
     );
     ensure!(
-        !request.mime_type.trim().is_empty()
-            && request.mime_type.chars().count() <= MAX_MIME_CHARS,
+        !request.mime_type.trim().is_empty() && request.mime_type.chars().count() <= MAX_MIME_CHARS,
         "recording MIME type is invalid"
     );
     ensure!(
