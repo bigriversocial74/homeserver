@@ -103,7 +103,7 @@ function addThreadActions(history) {
 
 function removeSidebarFooters() {
   document.querySelectorAll(
-    ".app-sidebar > .server-card, .app-sidebar > .sidebar-state, .hs-chat-sidebar > .hs-chat-provider-summary, .hs-chat-sidebar > .hs-chat-sidebar-footer, .shared-agent-sidebar > .shared-sidebar-lower",
+    ".app-sidebar > .server-card, .app-sidebar > .sidebar-state, .hs-chat-sidebar > .hs-chat-provider-summary, .hs-chat-sidebar > .hs-chat-sidebar-footer",
   ).forEach((element) => element.remove());
 }
 
@@ -178,7 +178,7 @@ scheduleDecorate();
 
 window.__HOMESERVER_SHARED_SIDEBAR_V1__ = {
   mode: AGENT_SIDEBAR_MODE,
-  footerSections: "removed",
   refresh: scheduleDecorate,
+  footerSections: "removed",
 };
 window.__HOMESERVER_AGENT_SIDEBAR_CHAT_ONLY_V2__ = true;
