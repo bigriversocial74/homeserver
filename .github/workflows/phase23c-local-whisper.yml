@@ -46,6 +46,8 @@ jobs:
           for path in \
             scripts/apply-phase23c-atomic-hardening.py \
             .github/workflows/phase23c-atomic-hardening.yml \
+            scripts/apply-phase23c-operation-hardening.py \
+            .github/workflows/phase23c-operation-hardening.yml \
             .github/workflows/phase23c-whisper-errors.yml \
             phase23c-whisper-errors.txt \
             phase23c-whisper-exit.txt
