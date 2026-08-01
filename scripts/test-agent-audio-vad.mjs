@@ -58,8 +58,11 @@ assert.ok(Math.abs(rmsToDb(0.1) + 20) < 0.001);
   assert.equal(events.filter((event) => event.event === "speech_end").length, 1);
   const start = events.find((event) => event.event === "speech_start");
   const end = events.find((event) => event.event === "speech_end");
-  assert.ok(start.speechMs >= engine.options.attackMs);
+  assert.ok(start.speechMs >= engine.options.minSpeechMs);
   assert.ok(end.silenceMs >= engine.options.silenceHangoverMs);
+  const afterBoundary = engine.snapshot(2_700);
+  assert.equal(afterBoundary.speaking, false);
+  assert.equal(afterBoundary.speechMs, 0);
 }
 
 {
@@ -70,9 +73,15 @@ assert.ok(Math.abs(rmsToDb(0.1) + 20) < 0.001);
   });
   feed(engine, 0, 360, -62);
   const events = [];
-  feed(engine, 390, 2_700, -20, events);
+  feed(engine, 390, 3_000, -20, events);
   assert.equal(events.filter((event) => event.event === "speech_start").length, 1);
-  assert.ok(events.some((event) => event.event === "segment_limit"));
+  assert.equal(
+    events.filter((event) => event.event === "segment_limit").length,
+    1,
+    "the maximum-segment boundary must be edge-triggered",
+  );
+  engine.resetSpeech(3_030);
+  assert.equal(engine.snapshot(3_030).speaking, false);
 }
 
 {
@@ -94,6 +103,6 @@ assert.ok(Math.abs(rmsToDb(0.1) + 20) < 0.001);
 }
 
 console.log(
-  "Phase 23B adaptive VAD tests passed: calibration, attack rejection, hysteresis, "
-    + "silence hangover, segment limits, adaptive noise floor, and input boundaries.",
+  "Phase 23B adaptive VAD tests passed: calibration, sustained attack, hysteresis, "
+    + "one-shot silence and segment boundaries, adaptive noise floor, and input limits.",
 );
