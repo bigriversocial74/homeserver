@@ -7,7 +7,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{SecondsFormat, Utc};
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -15,13 +15,21 @@ use uuid::Uuid;
 
 const MIGRATION: &str =
     include_str!("../../../database/migrations/0030_agent_audio_conversation.sql");
-const MIGRATION_KEY: &str = "0030_agent_audio_conversation";
+const HARDENING_MIGRATION: &str =
+    include_str!("../../../database/migrations/0031_agent_audio_conversation_hardening.sql");
+const MIGRATION_KEYS: &[&str] = &[
+    "0030_agent_audio_conversation",
+    "0031_agent_audio_conversation_hardening",
+];
 const LOCAL_ACTOR_ID: &str = "local_control_center";
 const MAX_BODY_BYTES: usize = 256 * 1024;
 const MAX_TRANSCRIPT_CHARS: usize = 20_000;
 const MAX_DEVICE_VALUE_CHARS: usize = 500;
 const MAX_MIME_CHARS: usize = 160;
-const MAX_RECORDING_BYTES: i64 = 512 * 1024 * 1024;
+const MAX_IDENTIFIER_CHARS: usize = 160;
+const MAX_EVENT_DETAIL_BYTES: usize = 16 * 1024;
+const MAX_RECORDING_DURATION_MS: i64 = 30 * 60 * 1_000;
+const MAX_RECORDING_BYTES: i64 = 256 * 1024 * 1024;
 const ACTIVE_STATES: &[&str] = &[
     "armed",
     "listening",
@@ -45,7 +53,8 @@ const RETENTION_MODES: &[&str] = &["ephemeral", "transcript"];
 
 const SESSION_COLUMNS: &str = "session_id,thread_id,mode,state,retention_mode,input_device_id,input_device_label,raw_audio_retained,failure_code,started_at_utc,updated_at_utc,ended_at_utc";
 const SEGMENT_COLUMNS: &str = "segment_id,session_id,sequence_no,state,mime_type,duration_ms,byte_length,content_sha256,transcript,linked_message_id,created_at_utc,updated_at_utc,finalized_at_utc";
-const EVENT_COLUMNS: &str = "event_id,session_id,segment_id,event_type,detail_json,created_at_utc";
+const EVENT_COLUMNS: &str =
+    "event_id,session_id,segment_id,event_type,detail_json,created_at_utc";
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
@@ -155,24 +164,50 @@ pub struct DeleteAudioSessionRequest {
 
 pub fn initialize(connection: &Connection) -> Result<()> {
     connection.execute_batch(MIGRATION)?;
-    connection.execute(
-        "UPDATE audio_sessions SET state='failed',failure_code='service_restarted',updated_at_utc=strftime('%Y-%m-%dT%H:%M:%fZ','now'),ended_at_utc=COALESCE(ended_at_utc,strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE state IN ('armed','listening','user_speaking','finalizing_transcript','paused','muted')",
-        [],
-    )?;
+    connection.execute_batch(HARDENING_MIGRATION)?;
+
+    let interrupted_sessions = {
+        let mut statement = connection.prepare(
+            "SELECT session_id FROM audio_sessions WHERE state IN ('armed','listening','user_speaking','finalizing_transcript','paused','muted')",
+        )?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    if !interrupted_sessions.is_empty() {
+        let now = now_utc();
+        connection.execute(
+            "UPDATE audio_sessions SET state='failed',failure_code='service_restarted',updated_at_utc=?1,ended_at_utc=?1 WHERE state IN ('armed','listening','user_speaking','finalizing_transcript','paused','muted')",
+            params![now],
+        )?;
+        for session_id in interrupted_sessions {
+            insert_event(
+                connection,
+                &session_id,
+                None,
+                "session_failed",
+                json!({ "failure_code": "service_restarted" }),
+            )?;
+        }
+    }
+
     maintain_history(connection)?;
     health_check(connection)
 }
 
 pub fn health_check(connection: &Connection) -> Result<()> {
-    let migration_count: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM schema_migrations WHERE migration_key=?1",
-        params![MIGRATION_KEY],
-        |row| row.get(0),
-    )?;
-    ensure!(
-        migration_count == 1,
-        "Agent audio conversation migration is not registered exactly once"
-    );
+    for migration_key in MIGRATION_KEYS {
+        let migration_count: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE migration_key=?1",
+            params![migration_key],
+            |row| row.get(0),
+        )?;
+        ensure!(
+            migration_count == 1,
+            "Agent audio migration {migration_key} is not registered exactly once"
+        );
+    }
+
     for table in [
         "audio_sessions",
         "audio_segments",
@@ -182,12 +217,47 @@ pub fn health_check(connection: &Connection) -> Result<()> {
         let sql = format!("SELECT COUNT(*) FROM {table}");
         let _: i64 = connection.query_row(&sql, [], |row| row.get(0))?;
     }
+
+    let active_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM audio_sessions WHERE state IN ('armed','listening','user_speaking','finalizing_transcript','paused','muted')",
+        [],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        active_count <= 1,
+        "more than one governed audio session is active"
+    );
+
+    let unsafe_session_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM audio_sessions WHERE raw_audio_retained<>0 OR retention_mode NOT IN ('ephemeral','transcript')",
+        [],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        unsafe_session_count == 0,
+        "an audio session violates the Phase 23 raw-audio boundary"
+    );
+
+    let invalid_receipt_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM (SELECT s.session_id,COUNT(r.receipt_id) AS receipt_count FROM audio_sessions s LEFT JOIN audio_permission_receipts r ON r.session_id=s.session_id GROUP BY s.session_id HAVING receipt_count<>1)",
+        [],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        invalid_receipt_count == 0,
+        "an audio session has an invalid permission-receipt count"
+    );
+
     Ok(())
 }
 
 pub fn maintain_history(connection: &Connection) -> Result<()> {
     connection.execute(
         "DELETE FROM audio_sessions WHERE retention_mode='ephemeral' AND state IN ('stopped','failed') AND updated_at_utc < strftime('%Y-%m-%dT%H:%M:%fZ','now','-24 hours')",
+        [],
+    )?;
+    connection.execute(
+        "DELETE FROM audio_sessions WHERE retention_mode='transcript' AND state='failed' AND updated_at_utc < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days') AND NOT EXISTS (SELECT 1 FROM audio_segments WHERE audio_segments.session_id=audio_sessions.session_id AND transcript IS NOT NULL)",
         [],
     )?;
     connection.execute(
@@ -275,6 +345,8 @@ async fn delete_session(
 fn read_status(state: &AppState) -> Result<AudioStatusSnapshot> {
     let connection = state.connection()?;
     maintain_history(&connection)?;
+    health_check(&connection)?;
+
     let sessions = query_sessions(&connection, 24)?;
     let active_session = sessions
         .iter()
@@ -282,6 +354,7 @@ fn read_status(state: &AppState) -> Result<AudioStatusSnapshot> {
         .cloned();
     let segments = query_segments(&connection, 60)?;
     let events = query_events(&connection, 80)?;
+
     Ok(AudioStatusSnapshot {
         schema: "homeserver.agent-audio.v1".to_owned(),
         host_state: if active_session.is_some() {
@@ -299,10 +372,13 @@ fn read_status(state: &AppState) -> Result<AudioStatusSnapshot> {
             "media_recorder": true,
             "conversation_events": true,
             "transcript_metadata": true,
+            "verified_agent_message_linkage": true,
             "raw_audio_persistence": false,
             "raw_audio_policy": "ephemeral_in_control_center_session",
-            "local_stt": "planned_phase_23d",
-            "vad": "planned_phase_23c",
+            "max_recording_duration_ms": MAX_RECORDING_DURATION_MS,
+            "max_recording_bytes": MAX_RECORDING_BYTES,
+            "local_stt": "planned_phase_23b_c",
+            "vad": "planned_phase_23b_c",
             "cloud_egress": false
         }),
     })
@@ -328,14 +404,15 @@ fn save_session(
         request.recording_authorized,
         "recording authorization is required"
     );
-    validate_optional_value(request.thread_id.as_deref(), 160, "thread ID")?;
-    validate_optional_value(
-        request.input_device_id.as_deref(),
+
+    let thread_id = normalized_optional_identifier(request.thread_id, "thread ID")?;
+    let input_device_id = normalized_optional_value(
+        request.input_device_id,
         MAX_DEVICE_VALUE_CHARS,
         "input device ID",
     )?;
-    validate_optional_value(
-        request.input_device_label.as_deref(),
+    let input_device_label = normalized_optional_value(
+        request.input_device_label,
         MAX_DEVICE_VALUE_CHARS,
         "input device label",
     )?;
@@ -344,28 +421,45 @@ fn save_session(
     let receipt_id = format!("audperm_{}", Uuid::new_v4().simple());
     let now = now_utc();
     let mut connection = state.connection()?;
-    let transaction = connection.transaction()?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+    if let Some(thread_id) = thread_id.as_deref() {
+        let thread_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_threads WHERE thread_id=?1)",
+            params![thread_id],
+            |row| row.get(0),
+        )?;
+        ensure!(thread_exists, "Agent Chat thread was not found");
+    }
+
     let active_count: i64 = transaction.query_row(
         "SELECT COUNT(*) FROM audio_sessions WHERE state IN ('armed','listening','user_speaking','finalizing_transcript','paused','muted')",
         [],
         |row| row.get(0),
     )?;
     ensure!(active_count == 0, "another audio session is already active");
+
     transaction.execute(
         "INSERT INTO audio_sessions(session_id,thread_id,mode,state,retention_mode,input_device_id,input_device_label,raw_audio_retained,failure_code,started_at_utc,updated_at_utc,ended_at_utc) VALUES(?1,?2,?3,'armed',?4,?5,?6,0,NULL,?7,?7,NULL)",
         params![
             session_id,
-            request.thread_id,
+            thread_id,
             request.mode,
             request.retention_mode,
-            request.input_device_id,
-            request.input_device_label,
+            input_device_id,
+            input_device_label,
             now,
         ],
     )?;
     transaction.execute(
         "INSERT INTO audio_permission_receipts(receipt_id,session_id,microphone_authorized,recording_authorized,retention_mode,actor_id,created_at_utc) VALUES(?1,?2,1,1,?3,?4,?5)",
-        params![receipt_id, session_id, request.retention_mode, LOCAL_ACTOR_ID, now],
+        params![
+            receipt_id,
+            session_id,
+            request.retention_mode,
+            LOCAL_ACTOR_ID,
+            now
+        ],
     )?;
     insert_event(
         &transaction,
@@ -386,56 +480,84 @@ fn update_session_state(
     state: &AppState,
     request: AudioSessionStateRequest,
 ) -> Result<AudioSessionSummary> {
+    validate_identifier(&request.session_id, "audio session ID")?;
     ensure!(
         SESSION_STATES.contains(&request.state.as_str()),
         "unsupported audio session state"
     );
-    ensure!(
-        request.session_id.len() <= 160,
-        "audio session ID is too long"
-    );
-    validate_optional_value(request.failure_code.as_deref(), 160, "failure code")?;
+
+    let failure_code = normalized_optional_value(request.failure_code, 160, "failure code")?;
     if request.state == "failed" {
         ensure!(
-            request
-                .failure_code
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty()),
+            failure_code.is_some(),
             "failed audio sessions require a failure code"
         );
+    } else {
+        ensure!(
+            failure_code.is_none(),
+            "failure code is only valid for failed audio sessions"
+        );
     }
+    validate_event_detail(&request.detail)?;
+    let detail = if request.detail.is_null() {
+        json!({})
+    } else {
+        request.detail
+    };
+
     let now = now_utc();
     let terminal = matches!(request.state.as_str(), "stopped" | "failed");
     let mut connection = state.connection()?;
-    let transaction = connection.transaction()?;
-    let current_state: String = transaction
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let (current_state, current_failure_code): (String, Option<String>) = transaction
         .query_row(
-            "SELECT state FROM audio_sessions WHERE session_id=?1",
+            "SELECT state,failure_code FROM audio_sessions WHERE session_id=?1",
             params![request.session_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?
         .context("audio session was not found")?;
+
+    if current_state == request.state {
+        ensure!(
+            current_failure_code == failure_code,
+            "idempotent audio state retry does not match the stored failure code"
+        );
+        transaction.commit()?;
+        return read_session(&connection, &request.session_id);
+    }
+
     ensure!(
-        !matches!(current_state.as_str(), "stopped" | "failed"),
-        "audio session is already complete"
+        allowed_transition(&current_state, &request.state),
+        "invalid audio session state transition"
     );
+
     transaction.execute(
-        "UPDATE audio_sessions SET state=?2,failure_code=?3,updated_at_utc=?4,ended_at_utc=CASE WHEN ?5=1 THEN ?4 ELSE ended_at_utc END WHERE session_id=?1",
+        "UPDATE audio_sessions SET state=?2,failure_code=?3,updated_at_utc=?4,ended_at_utc=CASE WHEN ?5=1 THEN ?4 ELSE NULL END WHERE session_id=?1",
         params![
             request.session_id,
             request.state,
-            request.failure_code,
+            failure_code,
             now,
             if terminal { 1_i64 } else { 0_i64 },
         ],
     )?;
+    let event_type = if request.state == "failed" {
+        "session_failed".to_owned()
+    } else {
+        format!("state_{}", request.state)
+    };
+    let event_detail = if request.state == "failed" {
+        merge_failure_detail(detail, failure_code.as_deref())
+    } else {
+        detail
+    };
     insert_event(
         &transaction,
         &request.session_id,
         None,
-        &format!("state_{}", request.state),
-        request.detail,
+        &event_type,
+        event_detail,
     )?;
     transaction.commit()?;
     read_session(&connection, &request.session_id)
@@ -445,36 +567,24 @@ fn save_segment(
     state: &AppState,
     request: FinalizeAudioSegmentRequest,
 ) -> Result<AudioSegmentSummary> {
+    validate_identifier(&request.session_id, "audio session ID")?;
+    let mime_type = normalized_mime_type(&request.mime_type)?;
     ensure!(
-        request.session_id.len() <= 160,
-        "audio session ID is too long"
+        (1..=MAX_RECORDING_DURATION_MS).contains(&request.duration_ms),
+        "recording duration is outside the local limit"
     );
     ensure!(
-        !request.mime_type.trim().is_empty() && request.mime_type.chars().count() <= MAX_MIME_CHARS,
-        "recording MIME type is invalid"
+        (1..=MAX_RECORDING_BYTES).contains(&request.byte_length),
+        "recording byte length is outside the local limit"
     );
-    ensure!(
-        request.duration_ms >= 0,
-        "recording duration cannot be negative"
-    );
-    ensure!(
-        (0..=MAX_RECORDING_BYTES).contains(&request.byte_length),
-        "recording byte length is invalid"
-    );
-    ensure!(
-        request.content_sha256.len() == 64
-            && request
-                .content_sha256
-                .chars()
-                .all(|character| character.is_ascii_hexdigit()),
-        "recording SHA-256 is invalid"
-    );
-    validate_transcript(request.transcript.as_deref())?;
+    let content_sha256 = normalized_sha256(&request.content_sha256)?;
+    let transcript = normalized_optional_text(request.transcript);
+    validate_transcript(transcript.as_deref())?;
 
     let segment_id = format!("audseg_{}", Uuid::new_v4().simple());
     let now = now_utc();
     let mut connection = state.connection()?;
-    let transaction = connection.transaction()?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let session_state: String = transaction
         .query_row(
             "SELECT state FROM audio_sessions WHERE session_id=?1",
@@ -484,31 +594,49 @@ fn save_segment(
         .optional()?
         .context("audio session was not found")?;
     ensure!(
-        session_state != "failed",
-        "failed audio sessions cannot accept recordings"
+        session_state == "finalizing_transcript",
+        "audio recordings can be finalized only from the finalizing transcript state"
     );
+
+    let existing_segment_id: Option<String> = transaction
+        .query_row(
+            "SELECT segment_id FROM audio_segments WHERE session_id=?1 AND content_sha256=?2 AND duration_ms=?3 AND byte_length=?4 ORDER BY sequence_no DESC LIMIT 1",
+            params![
+                request.session_id,
+                content_sha256,
+                request.duration_ms,
+                request.byte_length
+            ],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(existing_segment_id) = existing_segment_id {
+        transaction.commit()?;
+        return read_segment(&connection, &existing_segment_id);
+    }
+
     let sequence_no: i64 = transaction.query_row(
         "SELECT COALESCE(MAX(sequence_no),0)+1 FROM audio_segments WHERE session_id=?1",
         params![request.session_id],
         |row| row.get(0),
     )?;
-    let transcript = normalized_optional_text(request.transcript);
     let segment_state = if transcript.is_some() {
         "final"
     } else {
         "transcript_pending"
     };
+
     transaction.execute(
-        "INSERT INTO audio_segments(segment_id,session_id,sequence_no,state,mime_type,duration_ms,byte_length,content_sha256,transcript,linked_message_id,created_at_utc,updated_at_utc,finalized_at_utc) VALUES(?1,?2,?3,?4,?5,?6,?7,lower(?8),?9,NULL,?10,?10,CASE WHEN ?9 IS NULL THEN NULL ELSE ?10 END)",
+        "INSERT INTO audio_segments(segment_id,session_id,sequence_no,state,mime_type,duration_ms,byte_length,content_sha256,transcript,linked_message_id,created_at_utc,updated_at_utc,finalized_at_utc) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,NULL,?10,?10,CASE WHEN ?9 IS NULL THEN NULL ELSE ?10 END)",
         params![
             segment_id,
             request.session_id,
             sequence_no,
             segment_state,
-            request.mime_type,
+            mime_type,
             request.duration_ms,
             request.byte_length,
-            request.content_sha256,
+            content_sha256,
             transcript,
             now,
         ],
@@ -525,7 +653,7 @@ fn save_segment(
         json!({
             "duration_ms": request.duration_ms,
             "byte_length": request.byte_length,
-            "mime_type": request.mime_type,
+            "mime_type": mime_type,
             "raw_audio_retained": false
         }),
     )?;
@@ -537,28 +665,91 @@ fn save_transcript(
     state: &AppState,
     request: UpdateAudioTranscriptRequest,
 ) -> Result<AudioSegmentSummary> {
-    let transcript = request.transcript.trim();
+    validate_identifier(&request.segment_id, "audio segment ID")?;
+    let transcript = request.transcript.trim().to_owned();
     ensure!(!transcript.is_empty(), "transcript cannot be empty");
-    validate_transcript(Some(transcript))?;
-    validate_optional_value(
-        request.linked_message_id.as_deref(),
-        160,
-        "linked message ID",
-    )?;
+    validate_transcript(Some(&transcript))?;
+    let linked_message_id =
+        normalized_optional_identifier(request.linked_message_id, "linked message ID")?;
+
     let now = now_utc();
     let mut connection = state.connection()?;
-    let transaction = connection.transaction()?;
-    let session_id: String = transaction
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let (
+        session_id,
+        session_thread_id,
+        session_started_at,
+        segment_state,
+        existing_transcript,
+        existing_linked_message_id,
+    ): (
+        String,
+        Option<String>,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    ) = transaction
         .query_row(
-            "SELECT session_id FROM audio_segments WHERE segment_id=?1",
+            "SELECT s.session_id,s.thread_id,s.started_at_utc,g.state,g.transcript,g.linked_message_id FROM audio_segments g JOIN audio_sessions s ON s.session_id=g.session_id WHERE g.segment_id=?1",
             params![request.segment_id],
-            |row| row.get(0),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
         )
         .optional()?
         .context("audio segment was not found")?;
+
+    ensure!(
+        !matches!(segment_state.as_str(), "deleted" | "failed"),
+        "audio segment cannot accept a transcript"
+    );
+
+    if let Some(existing_linked_message_id) = existing_linked_message_id {
+        ensure!(
+            linked_message_id.as_deref() == Some(existing_linked_message_id.as_str())
+                && existing_transcript.as_deref() == Some(transcript.as_str()),
+            "committed transcript linkage is immutable"
+        );
+        transaction.commit()?;
+        return read_segment(&connection, &request.segment_id);
+    }
+
+    let mut resolved_thread_id = session_thread_id;
+    if let Some(linked_message_id) = linked_message_id.as_deref() {
+        let message_thread_id: String = transaction
+            .query_row(
+                "SELECT thread_id FROM agent_messages WHERE message_id=?1 AND role='user' AND content=?2 AND created_at_utc>=?3",
+                params![linked_message_id, transcript, session_started_at],
+                |row| row.get(0),
+            )
+            .optional()?
+            .context("linked Agent message was not found or does not match the transcript")?;
+
+        if let Some(session_thread_id) = resolved_thread_id.as_deref() {
+            ensure!(
+                session_thread_id == message_thread_id,
+                "linked Agent message belongs to a different chat thread"
+            );
+        } else {
+            transaction.execute(
+                "UPDATE audio_sessions SET thread_id=?2 WHERE session_id=?1",
+                params![session_id, message_thread_id],
+            )?;
+            resolved_thread_id = Some(message_thread_id);
+        }
+    }
+
     transaction.execute(
         "UPDATE audio_segments SET state=CASE WHEN ?3 IS NULL THEN 'final' ELSE 'committed' END,transcript=?2,linked_message_id=?3,updated_at_utc=?4,finalized_at_utc=COALESCE(finalized_at_utc,?4) WHERE segment_id=?1",
-        params![request.segment_id, transcript, request.linked_message_id, now],
+        params![request.segment_id, transcript, linked_message_id, now],
     )?;
     transaction.execute(
         "UPDATE audio_sessions SET updated_at_utc=?2 WHERE session_id=?1",
@@ -568,29 +759,41 @@ fn save_transcript(
         &transaction,
         &session_id,
         Some(&request.segment_id),
-        if request.linked_message_id.is_some() {
+        if linked_message_id.is_some() {
             "transcript_committed"
         } else {
             "transcript_updated"
         },
-        json!({ "linked_message_id": request.linked_message_id }),
+        json!({
+            "linked_message_id": linked_message_id,
+            "thread_id": resolved_thread_id
+        }),
     )?;
     transaction.commit()?;
     read_segment(&connection, &request.segment_id)
 }
 
 fn remove_session(state: &AppState, request: DeleteAudioSessionRequest) -> Result<Value> {
+    validate_identifier(&request.session_id, "audio session ID")?;
     ensure!(
         request.confirmation == "DELETE AUDIO SESSION",
         "exact deletion confirmation is required"
     );
-    let connection = state.connection()?;
-    let deleted = connection.execute(
+
+    let mut connection = state.connection()?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let deleted = transaction.execute(
         "DELETE FROM audio_sessions WHERE session_id=?1 AND state IN ('stopped','failed')",
         params![request.session_id],
     )?;
     ensure!(deleted == 1, "completed audio session was not found");
-    Ok(json!({ "ok": true, "session_id": request.session_id, "deleted": true }))
+    transaction.commit()?;
+
+    Ok(json!({
+        "ok": true,
+        "session_id": request.session_id,
+        "deleted": true
+    }))
 }
 
 fn query_sessions(connection: &Connection, limit: i64) -> Result<Vec<AudioSessionSummary>> {
@@ -693,6 +896,7 @@ fn insert_event(
     event_type: &str,
     detail: Value,
 ) -> Result<()> {
+    validate_event_detail(&detail)?;
     connection.execute(
         "INSERT INTO conversation_events(event_id,session_id,segment_id,event_type,detail_json,created_at_utc) VALUES(?1,?2,?3,?4,?5,?6)",
         params![
@@ -707,11 +911,101 @@ fn insert_event(
     Ok(())
 }
 
-fn validate_optional_value(value: Option<&str>, max_chars: usize, label: &str) -> Result<()> {
-    if let Some(value) = value {
-        ensure!(value.chars().count() <= max_chars, "{label} is too long");
-    }
+fn allowed_transition(current: &str, next: &str) -> bool {
+    matches!(
+        (current, next),
+        ("armed", "listening")
+            | ("armed", "failed")
+            | ("listening", "user_speaking")
+            | ("listening", "paused")
+            | ("listening", "muted")
+            | ("listening", "finalizing_transcript")
+            | ("listening", "failed")
+            | ("user_speaking", "listening")
+            | ("user_speaking", "paused")
+            | ("user_speaking", "muted")
+            | ("user_speaking", "finalizing_transcript")
+            | ("user_speaking", "failed")
+            | ("paused", "listening")
+            | ("paused", "muted")
+            | ("paused", "failed")
+            | ("muted", "listening")
+            | ("muted", "paused")
+            | ("muted", "failed")
+            | ("finalizing_transcript", "stopped")
+            | ("finalizing_transcript", "failed")
+    )
+}
+
+fn validate_identifier(value: &str, label: &str) -> Result<()> {
+    let value = value.trim();
+    ensure!(!value.is_empty(), "{label} cannot be empty");
+    ensure!(
+        value.chars().count() <= MAX_IDENTIFIER_CHARS,
+        "{label} is too long"
+    );
+    ensure!(
+        value.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '_' | '-' | '.' | ':')
+        }),
+        "{label} contains unsupported characters"
+    );
     Ok(())
+}
+
+fn normalized_optional_identifier(value: Option<String>, label: &str) -> Result<Option<String>> {
+    let value = normalized_optional_text(value);
+    if let Some(value) = value.as_deref() {
+        validate_identifier(value, label)?;
+    }
+    Ok(value)
+}
+
+fn normalized_optional_value(
+    value: Option<String>,
+    max_chars: usize,
+    label: &str,
+) -> Result<Option<String>> {
+    let value = normalized_optional_text(value);
+    if let Some(value) = value.as_deref() {
+        ensure!(value.chars().count() <= max_chars, "{label} is too long");
+        ensure!(!value.contains('\0'), "{label} contains a null character");
+    }
+    Ok(value)
+}
+
+fn normalized_mime_type(value: &str) -> Result<String> {
+    let value = value.trim().to_ascii_lowercase();
+    ensure!(!value.is_empty(), "recording MIME type is empty");
+    ensure!(
+        value.chars().count() <= MAX_MIME_CHARS,
+        "recording MIME type is too long"
+    );
+    ensure!(
+        value.starts_with("audio/") || value == "application/octet-stream",
+        "recording MIME type is not an audio type"
+    );
+    ensure!(
+        value.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '/' | ';' | '=' | '+' | '-' | '.')
+        }),
+        "recording MIME type contains unsupported characters"
+    );
+    Ok(value)
+}
+
+fn normalized_sha256(value: &str) -> Result<String> {
+    let value = value.trim().to_ascii_lowercase();
+    ensure!(
+        value.len() == 64
+            && value
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "recording SHA-256 is invalid"
+    );
+    Ok(value)
 }
 
 fn validate_transcript(value: Option<&str>) -> Result<()> {
@@ -720,7 +1014,23 @@ fn validate_transcript(value: Option<&str>) -> Result<()> {
             value.chars().count() <= MAX_TRANSCRIPT_CHARS,
             "transcript exceeds the local size limit"
         );
+        ensure!(
+            !value.contains('\0'),
+            "transcript contains a null character"
+        );
     }
+    Ok(())
+}
+
+fn validate_event_detail(value: &Value) -> Result<()> {
+    ensure!(
+        value.is_null() || value.is_object(),
+        "audio event detail must be a JSON object"
+    );
+    ensure!(
+        serde_json::to_vec(value)?.len() <= MAX_EVENT_DETAIL_BYTES,
+        "audio event detail exceeds the local size limit"
+    );
     Ok(())
 }
 
@@ -729,6 +1039,19 @@ fn normalized_optional_text(value: Option<String>) -> Option<String> {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_owned())
     })
+}
+
+fn merge_failure_detail(mut detail: Value, failure_code: Option<&str>) -> Value {
+    if detail.is_null() {
+        detail = json!({});
+    }
+    if let (Some(object), Some(failure_code)) = (detail.as_object_mut(), failure_code) {
+        object.insert(
+            "failure_code".to_owned(),
+            Value::String(failure_code.to_owned()),
+        );
+    }
+    detail
 }
 
 fn now_utc() -> String {
@@ -762,4 +1085,164 @@ fn action_error(code: &'static str, error: impl std::fmt::Display) -> (StatusCod
             message: error.to_string(),
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_connection() -> Connection {
+        let connection = Connection::open_in_memory().expect("in-memory database");
+        connection
+            .execute_batch(
+                "
+                PRAGMA foreign_keys = ON;
+                CREATE TABLE schema_migrations(migration_key TEXT PRIMARY KEY);
+                CREATE TABLE agent_threads(
+                    thread_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    created_at_utc TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL
+                );
+                CREATE TABLE agent_messages(
+                    message_id TEXT PRIMARY KEY,
+                    thread_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    context_json TEXT NOT NULL,
+                    created_at_utc TEXT NOT NULL
+                );
+                ",
+            )
+            .expect("supporting schema");
+        connection.execute_batch(MIGRATION).expect("base migration");
+        connection
+            .execute_batch(HARDENING_MIGRATION)
+            .expect("hardening migration");
+        connection
+    }
+
+    fn insert_armed_session(connection: &Connection, session_id: &str) {
+        connection
+            .execute(
+                "INSERT INTO audio_sessions(session_id,thread_id,mode,state,retention_mode,input_device_id,input_device_label,raw_audio_retained,failure_code,started_at_utc,updated_at_utc,ended_at_utc) VALUES(?1,NULL,'push_to_talk','armed','transcript',NULL,NULL,0,NULL,'2026-08-01T00:00:00.000Z','2026-08-01T00:00:00.000Z',NULL)",
+                params![session_id],
+            )
+            .expect("armed session");
+    }
+
+    #[test]
+    fn transition_matrix_is_closed() {
+        assert!(allowed_transition("armed", "listening"));
+        assert!(allowed_transition("listening", "finalizing_transcript"));
+        assert!(allowed_transition("finalizing_transcript", "stopped"));
+        assert!(allowed_transition("muted", "failed"));
+        assert!(!allowed_transition("armed", "stopped"));
+        assert!(!allowed_transition("stopped", "listening"));
+        assert!(!allowed_transition("finalizing_transcript", "listening"));
+    }
+
+    #[test]
+    fn hardening_migration_enforces_one_active_session() {
+        let connection = test_connection();
+        insert_armed_session(&connection, "aud_one");
+        let error = connection
+            .execute(
+                "INSERT INTO audio_sessions(session_id,thread_id,mode,state,retention_mode,input_device_id,input_device_label,raw_audio_retained,failure_code,started_at_utc,updated_at_utc,ended_at_utc) VALUES('aud_two',NULL,'voice_note','armed','transcript',NULL,NULL,0,NULL,'2026-08-01T00:00:01.000Z','2026-08-01T00:00:01.000Z',NULL)",
+                [],
+            )
+            .expect_err("second active session must fail");
+        assert!(error.to_string().contains("UNIQUE constraint failed"));
+    }
+
+    #[test]
+    fn hardening_migration_rejects_raw_audio_retention() {
+        let connection = test_connection();
+        let error = connection
+            .execute(
+                "INSERT INTO audio_sessions(session_id,thread_id,mode,state,retention_mode,input_device_id,input_device_label,raw_audio_retained,failure_code,started_at_utc,updated_at_utc,ended_at_utc) VALUES('aud_raw',NULL,'voice_note','armed','audio',NULL,NULL,1,NULL,'2026-08-01T00:00:00.000Z','2026-08-01T00:00:00.000Z',NULL)",
+                [],
+            )
+            .expect_err("raw audio retention must fail");
+        assert!(error
+            .to_string()
+            .contains("invalid Phase 23 audio session boundary"));
+    }
+
+    #[test]
+    fn hardening_migration_requires_finalizing_state_for_segments() {
+        let connection = test_connection();
+        insert_armed_session(&connection, "aud_segment");
+        let error = connection
+            .execute(
+                "INSERT INTO audio_segments(segment_id,session_id,sequence_no,state,mime_type,duration_ms,byte_length,content_sha256,transcript,linked_message_id,created_at_utc,updated_at_utc,finalized_at_utc) VALUES('audseg_bad','aud_segment',1,'transcript_pending','audio/webm',1000,100,?1,NULL,NULL,'2026-08-01T00:00:01.000Z','2026-08-01T00:00:01.000Z',NULL)",
+                params!["a".repeat(64)],
+            )
+            .expect_err("segment outside finalizing state must fail");
+        assert!(error
+            .to_string()
+            .contains("invalid Phase 23 audio segment"));
+    }
+
+    #[test]
+    fn committed_transcript_linkage_is_verified_and_immutable() {
+        let connection = test_connection();
+        insert_armed_session(&connection, "aud_link");
+        connection
+            .execute(
+                "UPDATE audio_sessions SET state='listening' WHERE session_id='aud_link'",
+                [],
+            )
+            .expect("listening");
+        connection
+            .execute(
+                "UPDATE audio_sessions SET state='finalizing_transcript' WHERE session_id='aud_link'",
+                [],
+            )
+            .expect("finalizing");
+        connection
+            .execute(
+                "INSERT INTO audio_segments(segment_id,session_id,sequence_no,state,mime_type,duration_ms,byte_length,content_sha256,transcript,linked_message_id,created_at_utc,updated_at_utc,finalized_at_utc) VALUES('audseg_link','aud_link',1,'transcript_pending','audio/webm',1000,100,?1,NULL,NULL,'2026-08-01T00:00:01.000Z','2026-08-01T00:00:01.000Z',NULL)",
+                params!["b".repeat(64)],
+            )
+            .expect("segment");
+        connection
+            .execute(
+                "INSERT INTO agent_messages(message_id,thread_id,role,mode,content,context_json,created_at_utc) VALUES('msg_link','thread_link','user','ask','hello','{}','2026-08-01T00:00:02.000Z')",
+                [],
+            )
+            .expect("message");
+        connection
+            .execute(
+                "UPDATE audio_segments SET state='committed',transcript='hello',linked_message_id='msg_link',updated_at_utc='2026-08-01T00:00:02.000Z',finalized_at_utc='2026-08-01T00:00:02.000Z' WHERE segment_id='audseg_link'",
+                [],
+            )
+            .expect("verified link");
+        let error = connection
+            .execute(
+                "UPDATE audio_segments SET transcript='changed' WHERE segment_id='audseg_link'",
+                [],
+            )
+            .expect_err("committed link must be immutable");
+        assert!(error
+            .to_string()
+            .contains("invalid Phase 23 transcript linkage"));
+    }
+
+    #[test]
+    fn mime_and_hash_validation_are_closed() {
+        assert_eq!(
+            normalized_mime_type(" Audio/WebM;Codecs=Opus ").expect("mime"),
+            "audio/webm;codecs=opus"
+        );
+        assert!(normalized_mime_type("text/plain").is_err());
+        assert!(normalized_mime_type("audio/webm\r\nx-test").is_err());
+        assert_eq!(
+            normalized_sha256(&"A".repeat(64)).expect("hash"),
+            "a".repeat(64)
+        );
+        assert!(normalized_sha256("abc").is_err());
+    }
 }
