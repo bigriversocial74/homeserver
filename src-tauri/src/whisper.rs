@@ -843,7 +843,7 @@ fn run_whisper(
     let progress_transcription_id = transcription_id.clone();
     let progress_segment_id = segment_id.clone();
     let progress_model_sha256 = model_sha256.clone();
-    params.set_progress_callback_safe(Some(move |progress| {
+    params.set_progress_callback_safe(Some(move |progress: i32| {
         let _ = progress_app.emit(
             "homeserver-whisper-progress",
             WhisperProgressEvent {

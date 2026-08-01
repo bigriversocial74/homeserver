@@ -44,6 +44,7 @@ for token, label in (
     ("set_segment_callback_safe_lossy", "partial transcript callback"),
     ("data: SegmentCallbackData", "explicit whisper-rs callback type"),
     ("set_progress_callback_safe", "bounded progress callback"),
+    ("progress: i32", "explicit whisper-rs progress callback type"),
     ("set_abort_callback_safe", "native cancellation callback"),
     ("WhisperContext::new_with_params", "embedded whisper.cpp model runtime"),
     ("whisper_state.full", "embedded local inference"),
@@ -226,6 +227,8 @@ for temporary_path in (
     ROOT / ".github/workflows/phase23c-removal-hardening.yml",
     ROOT / "scripts/apply-phase23c-callback-type-repair.py",
     ROOT / ".github/workflows/phase23c-callback-type-repair.yml",
+    ROOT / "scripts/apply-phase23c-progress-type-repair.py",
+    ROOT / ".github/workflows/phase23c-progress-type-repair.yml",
 ):
     if temporary_path.exists():
         raise SystemExit(
