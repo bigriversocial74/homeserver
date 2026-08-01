@@ -15,6 +15,9 @@ INDEX = (ROOT / "index.html").read_text(encoding="utf-8")
 PACKAGE = (ROOT / "package.json").read_text(encoding="utf-8")
 ROOT_CARGO = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
 TAURI_CARGO = (ROOT / "src-tauri/Cargo.toml").read_text(encoding="utf-8")
+WORKFLOW = (ROOT / ".github/workflows/phase23c-local-whisper.yml").read_text(
+    encoding="utf-8"
+)
 
 
 def require(text: str, token: str, label: str) -> None:
@@ -102,6 +105,31 @@ for token, label in (
 ):
     require(PACKAGE, token, label)
 
+for token, label in (
+    ("ubuntu-24.04", "Linux certification job"),
+    ("windows-2025", "Windows certification job"),
+    ("npm run check:frontend", "retained frontend validation"),
+    ("npm run build", "production frontend build"),
+    ("cargo fmt --all -- --check", "Rust formatting gate"),
+    (
+        "cargo test -p microgifter-homeserver-control-center whisper::tests",
+        "native Whisper boundary tests",
+    ),
+    (
+        "cargo test -p microgifter-homeserver-service audio_runtime::tests",
+        "governed transcript receipt tests",
+    ),
+    (
+        "cargo clippy -p microgifter-homeserver-control-center --all-targets -- -D warnings",
+        "strict Control Center lint",
+    ),
+    (
+        "cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings",
+        "strict service lint",
+    ),
+):
+    require(WORKFLOW, token, label)
+
 for text, token, label in (
     (CONTROLLER, "SpeechRecognition", "browser/cloud speech recognition"),
     (CONTROLLER, "webkitSpeechRecognition", "browser/cloud speech recognition"),
@@ -119,8 +147,22 @@ for text, token, label in (
 ):
     forbid(text, token, label)
 
+for temporary_path in (
+    ROOT / "scripts/apply-phase23c-integration.py",
+    ROOT / ".github/workflows/phase23c-integration.yml",
+    ROOT / ".github/workflows/phase23c-format.yml",
+    ROOT / "scripts/apply-phase23c-worker-hardening.py",
+    ROOT / ".github/workflows/phase23c-worker-hardening.yml",
+):
+    if temporary_path.exists():
+        raise SystemExit(
+            "Temporary Phase 23C certification asset remains: "
+            f"{temporary_path.relative_to(ROOT)}"
+        )
+
 print(
     "Phase 23C validates embedded whisper.cpp inference, verified local model import, "
     "bounded and zeroized PCM, partial/final transcript events, cancellation, durable "
-    "model/engine receipts, editable Agent Chat transcripts, and zero cloud speech egress."
+    "model/engine receipts, editable Agent Chat transcripts, cross-platform native "
+    "certification, permanent cleanup hygiene, and zero cloud speech egress."
 )
