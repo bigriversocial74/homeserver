@@ -33,22 +33,51 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Normalize the rustfmt-only manifest anchor
+      - name: Normalize rustfmt-only patch anchors
         run: |
           python - <<'PY'
           import re
           from pathlib import Path
+
           path = Path('src-tauri/src/whisper.rs')
           text = path.read_text(encoding='utf-8')
-          pattern = re.compile(
+
+          manifest_pattern = re.compile(
               r"    if fs::try_exists\(&path\)\s*"
               r"\.await\s*"
               r"\.map_err\(\|error\| error\.to_string\(\)\)\?\s*\{"
           )
-          replacement = "    if fs::try_exists(&path).await.map_err(|error| error.to_string())? {"
-          text, count = pattern.subn(replacement, text, count=1)
-          if count != 1:
-              raise SystemExit(f'Expected one manifest formatting anchor, found {count}')
+          manifest_replacement = (
+              "    if fs::try_exists(&path).await.map_err(|error| error.to_string())? {"
+          )
+          text, manifest_count = manifest_pattern.subn(
+              manifest_replacement, text, count=1
+          )
+          if manifest_count != 1:
+              raise SystemExit(
+                  f'Expected one manifest formatting anchor, found {manifest_count}'
+              )
+
+          compact_test = '''    #[test]
+              fn validates_language_boundary() {
+                  assert_eq!(validate_language(Some("AUTO".to_owned())).unwrap(), "auto");
+                  assert_eq!(validate_language(None).unwrap(), "en");
+                  assert!(validate_language(Some("en<script>".to_owned())).is_err());
+              }
+          }'''
+          canonical_test = '''    #[test]
+              fn validates_language_boundary() {
+                  assert_eq!(
+                      validate_language(Some("AUTO".to_owned())).unwrap(),
+                      "auto"
+                  );
+                  assert_eq!(validate_language(None).unwrap(), "en");
+                  assert!(validate_language(Some("en<script>".to_owned())).is_err());
+              }
+          }'''
+          if compact_test not in text:
+              raise SystemExit('Expected one compact native test anchor, found 0')
+          text = text.replace(compact_test, canonical_test, 1)
           path.write_text(text, encoding='utf-8')
           PY
 
