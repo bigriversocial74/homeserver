@@ -58,7 +58,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Compile and test HomeServer service
-        run: cargo test -p homeserver-service
+        run: cargo test -p microgifter-homeserver-service
 
       - name: Strict HomeServer service lint
-        run: cargo clippy -p homeserver-service --all-targets -- -D warnings
+        run: cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings
