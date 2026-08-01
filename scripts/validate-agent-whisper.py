@@ -61,6 +61,11 @@ for token, label in (
     ("fs::set_permissions(&temporary", "pre-install model permissions"),
     ("let previous = match read_manifest(&app).await", "pre-install manifest validation"),
     ("model_operation_lock_serializes_mutation_and_inference", "native operation lock test"),
+    ("cleanup_staged_speech_directories", "interrupted removal recovery"),
+    ("stage_speech_directory_removal", "atomic whole-directory removal"),
+    ("rollback_staged_speech_directory", "removal rollback"),
+    ("commit_staged_speech_directory", "removal commit"),
+    ("speech_directory_removal_commits_and_rolls_back", "native removal transaction test"),
 ):
     require(NATIVE, token, label)
 
@@ -113,6 +118,7 @@ for token, label in (
     ("valid_local_whisper_transcription_id", "service transcription ID boundary"),
     ("valid_local_whisper_language", "service language boundary"),
     ("local_whisper_receipt_boundaries_are_closed", "service receipt tests"),
+    ("matches!(byte, b'a'..=b'f')", "lowercase transcription ID boundary"),
 ):
     require(SERVICE, token, label)
 
@@ -215,6 +221,8 @@ for temporary_path in (
     ROOT / ".github/workflows/phase23c-queue-hardening.yml",
     ROOT / "scripts/apply-phase23c-final-contract-hardening.py",
     ROOT / ".github/workflows/phase23c-final-contract-hardening.yml",
+    ROOT / "scripts/apply-phase23c-removal-hardening.py",
+    ROOT / ".github/workflows/phase23c-removal-hardening.yml",
 ):
     if temporary_path.exists():
         raise SystemExit(

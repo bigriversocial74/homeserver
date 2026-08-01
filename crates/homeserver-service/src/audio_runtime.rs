@@ -1091,7 +1091,7 @@ fn valid_local_whisper_transcription_id(value: &str) -> bool {
         && value.starts_with(LOCAL_WHISPER_ID_PREFIX)
         && value[LOCAL_WHISPER_ID_PREFIX.len()..]
             .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 fn valid_local_whisper_language(value: &str) -> bool {
@@ -1436,6 +1436,9 @@ mod tests {
         assert!(!valid_local_whisper_transcription_id("whisper_short"));
         assert!(!valid_local_whisper_transcription_id(
             "other_0123456789abcdef0123456789abcdef"
+        ));
+        assert!(!valid_local_whisper_transcription_id(
+            "whisper_0123456789ABCDEF0123456789ABCDEF"
         ));
         assert!(valid_local_whisper_language("en"));
         assert!(valid_local_whisper_language("auto"));
