@@ -1,18 +1,17 @@
 name: Phase 23C Atomic Replacement Hardening
 
 on:
-  push:
-    branches:
-      - feature/phase-23c-local-whisper-transcription
+  pull_request:
     paths:
-      - scripts/apply-phase23c-atomic-hardening.py
-      - .github/workflows/phase23c-atomic-hardening.yml
+      - "scripts/apply-phase23c-atomic-hardening.py"
+      - ".github/workflows/phase23c-atomic-hardening.yml"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: phase23c-atomic-hardening
+  group: phase23c-atomic-hardening-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
