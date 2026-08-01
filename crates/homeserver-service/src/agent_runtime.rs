@@ -949,25 +949,27 @@ async fn handle_prompt(
     let context_hash = hash_json(&grounding)?;
     agent_integrations::record_context_receipt(
         &state,
-        Some(&thread_id),
-        &request.prompt,
-        &source_keys,
-        knowledge
-            .as_ref()
-            .map(|result| result.hits.len())
-            .unwrap_or(0),
-        operational
-            .as_ref()
-            .map(|result| result.records.len())
-            .unwrap_or(0),
-        &mcp_tool_names,
-        &context_hash,
-        if inference.is_some() {
-            "completed"
-        } else {
-            "unavailable"
+        agent_integrations::ContextReceiptInput {
+            thread_id: Some(&thread_id),
+            prompt: &request.prompt,
+            source_keys: &source_keys,
+            knowledge_hits: knowledge
+                .as_ref()
+                .map(|result| result.hits.len())
+                .unwrap_or(0),
+            operational_records: operational
+                .as_ref()
+                .map(|result| result.records.len())
+                .unwrap_or(0),
+            mcp_tools: &mcp_tool_names,
+            context_hash: &context_hash,
+            inference_state: if inference.is_some() {
+                "completed"
+            } else {
+                "unavailable"
+            },
+            failure_code: None,
         },
-        None,
     )?;
     let assistant_message_id = save_message(
         &state,

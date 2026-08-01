@@ -26,6 +26,11 @@ require("crates/homeserver-service/src/agent_integrations.rs", [
     "Ok(integration_by_id(&connection, connection_id)?.summary)",
     "daily_brief_due(last_user_prompt_at_utc)",
     "ChronoDuration::hours(18)",
+    "pub(crate) struct ContextReceiptInput",
+    "struct GuidanceContext",
+    "struct McpReceiptInput",
+    "sort_by_key(|item| std::cmp::Reverse(item.priority))",
+    ".rfind(|line| !line.is_empty())",
 ])
 require("crates/homeserver-service/src/agent_runtime.rs", [
     "Knowledge Vault search failed",

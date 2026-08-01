@@ -208,6 +208,40 @@ struct IntegrationRecord {
     pending_expires_at_utc: Option<String>,
 }
 
+pub(crate) struct ContextReceiptInput<'a> {
+    pub thread_id: Option<&'a str>,
+    pub prompt: &'a str,
+    pub source_keys: &'a [String],
+    pub knowledge_hits: usize,
+    pub operational_records: usize,
+    pub mcp_tools: &'a [String],
+    pub context_hash: &'a str,
+    pub inference_state: &'a str,
+    pub failure_code: Option<&'a str>,
+}
+
+struct GuidanceContext<'a> {
+    health: &'a Value,
+    knowledge: &'a Value,
+    models: &'a Value,
+    operational: &'a operational_data::OperationalDataSnapshot,
+    clouds: &'a cloud_registry::CloudConnectionsSnapshot,
+    backups: &'a microgifter_homeserver_core::BackupCatalog,
+    integrations: &'a [SiteIntegrationSummary],
+    last_user_prompt_at_utc: Option<&'a str>,
+}
+
+struct McpReceiptInput<'a> {
+    connection_id: &'a str,
+    tool_name: &'a str,
+    operation_class: &'a str,
+    request_hash: &'a str,
+    result_hash: Option<&'a str>,
+    outcome: &'a str,
+    result_code: String,
+    duration_ms: u64,
+}
+
 #[derive(Clone)]
 struct McpHttpClient {
     client: reqwest::Client,
@@ -666,16 +700,16 @@ pub async fn integration_snapshot(state: Arc<AppState>) -> Result<AgentIntegrati
             last_user_prompt_at_utc(&connection)?,
         )
     };
-    let guidance = build_guidance(
-        &health,
-        &knowledge,
-        &models,
-        &operational,
-        &clouds,
-        &backups,
-        &integrations,
-        last_user_prompt_at_utc.as_deref(),
-    );
+    let guidance = build_guidance(GuidanceContext {
+        health: &health,
+        knowledge: &knowledge,
+        models: &models,
+        operational: &operational,
+        clouds: &clouds,
+        backups: &backups,
+        integrations: &integrations,
+        last_user_prompt_at_utc: last_user_prompt_at_utc.as_deref(),
+    });
     let active_prompt = guidance
         .iter()
         .find(|item| !dismissed.contains(&item.key))
@@ -758,37 +792,29 @@ pub async fn collect_mcp_grounding(
     }
 }
 
-pub fn record_context_receipt(
-    state: &AppState,
-    thread_id: Option<&str>,
-    prompt: &str,
-    source_keys: &[String],
-    knowledge_hits: usize,
-    operational_records: usize,
-    mcp_tools: &[String],
-    context_hash: &str,
-    inference_state: &str,
-    failure_code: Option<&str>,
-) -> Result<String> {
+pub fn record_context_receipt(state: &AppState, input: ContextReceiptInput<'_>) -> Result<String> {
     ensure!(
-        ["not_started", "completed", "unavailable", "failed"].contains(&inference_state),
+        ["not_started", "completed", "unavailable", "failed"].contains(&input.inference_state),
         "Agent context inference state is invalid"
     );
-    ensure!(context_hash.len() == 64, "Agent context hash is invalid");
+    ensure!(
+        input.context_hash.len() == 64,
+        "Agent context hash is invalid"
+    );
     let receipt_id = Uuid::new_v4().to_string();
     state.connection()?.execute(
         "INSERT INTO agent_context_receipts (receipt_id,thread_id,prompt_hash,source_keys_json,knowledge_hit_count,operational_record_count,mcp_tool_names_json,context_hash,inference_state,failure_code) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         params![
             receipt_id,
-            thread_id,
-            sha256_hex(prompt.as_bytes()),
-            serde_json::to_string(source_keys)?,
-            knowledge_hits as i64,
-            operational_records as i64,
-            serde_json::to_string(mcp_tools)?,
-            context_hash,
-            inference_state,
-            failure_code,
+            input.thread_id,
+            sha256_hex(input.prompt.as_bytes()),
+            serde_json::to_string(input.source_keys)?,
+            input.knowledge_hits as i64,
+            input.operational_records as i64,
+            serde_json::to_string(input.mcp_tools)?,
+            input.context_hash,
+            input.inference_state,
+            input.failure_code,
         ],
     )?;
     Ok(receipt_id)
@@ -964,14 +990,16 @@ async fn call_tool_with_authority(
             let result_hash = sha256_hex(canonical_json(&value)?.as_bytes());
             write_mcp_receipt(
                 &state,
-                &request.connection_id,
-                &tool_name,
-                &tool.operation_class,
-                &request_hash,
-                Some(&result_hash),
-                "completed",
-                "mcp_tool_completed",
-                started.elapsed().as_millis() as u64,
+                McpReceiptInput {
+                    connection_id: &request.connection_id,
+                    tool_name: &tool_name,
+                    operation_class: &tool.operation_class,
+                    request_hash: &request_hash,
+                    result_hash: Some(&result_hash),
+                    outcome: "completed",
+                    result_code: "mcp_tool_completed".to_owned(),
+                    duration_ms: started.elapsed().as_millis() as u64,
+                },
             )?;
             mark_integration_success(&state, &request.connection_id)?;
             Ok(value)
@@ -979,14 +1007,16 @@ async fn call_tool_with_authority(
         Err(error) => {
             write_mcp_receipt(
                 &state,
-                &request.connection_id,
-                &tool_name,
-                &tool.operation_class,
-                &request_hash,
-                None,
-                "failed",
-                &public_error_code(&error),
-                started.elapsed().as_millis() as u64,
+                McpReceiptInput {
+                    connection_id: &request.connection_id,
+                    tool_name: &tool_name,
+                    operation_class: &tool.operation_class,
+                    request_hash: &request_hash,
+                    result_hash: None,
+                    outcome: "failed",
+                    result_code: public_error_code(&error),
+                    duration_ms: started.elapsed().as_millis() as u64,
+                },
             )?;
             mark_integration_error(&state, &request.connection_id, &error)?;
             Err(error)
@@ -1035,16 +1065,17 @@ async fn ensure_access_token(state: Arc<AppState>, record: &IntegrationRecord) -
     Ok(access)
 }
 
-fn build_guidance(
-    health: &Value,
-    knowledge: &Value,
-    models: &Value,
-    operational: &operational_data::OperationalDataSnapshot,
-    clouds: &cloud_registry::CloudConnectionsSnapshot,
-    backups: &microgifter_homeserver_core::BackupCatalog,
-    integrations: &[SiteIntegrationSummary],
-    last_user_prompt_at_utc: Option<&str>,
-) -> Vec<AgentGuidanceItem> {
+fn build_guidance(context: GuidanceContext<'_>) -> Vec<AgentGuidanceItem> {
+    let GuidanceContext {
+        health,
+        knowledge,
+        models,
+        operational,
+        clouds,
+        backups,
+        integrations,
+        last_user_prompt_at_utc,
+    } = context;
     let mut items = Vec::new();
     let service_ready = health
         .get("state")
@@ -1150,7 +1181,7 @@ fn build_guidance(
             10,
         ));
     }
-    items.sort_by(|left, right| right.priority.cmp(&left.priority));
+    items.sort_by_key(|item| std::cmp::Reverse(item.priority));
     items
 }
 
@@ -1411,29 +1442,19 @@ fn dismiss_guidance(state: &AppState, key: &str) -> Result<()> {
     Ok(())
 }
 
-fn write_mcp_receipt(
-    state: &AppState,
-    connection_id: &str,
-    tool_name: &str,
-    operation_class: &str,
-    request_hash: &str,
-    result_hash: Option<&str>,
-    outcome: &str,
-    result_code: &str,
-    duration_ms: u64,
-) -> Result<()> {
+fn write_mcp_receipt(state: &AppState, input: McpReceiptInput<'_>) -> Result<()> {
     state.connection()?.execute(
         "INSERT INTO agent_mcp_invocation_receipts (receipt_id,connection_id,tool_name,operation_class,request_hash,result_hash,outcome,result_code,duration_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         params![
             Uuid::new_v4().to_string(),
-            connection_id,
-            tool_name,
-            operation_class,
-            request_hash,
-            result_hash,
-            outcome,
-            truncate_chars(result_code, 160),
-            duration_ms.min(i64::MAX as u64) as i64,
+            input.connection_id,
+            input.tool_name,
+            input.operation_class,
+            input.request_hash,
+            input.result_hash,
+            input.outcome,
+            truncate_chars(&input.result_code, 160),
+            input.duration_ms.min(i64::MAX as u64) as i64,
         ],
     )?;
     Ok(())
@@ -1524,8 +1545,7 @@ async fn decode_rpc_response(response: reqwest::Response) -> Result<Value> {
             .lines()
             .filter_map(|line| line.strip_prefix("data:"))
             .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .last()
+            .rfind(|line| !line.is_empty())
             .context("MCP event stream did not contain JSON data")?;
         serde_json::from_str::<Value>(data).context("MCP event stream JSON is invalid")?
     } else {
