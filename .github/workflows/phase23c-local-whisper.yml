@@ -40,6 +40,22 @@ jobs:
       - name: Check out exact candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
+      - name: Reject temporary Phase 23C hardening assets
+        shell: bash
+        run: |
+          for path in \
+            scripts/apply-phase23c-atomic-hardening.py \
+            .github/workflows/phase23c-atomic-hardening.yml \
+            .github/workflows/phase23c-whisper-errors.yml \
+            phase23c-whisper-errors.txt \
+            phase23c-whisper-exit.txt
+          do
+            if [ -e "$path" ]; then
+              echo "Temporary Phase 23C asset remains: $path" >&2
+              exit 1
+            fi
+          done
+
       - name: Install Linux desktop prerequisites
         if: runner.os == 'Linux'
         run: |
