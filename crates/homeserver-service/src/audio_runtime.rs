@@ -17,9 +17,12 @@ const MIGRATION: &str =
     include_str!("../../../database/migrations/0030_agent_audio_conversation.sql");
 const HARDENING_MIGRATION: &str =
     include_str!("../../../database/migrations/0031_agent_audio_conversation_hardening.sql");
+const FINAL_INTEGRITY_MIGRATION: &str =
+    include_str!("../../../database/migrations/0032_agent_audio_final_integrity.sql");
 const MIGRATION_KEYS: &[&str] = &[
     "0030_agent_audio_conversation",
     "0031_agent_audio_conversation_hardening",
+    "0032_agent_audio_final_integrity",
 ];
 const LOCAL_ACTOR_ID: &str = "local_control_center";
 const MAX_BODY_BYTES: usize = 256 * 1024;
@@ -164,6 +167,7 @@ pub struct DeleteAudioSessionRequest {
 pub fn initialize(connection: &Connection) -> Result<()> {
     connection.execute_batch(MIGRATION)?;
     connection.execute_batch(HARDENING_MIGRATION)?;
+    connection.execute_batch(FINAL_INTEGRITY_MIGRATION)?;
 
     let interrupted_sessions = {
         let mut statement = connection.prepare(
@@ -584,6 +588,33 @@ fn save_segment(
     let now = now_utc();
     let mut connection = state.connection()?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let existing_segment: Option<(String, String, Option<String>)> = transaction
+        .query_row(
+            "SELECT segment_id,mime_type,transcript FROM audio_segments WHERE session_id=?1 AND content_sha256=?2 AND duration_ms=?3 AND byte_length=?4 ORDER BY sequence_no DESC LIMIT 1",
+            params![
+                request.session_id,
+                content_sha256,
+                request.duration_ms,
+                request.byte_length
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    if let Some((existing_segment_id, existing_mime_type, existing_transcript)) = existing_segment {
+        ensure!(
+            existing_mime_type == mime_type,
+            "idempotent recording retry does not match the stored MIME type"
+        );
+        if let Some(transcript) = transcript.as_deref() {
+            ensure!(
+                existing_transcript.as_deref() == Some(transcript),
+                "idempotent recording retry does not match the stored transcript"
+            );
+        }
+        transaction.commit()?;
+        return read_segment(&connection, &existing_segment_id);
+    }
+
     let session_state: String = transaction
         .query_row(
             "SELECT state FROM audio_sessions WHERE session_id=?1",
@@ -596,23 +627,6 @@ fn save_segment(
         session_state == "finalizing_transcript",
         "audio recordings can be finalized only from the finalizing transcript state"
     );
-
-    let existing_segment_id: Option<String> = transaction
-        .query_row(
-            "SELECT segment_id FROM audio_segments WHERE session_id=?1 AND content_sha256=?2 AND duration_ms=?3 AND byte_length=?4 ORDER BY sequence_no DESC LIMIT 1",
-            params![
-                request.session_id,
-                content_sha256,
-                request.duration_ms,
-                request.byte_length
-            ],
-            |row| row.get(0),
-        )
-        .optional()?;
-    if let Some(existing_segment_id) = existing_segment_id {
-        transaction.commit()?;
-        return read_segment(&connection, &existing_segment_id);
-    }
 
     let sequence_no: i64 = transaction.query_row(
         "SELECT COALESCE(MAX(sequence_no),0)+1 FROM audio_segments WHERE session_id=?1",
@@ -677,7 +691,7 @@ fn save_transcript(
     let (
         session_id,
         session_thread_id,
-        session_started_at,
+        segment_created_at,
         segment_state,
         existing_transcript,
         existing_linked_message_id,
@@ -690,7 +704,7 @@ fn save_transcript(
         Option<String>,
     ) = transaction
         .query_row(
-            "SELECT s.session_id,s.thread_id,s.started_at_utc,g.state,g.transcript,g.linked_message_id FROM audio_segments g JOIN audio_sessions s ON s.session_id=g.session_id WHERE g.segment_id=?1",
+            "SELECT s.session_id,s.thread_id,g.created_at_utc,g.state,g.transcript,g.linked_message_id FROM audio_segments g JOIN audio_sessions s ON s.session_id=g.session_id WHERE g.segment_id=?1",
             params![request.segment_id],
             |row| {
                 Ok((
@@ -721,12 +735,20 @@ fn save_transcript(
         return read_segment(&connection, &request.segment_id);
     }
 
+    if linked_message_id.is_none()
+        && segment_state == "final"
+        && existing_transcript.as_deref() == Some(transcript.as_str())
+    {
+        transaction.commit()?;
+        return read_segment(&connection, &request.segment_id);
+    }
+
     let mut resolved_thread_id = session_thread_id;
     if let Some(linked_message_id) = linked_message_id.as_deref() {
         let message_thread_id: String = transaction
             .query_row(
                 "SELECT thread_id FROM agent_messages WHERE message_id=?1 AND role='user' AND content=?2 AND created_at_utc>=?3",
-                params![linked_message_id, transcript, session_started_at],
+                params![linked_message_id, transcript, segment_created_at],
                 |row| row.get(0),
             )
             .optional()?
@@ -1117,6 +1139,9 @@ mod tests {
             .execute_batch(HARDENING_MIGRATION)
             .expect("hardening migration");
         connection
+            .execute_batch(FINAL_INTEGRITY_MIGRATION)
+            .expect("final integrity migration");
+        connection
     }
 
     fn insert_armed_session(connection: &Connection, session_id: &str) {
@@ -1222,6 +1247,78 @@ mod tests {
         assert!(error
             .to_string()
             .contains("invalid Phase 23 transcript linkage"));
+    }
+
+    #[test]
+    fn linked_agent_message_is_unique_and_postdates_capture() {
+        let connection = test_connection();
+        connection
+            .execute(
+                "INSERT INTO agent_threads(thread_id,title,state,created_at_utc,updated_at_utc) VALUES('thread_integrity','Integrity','active','2026-08-01T00:00:00.000Z','2026-08-01T00:00:00.000Z')",
+                [],
+            )
+            .expect("thread");
+        insert_armed_session(&connection, "aud_integrity");
+        connection
+            .execute(
+                "UPDATE audio_sessions SET thread_id='thread_integrity',state='listening' WHERE session_id='aud_integrity'",
+                [],
+            )
+            .expect("bound listening session");
+        connection
+            .execute(
+                "UPDATE audio_sessions SET state='finalizing_transcript' WHERE session_id='aud_integrity'",
+                [],
+            )
+            .expect("finalizing");
+        for (segment_id, sequence_no, hash) in [
+            ("audseg_integrity_one", 1_i64, "c".repeat(64)),
+            ("audseg_integrity_two", 2_i64, "d".repeat(64)),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO audio_segments(segment_id,session_id,sequence_no,state,mime_type,duration_ms,byte_length,content_sha256,transcript,linked_message_id,created_at_utc,updated_at_utc,finalized_at_utc) VALUES(?1,'aud_integrity',?2,'transcript_pending','audio/webm',1000,100,?3,NULL,NULL,'2026-08-01T00:00:02.000Z','2026-08-01T00:00:02.000Z',NULL)",
+                    params![segment_id, sequence_no, hash],
+                )
+                .expect("segment");
+        }
+        connection
+            .execute(
+                "INSERT INTO agent_messages(message_id,thread_id,role,mode,content,context_json,created_at_utc) VALUES('msg_too_early','thread_integrity','user','ask','hello','{}','2026-08-01T00:00:01.000Z')",
+                [],
+            )
+            .expect("early message");
+        let early_error = connection
+            .execute(
+                "UPDATE audio_segments SET state='committed',transcript='hello',linked_message_id='msg_too_early',updated_at_utc='2026-08-01T00:00:03.000Z',finalized_at_utc='2026-08-01T00:00:03.000Z' WHERE segment_id='audseg_integrity_one'",
+                [],
+            )
+            .expect_err("message before capture must fail");
+        assert!(early_error
+            .to_string()
+            .contains("invalid Phase 23 transcript linkage"));
+
+        connection
+            .execute(
+                "INSERT INTO agent_messages(message_id,thread_id,role,mode,content,context_json,created_at_utc) VALUES('msg_integrity','thread_integrity','user','ask','hello','{}','2026-08-01T00:00:03.000Z')",
+                [],
+            )
+            .expect("message");
+        connection
+            .execute(
+                "UPDATE audio_segments SET state='committed',transcript='hello',linked_message_id='msg_integrity',updated_at_utc='2026-08-01T00:00:03.000Z',finalized_at_utc='2026-08-01T00:00:03.000Z' WHERE segment_id='audseg_integrity_one'",
+                [],
+            )
+            .expect("first link");
+        let duplicate_error = connection
+            .execute(
+                "UPDATE audio_segments SET state='committed',transcript='hello',linked_message_id='msg_integrity',updated_at_utc='2026-08-01T00:00:04.000Z',finalized_at_utc='2026-08-01T00:00:04.000Z' WHERE segment_id='audseg_integrity_two'",
+                [],
+            )
+            .expect_err("message can link only once");
+        assert!(duplicate_error
+            .to_string()
+            .contains("UNIQUE constraint failed"));
     }
 
     #[test]

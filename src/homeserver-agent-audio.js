@@ -351,6 +351,16 @@ async function startCapture(mode) {
       }
     });
     recorder.addEventListener("stop", () => void finalizeCapture(), { once: true });
+    recorder.addEventListener(
+      "error",
+      (event) => {
+        if (!state.intentionalStop) {
+          const detail = event.error?.message || "MediaRecorder reported an error.";
+          void failCapture("media_recorder_error", detail);
+        }
+      },
+      { once: true },
+    );
     track.addEventListener(
       "ended",
       () => {
@@ -839,6 +849,34 @@ async function initialize() {
   });
 }
 
+window.addEventListener("homeserver:agent-message-sent", (event) => {
+  const pending = state.pendingLink;
+  const detail = event.detail || {};
+  if (
+    !pending
+    || detail.prompt !== pending.transcript
+    || !detail.message_id
+    || pending.messageIds.has(detail.message_id)
+    || (pending.threadId && detail.thread_id !== pending.threadId)
+  ) {
+    return;
+  }
+
+  runUiAction(
+    async () => {
+      await audioAction("audio_update_transcript", {
+        segment_id: pending.segmentId,
+        transcript: pending.transcript,
+        linked_message_id: detail.message_id,
+      });
+      if (state.pendingLink?.token === pending.token) state.pendingLink = null;
+      await refreshStatus();
+      notify("Transcript linked to the exact Agent Chat message.", "success");
+      decorate(true);
+    },
+    "Unable to link the Agent Chat message",
+  );
+});
 window.addEventListener("homeserver:rendered", scheduleDecorate);
 window.addEventListener("homeserver-agent-route", scheduleDecorate);
 window.addEventListener("hashchange", scheduleDecorate);
