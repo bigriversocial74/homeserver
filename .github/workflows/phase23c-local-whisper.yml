@@ -65,6 +65,8 @@ jobs:
             .github/workflows/phase23c-queue-hardening.yml \
             scripts/apply-phase23c-final-contract-hardening.py \
             .github/workflows/phase23c-final-contract-hardening.yml \
+            scripts/apply-phase23c-removal-hardening.py \
+            .github/workflows/phase23c-removal-hardening.yml \
             .github/workflows/phase23c-whisper-errors.yml \
             phase23c-whisper-errors.txt \
             phase23c-whisper-exit.txt
