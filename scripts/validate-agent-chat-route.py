@@ -64,22 +64,31 @@ required_shared = [
     'action: "rename_thread"',
     'action: "delete_thread"',
     'invoke("homeserver_create_agent_goal", { request })',
+    'function removeSidebarFooters()',
+    '.app-sidebar > .server-card',
+    '.app-sidebar > .sidebar-state',
+    '.hs-chat-sidebar > .hs-chat-provider-summary',
+    '.hs-chat-sidebar > .hs-chat-sidebar-footer',
     'function removeUnexpectedControlCenterUi()',
     '.agent-chat-shell > .app-sidebar:not(.hs-chat-sidebar)',
     'sidebar.dataset.agentSidebarMode = AGENT_SIDEBAR_MODE',
-    'lower.append(createSidebarState())',
-    'sidebar.replaceChildren(createBrand(), chatSection, lower)',
+    'sidebar.replaceChildren(createBrand(), chatSection)',
     'document.querySelector(\'[data-homeserver-agent-host="true"]\')',
     'observer.observe(host, { childList: true, subtree: true })',
     'window.addEventListener("homeserver:rendered", scheduleDecorate)',
     'mode: AGENT_SIDEBAR_MODE',
+    'footerSections: "removed"',
     'window.__HOMESERVER_AGENT_SIDEBAR_CHAT_ONLY_V2__ = true',
 ]
 required_shared_css = [
+    '.app-sidebar>.server-card',
+    '.app-sidebar>.sidebar-state',
+    '.hs-chat-sidebar>.hs-chat-provider-summary',
+    '.hs-chat-sidebar>.hs-chat-sidebar-footer',
+    'display:none!important',
     '.shared-agent-sidebar.app-sidebar',
     '.shared-chat-row',
     '.shared-chat-actions',
-    '.shared-sidebar-lower',
 ]
 required_activity = [
     '.route("/v1/agent/threads/rename", post(rename_agent_thread))',
@@ -108,10 +117,10 @@ for value in required_durable:
         raise SystemExit(f"Missing durable Agent activity lifecycle contract: {value}")
 for value in required_shared:
     if value not in shared:
-        raise SystemExit(f"Missing simplified Agent Chat sidebar contract: {value}")
+        raise SystemExit(f"Missing footer-free shared sidebar contract: {value}")
 for value in required_shared_css:
     if value not in shared_css:
-        raise SystemExit(f"Missing shared sidebar layout contract: {value}")
+        raise SystemExit(f"Missing footer-free shared sidebar style contract: {value}")
 for value in required_activity:
     if value not in activity:
         raise SystemExit(f"Missing Agent chat service contract: {value}")
@@ -153,18 +162,23 @@ for forbidden in [
     'function reorderPrimaryNavigation()',
     'function createNavigation()',
     'function createServerCard()',
+    'function createSidebarState()',
     'data-shared-page',
     'menu: MENU_ITEMS',
+    'shared-sidebar-lower',
+    'const provider = sidebar.querySelector("#hs-chat-provider-summary")',
 ]:
     if forbidden in shared:
-        raise SystemExit(f"Agent Chat still injects removed sidebar UI: {forbidden}")
+        raise SystemExit(f"Shared sidebar still composes removed UI: {forbidden}")
 
 for forbidden in [
     '.shared-sidebar-navigation',
     '.shared-sidebar-server-card',
+    '.shared-sidebar-lower{display:grid',
+    '.shared-agent-sidebar .sidebar-state{margin-top:0}',
 ]:
     if forbidden in shared_css:
-        raise SystemExit(f"Removed Agent Chat sidebar style remains: {forbidden}")
+        raise SystemExit(f"Removed sidebar layout style remains: {forbidden}")
 
 for name, source in observer_modules.items():
     if 'MutationObserver' in source:
@@ -192,4 +206,4 @@ if 'window.setTimeout(() => mount(true), 0)' in chat:
 if 'event.target.closest("[data-page]")' in main:
     raise SystemExit("Competing delegated Control Center router remains")
 
-print("HomeServer renders the ordered primary sidebar only on Control Center pages and a single chat-only sidebar on Agent Chat, with no Control Center navigation or HomeServer status card.")
+print("HomeServer removes the footer/status section from both the Control Center sidebar and the chat-only Agent sidebar after every render.")
