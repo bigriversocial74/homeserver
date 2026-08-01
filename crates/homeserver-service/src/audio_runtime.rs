@@ -53,8 +53,7 @@ const RETENTION_MODES: &[&str] = &["ephemeral", "transcript"];
 
 const SESSION_COLUMNS: &str = "session_id,thread_id,mode,state,retention_mode,input_device_id,input_device_label,raw_audio_retained,failure_code,started_at_utc,updated_at_utc,ended_at_utc";
 const SEGMENT_COLUMNS: &str = "segment_id,session_id,sequence_no,state,mime_type,duration_ms,byte_length,content_sha256,transcript,linked_message_id,created_at_utc,updated_at_utc,finalized_at_utc";
-const EVENT_COLUMNS: &str =
-    "event_id,session_id,segment_id,event_type,detail_json,created_at_utc";
+const EVENT_COLUMNS: &str = "event_id,session_id,segment_id,event_type,detail_json,created_at_utc";
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
@@ -946,8 +945,7 @@ fn validate_identifier(value: &str, label: &str) -> Result<()> {
     );
     ensure!(
         value.chars().all(|character| {
-            character.is_ascii_alphanumeric()
-                || matches!(character, '_' | '-' | '.' | ':')
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.' | ':')
         }),
         "{label} contains unsupported characters"
     );
@@ -999,10 +997,7 @@ fn normalized_mime_type(value: &str) -> Result<String> {
 fn normalized_sha256(value: &str) -> Result<String> {
     let value = value.trim().to_ascii_lowercase();
     ensure!(
-        value.len() == 64
-            && value
-                .chars()
-                .all(|character| character.is_ascii_hexdigit()),
+        value.len() == 64 && value.chars().all(|character| character.is_ascii_hexdigit()),
         "recording SHA-256 is invalid"
     );
     Ok(value)
@@ -1181,9 +1176,7 @@ mod tests {
                 params!["a".repeat(64)],
             )
             .expect_err("segment outside finalizing state must fail");
-        assert!(error
-            .to_string()
-            .contains("invalid Phase 23 audio segment"));
+        assert!(error.to_string().contains("invalid Phase 23 audio segment"));
     }
 
     #[test]
