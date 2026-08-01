@@ -34,16 +34,17 @@ jobs:
       - name: Apply demonstrated Clippy repair
         shell: python
         run: |
+          import re
           from pathlib import Path
 
           path = Path("src-tauri/src/whisper.rs")
           text = path.read_text(encoding="utf-8")
-          old = '.then(|| unique_sibling(&model_destination, "backup"));'
-          new = '.then_some(unique_sibling(&model_destination, "backup"));'
-          count = text.count(old)
+          pattern = r'\.then\(\s*\|\|\s*unique_sibling\(\s*&model_destination,\s*"backup"\s*\)\s*\)'
+          replacement = '.then_some(unique_sibling(&model_destination, "backup"))'
+          repaired, count = re.subn(pattern, replacement, text, count=1)
           if count != 1:
-              raise SystemExit(f"Expected one then/then_some replacement, found {count}")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+              raise SystemExit(f"Expected one whitespace-tolerant then/then_some replacement, found {count}")
+          path.write_text(repaired, encoding="utf-8")
 
       - name: Format Rust workspace
         run: cargo fmt --all
