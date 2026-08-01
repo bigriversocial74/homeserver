@@ -58,6 +58,7 @@ required_durable = [
 ]
 required_shared = [
     'import { logoMark } from "./icons.js"',
+    'const AGENT_SIDEBAR_MODE = "chat-only"',
     'data-shared-chat-rename',
     'data-shared-chat-delete',
     'action: "rename_thread"',
@@ -65,12 +66,13 @@ required_shared = [
     'invoke("homeserver_create_agent_goal", { request })',
     'function removeUnexpectedControlCenterUi()',
     '.agent-chat-shell > .app-sidebar:not(.hs-chat-sidebar)',
-    'sidebar.dataset.agentSidebarMode = "chat-only"',
+    'sidebar.dataset.agentSidebarMode = AGENT_SIDEBAR_MODE',
     'lower.append(createSidebarState())',
     'sidebar.replaceChildren(createBrand(), chatSection, lower)',
     'document.querySelector(\'[data-homeserver-agent-host="true"]\')',
     'observer.observe(host, { childList: true, subtree: true })',
     'window.addEventListener("homeserver:rendered", scheduleDecorate)',
+    'mode: AGENT_SIDEBAR_MODE',
     'window.__HOMESERVER_AGENT_SIDEBAR_CHAT_ONLY_V2__ = true',
 ]
 required_shared_css = [
