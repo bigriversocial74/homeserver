@@ -341,6 +341,15 @@ async function finalizeUtterance() {
         transcript: null,
       });
       rememberPlayback(segment.segment_id, session.session_id, blob);
+      window.dispatchEvent(new CustomEvent("homeserver:vad-segment-finalized", {
+        detail: {
+          segment_id: segment.segment_id,
+          session_id: session.session_id,
+          blob,
+          duration_ms: durationMs,
+          content_sha256: segment.content_sha256,
+        },
+      }));
       await setSessionState("stopped", {
         ...vadDetail(snapshot, "utterance_finalized"),
         segment_id: segment.segment_id,

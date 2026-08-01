@@ -156,6 +156,18 @@ pub struct UpdateAudioTranscriptRequest {
     pub segment_id: String,
     pub transcript: String,
     pub linked_message_id: Option<String>,
+    #[serde(default)]
+    pub transcription_id: Option<String>,
+    #[serde(default)]
+    pub transcription_engine: Option<String>,
+    #[serde(default)]
+    pub transcription_model_sha256: Option<String>,
+    #[serde(default)]
+    pub transcription_language: Option<String>,
+    #[serde(default)]
+    pub transcription_final: bool,
+    #[serde(default)]
+    pub raw_audio_retained: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -684,6 +696,46 @@ fn save_transcript(
     validate_transcript(Some(&transcript))?;
     let linked_message_id =
         normalized_optional_identifier(request.linked_message_id, "linked message ID")?;
+    let transcription_id = normalized_optional_identifier(
+        request.transcription_id,
+        "transcription ID",
+    )?;
+    let transcription_engine = normalized_optional_value(
+        request.transcription_engine,
+        160,
+        "transcription engine",
+    )?;
+    let transcription_model_sha256 = request
+        .transcription_model_sha256
+        .map(|value| normalized_sha256(&value))
+        .transpose()?;
+    let transcription_language = normalized_optional_value(
+        request.transcription_language,
+        32,
+        "transcription language",
+    )?;
+    let has_transcription_receipt = transcription_id.is_some()
+        || transcription_engine.is_some()
+        || transcription_model_sha256.is_some()
+        || transcription_language.is_some();
+    if has_transcription_receipt {
+        ensure!(
+            transcription_id.is_some()
+                && transcription_engine.is_some()
+                && transcription_model_sha256.is_some()
+                && transcription_language.is_some()
+                && request.transcription_final,
+            "complete final local transcription metadata is required"
+        );
+        ensure!(
+            !request.raw_audio_retained,
+            "local transcription cannot retain raw audio"
+        );
+        ensure!(
+            linked_message_id.is_none(),
+            "local transcription receipt must precede Agent message linkage"
+        );
+    }
 
     let now = now_utc();
     let mut connection = state.connection()?;
@@ -782,12 +834,20 @@ fn save_transcript(
         Some(&request.segment_id),
         if linked_message_id.is_some() {
             "transcript_committed"
+        } else if has_transcription_receipt {
+            "local_whisper_transcription_completed"
         } else {
             "transcript_updated"
         },
         json!({
             "linked_message_id": linked_message_id,
-            "thread_id": resolved_thread_id
+            "thread_id": resolved_thread_id,
+            "transcription_id": transcription_id,
+            "transcription_engine": transcription_engine,
+            "transcription_model_sha256": transcription_model_sha256,
+            "transcription_language": transcription_language,
+            "transcription_final": has_transcription_receipt.then_some(true),
+            "raw_audio_retained": has_transcription_receipt.then_some(false)
         }),
     )?;
     transaction.commit()?;
