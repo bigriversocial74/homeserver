@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { icon, logoMark } from "./icons.js";
+import { logoMark } from "./icons.js";
 import "./shared-sidebar.css";
 
 const MENU_ITEMS = [
@@ -43,11 +43,6 @@ function navigate(page) {
   window.location.hash = `#${page}`;
 }
 
-function menuMarkup(activePage, shared = false) {
-  const attribute = shared ? "data-shared-page" : "data-page";
-  return MENU_ITEMS.map(([key, label, iconName]) => `<button type="button" class="nav-item ${activePage === key ? "active" : ""}" ${attribute}="${key}">${icon(iconName, 19)}<span>${escapeHtml(label)}</span></button>`).join("");
-}
-
 function reorderPrimaryNavigation() {
   if (isAgentPage()) return;
   const nav = document.querySelector(".app-sidebar .primary-nav");
@@ -67,25 +62,6 @@ function createBrand() {
   brand.innerHTML = `${logoMark(43)}<div><strong>Microgifter</strong><span>HomeServer</span></div>`;
   brand.addEventListener("click", () => navigate("dashboard"));
   return brand;
-}
-
-function createNavigation() {
-  const nav = document.createElement("nav");
-  nav.className = "primary-nav shared-sidebar-navigation";
-  nav.setAttribute("aria-label", "HomeServer pages");
-  nav.innerHTML = menuMarkup("agent", true);
-  nav.querySelectorAll("[data-shared-page]").forEach((button) => {
-    button.addEventListener("click", () => navigate(button.dataset.sharedPage));
-  });
-  return nav;
-}
-
-function createServerCard() {
-  const card = document.createElement("div");
-  card.className = "server-card shared-sidebar-server-card";
-  card.innerHTML = `<div class="server-card-top"><div class="server-glyph">${icon("system", 22)}</div><div><strong>HomeServer</strong><span><i class="live-dot"></i>Online</span></div></div><div class="server-divider"></div><small>Local Control Center</small><button type="button" class="text-button" data-shared-system>View system status</button>`;
-  card.querySelector("[data-shared-system]")?.addEventListener("click", () => navigate("system"));
-  return card;
 }
 
 function createSidebarState() {
@@ -180,9 +156,9 @@ function decorateAgentSidebar() {
     const lower = document.createElement("div");
     lower.className = "shared-sidebar-lower";
     if (provider) lower.append(provider);
-    lower.append(createServerCard(), createSidebarState());
+    lower.append(createSidebarState());
 
-    sidebar.replaceChildren(createBrand(), createNavigation(), chatSection, lower);
+    sidebar.replaceChildren(createBrand(), chatSection, lower);
   } finally {
     decorating = false;
   }
