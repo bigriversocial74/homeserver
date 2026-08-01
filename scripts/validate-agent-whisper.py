@@ -42,6 +42,7 @@ for token, label in (
     ("REMOVE LOCAL WHISPER MODEL", "explicit model removal confirmation"),
     ("Only one local Whisper transcription", "single active transcription"),
     ("set_segment_callback_safe_lossy", "partial transcript callback"),
+    ("data: SegmentCallbackData", "explicit whisper-rs callback type"),
     ("set_progress_callback_safe", "bounded progress callback"),
     ("set_abort_callback_safe", "native cancellation callback"),
     ("WhisperContext::new_with_params", "embedded whisper.cpp model runtime"),
@@ -223,6 +224,8 @@ for temporary_path in (
     ROOT / ".github/workflows/phase23c-final-contract-hardening.yml",
     ROOT / "scripts/apply-phase23c-removal-hardening.py",
     ROOT / ".github/workflows/phase23c-removal-hardening.yml",
+    ROOT / "scripts/apply-phase23c-callback-type-repair.py",
+    ROOT / ".github/workflows/phase23c-callback-type-repair.yml",
 ):
     if temporary_path.exists():
         raise SystemExit(

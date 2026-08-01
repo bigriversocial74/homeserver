@@ -18,7 +18,9 @@ use tokio::{
     sync::Mutex as AsyncMutex,
 };
 use uuid::Uuid;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{
+    FullParams, SamplingStrategy, SegmentCallbackData, WhisperContext, WhisperContextParameters,
+};
 use zeroize::Zeroizing;
 
 const MANIFEST_SCHEMA: &str = "homeserver.local-whisper-model.v1";
@@ -811,7 +813,7 @@ fn run_whisper(
     let segment_transcription_id = transcription_id.clone();
     let segment_segment_id = segment_id.clone();
     let segment_model_sha256 = model_sha256.clone();
-    params.set_segment_callback_safe_lossy(Some(move |data| {
+    params.set_segment_callback_safe_lossy(Some(move |data: SegmentCallbackData| {
         if let Ok(mut values) = segment_partials.lock() {
             values.insert(data.segment, data.text);
             let combined = values.values().cloned().collect::<Vec<_>>().join(" ");
