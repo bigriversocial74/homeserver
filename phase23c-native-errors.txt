@@ -1,0 +1,16 @@
+[1m[92m   Compiling[0m http-body-util v0.1.4
+[1m[92m   Compiling[0m microgifter-homeserver-control-center v0.1.5 (/home/runner/work/homeserver/homeserver/src-tauri)
+[1m[92m   Compiling[0m urlencoding v2.1.3
+[1m[92m   Compiling[0m pollster v0.4.0
+[1m[91merror[0m: failed to run custom build command for `microgifter-homeserver-control-center v0.1.5 (/home/runner/work/homeserver/homeserver/src-tauri)`
+
+Caused by:
+  process didn't exit successfully: `/home/runner/work/homeserver/homeserver/target/debug/build/microgifter-homeserver-control-center-1233a013383c5bf0/build-script-build` (exit status: 1)
+  --- stdout
+  cargo:rerun-if-env-changed=TAURI_CONFIG
+  cargo:rustc-check-cfg=cfg(desktop)
+  cargo:rustc-cfg=desktop
+  cargo:rustc-check-cfg=cfg(mobile)
+  cargo:rerun-if-changed=/home/runner/work/homeserver/homeserver/src-tauri/tauri.conf.json
+  cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_APP_NAME=homeserver
+  cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_PREFIX=com_microgifter
