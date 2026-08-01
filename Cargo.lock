@@ -2511,7 +2511,7 @@ dependencies = [
 
 [[package]]
 name = "microgifter-homeserver-control-center"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
@@ -2533,7 +2533,7 @@ dependencies = [
 
 [[package]]
 name = "microgifter-homeserver-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "chrono",
  "serde",
@@ -2542,7 +2542,7 @@ dependencies = [
 
 [[package]]
 name = "microgifter-homeserver-mcp"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "reqwest 0.12.28",
@@ -2553,7 +2553,7 @@ dependencies = [
 
 [[package]]
 name = "microgifter-homeserver-service"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2596,7 +2596,7 @@ dependencies = [
 
 [[package]]
 name = "microgifter-homeserver-updater"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "chrono",

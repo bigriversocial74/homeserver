@@ -58,22 +58,20 @@ required_durable = [
 ]
 required_shared = [
     'import { logoMark } from "./icons.js"',
-    '["agent", "HomeServer Agent", "integrations"]',
-    '["home", "Home", "home"]',
-    '["dashboard", "Dashboard", "dashboard"]',
-    '["models", "Model Center", "model"]',
-    '["apps", "Apps", "apps"]',
-    '["knowledge", "Knowledge Vault", "vault"]',
     'data-shared-chat-rename',
     'data-shared-chat-delete',
     'action: "rename_thread"',
     'action: "delete_thread"',
     'invoke("homeserver_create_agent_goal", { request })',
+    'function removeUnexpectedControlCenterUi()',
+    '.agent-chat-shell > .app-sidebar:not(.hs-chat-sidebar)',
+    'sidebar.dataset.agentSidebarMode = "chat-only"',
     'lower.append(createSidebarState())',
     'sidebar.replaceChildren(createBrand(), chatSection, lower)',
     'document.querySelector(\'[data-homeserver-agent-host="true"]\')',
     'observer.observe(host, { childList: true, subtree: true })',
     'window.addEventListener("homeserver:rendered", scheduleDecorate)',
+    'window.__HOMESERVER_AGENT_SIDEBAR_CHAT_ONLY_V2__ = true',
 ]
 required_shared_css = [
     '.shared-agent-sidebar.app-sidebar',
@@ -127,9 +125,9 @@ requested_order = [
     '["apps", "Apps", "apps"]',
     '["knowledge", "Knowledge Vault", "vault"]',
 ]
-positions = [shared.index(value) for value in requested_order]
+positions = [main.index(value) for value in requested_order]
 if positions != sorted(positions):
-    raise SystemExit("Requested HomeServer sidebar order is not preserved")
+    raise SystemExit("Requested HomeServer Control Center sidebar order is not preserved")
 
 if '/src/agent-workspace.js' in index:
     raise SystemExit("Legacy Agent Workspace is still loaded beside Agent Chat")
@@ -149,10 +147,12 @@ if 'observer.observe(document.body' in shared or 'observer.observe(document.quer
     raise SystemExit("Shared sidebar watches the complete application DOM instead of the Agent host")
 
 for forbidden in [
+    'const MENU_ITEMS',
+    'function reorderPrimaryNavigation()',
     'function createNavigation()',
     'function createServerCard()',
-    'createNavigation(), chatSection',
-    'lower.append(createServerCard()',
+    'data-shared-page',
+    'menu: MENU_ITEMS',
 ]:
     if forbidden in shared:
         raise SystemExit(f"Agent Chat still injects removed sidebar UI: {forbidden}")
@@ -190,4 +190,4 @@ if 'window.setTimeout(() => mount(true), 0)' in chat:
 if 'event.target.closest("[data-page]")' in main:
     raise SystemExit("Competing delegated Control Center router remains")
 
-print("HomeServer keeps the ordered primary sidebar on Control Center pages, uses a chat-only Agent sidebar with rename/delete controls, and omits Agent navigation and the HomeServer status card.")
+print("HomeServer renders the ordered primary sidebar only on Control Center pages and a single chat-only sidebar on Agent Chat, with no Control Center navigation or HomeServer status card.")
