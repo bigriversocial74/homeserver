@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import sqlite3
 from pathlib import Path
 
@@ -14,11 +13,6 @@ def read(path: str) -> str:
 def require(text: str, token: str, label: str) -> None:
     if token not in text:
         raise SystemExit(f"Missing {label}: {token}")
-
-
-def require_pattern(text: str, pattern: str, label: str) -> None:
-    if re.search(pattern, text, flags=re.MULTILINE | re.DOTALL) is None:
-        raise SystemExit(f"Missing {label}: /{pattern}/")
 
 
 def forbid(text: str, token: str, label: str) -> None:
@@ -118,11 +112,7 @@ def validate_database_contract(base_migration: str, hardening_migration: str) ->
         "UPDATE audio_sessions SET state='listening' WHERE session_id='aud_contract'"
     )
     connection.execute(
-        """
-        UPDATE audio_sessions
-        SET state='finalizing_transcript'
-        WHERE session_id='aud_contract'
-        """
+        "UPDATE audio_sessions SET state='finalizing_transcript' WHERE session_id='aud_contract'"
     )
     connection.execute(
         """
@@ -172,13 +162,10 @@ def validate_database_contract(base_migration: str, hardening_migration: str) ->
     )
     expect_sql_failure(
         connection,
-        """
-        UPDATE audio_segments
-        SET transcript='rewritten'
-        WHERE segment_id='audseg_contract'
-        """,
+        "UPDATE audio_segments SET transcript='rewritten' WHERE segment_id='audseg_contract'",
         "a committed transcript mutation",
     )
+    connection.close()
 
 
 base_migration = read("database/migrations/0030_agent_audio_conversation.sql")
@@ -188,66 +175,25 @@ for table in (
     "conversation_events",
     "audio_permission_receipts",
 ):
-    require(
-        base_migration,
-        f"CREATE TABLE IF NOT EXISTS {table}",
-        f"{table} schema",
-    )
-require(
-    base_migration,
-    "0030_agent_audio_conversation",
-    "base migration registration",
-)
+    require(base_migration, f"CREATE TABLE IF NOT EXISTS {table}", f"{table} schema")
+require(base_migration, "0030_agent_audio_conversation", "base migration registration")
 
 hardening_migration = read(
     "database/migrations/0031_agent_audio_conversation_hardening.sql"
 )
 for token, label in (
-    (
-        "idx_audio_sessions_single_active",
-        "database-enforced single active session",
-    ),
-    (
-        "trg_audio_sessions_phase23_transition",
-        "closed session transition trigger",
-    ),
-    (
-        "trg_audio_sessions_phase23_insert",
-        "raw-audio session boundary trigger",
-    ),
-    (
-        "trg_audio_permission_receipts_phase23_update",
-        "immutable permission boundary",
-    ),
-    (
-        "trg_audio_segments_phase23_insert",
-        "segment finalization boundary",
-    ),
-    (
-        "trg_audio_segments_phase23_update",
-        "verified immutable transcript linkage",
-    ),
-    (
-        "0031_agent_audio_conversation_hardening",
-        "hardening migration registration",
-    ),
+    ("idx_audio_sessions_single_active", "database-enforced single active session"),
+    ("trg_audio_sessions_phase23_transition", "closed session transitions"),
+    ("trg_audio_sessions_phase23_insert", "raw-audio session boundary"),
+    ("trg_audio_permission_receipts_phase23_update", "permission boundary"),
+    ("trg_audio_segments_phase23_insert", "segment finalization boundary"),
+    ("trg_audio_segments_phase23_update", "verified immutable transcript linkage"),
+    ("NEW.raw_audio_retained <> 0", "database raw-audio denial"),
+    ("m.created_at_utc >= s.started_at_utc", "temporal message-link boundary"),
+    ("(s.thread_id IS NULL OR s.thread_id = m.thread_id)", "thread-link boundary"),
+    ("0031_agent_audio_conversation_hardening", "hardening registration"),
 ):
     require(hardening_migration, token, label)
-require(
-    hardening_migration,
-    "NEW.raw_audio_retained <> 0",
-    "database raw-audio retention denial",
-)
-require(
-    hardening_migration,
-    "m.created_at_utc >= s.started_at_utc",
-    "message temporal-link boundary",
-)
-require(
-    hardening_migration,
-    "(s.thread_id IS NULL OR s.thread_id = m.thread_id)",
-    "message thread-link boundary",
-)
 validate_database_contract(base_migration, hardening_migration)
 
 runtime = read("crates/homeserver-service/src/audio_runtime.rs")
@@ -261,54 +207,21 @@ for route in (
 ):
     require(runtime, route, f"protected audio route {route}")
 for token, label in (
-    (
-        "0031_agent_audio_conversation_hardening.sql",
-        "hardening migration execution",
-    ),
-    (
-        "TransactionBehavior::Immediate",
-        "serialized audio write transactions",
-    ),
-    (
-        "fn allowed_transition",
-        "closed service transition matrix",
-    ),
-    (
-        "verified_agent_message_linkage",
-        "verified Agent-message linkage capability",
-    ),
+    ("0031_agent_audio_conversation_hardening.sql", "hardening migration execution"),
+    ("TransactionBehavior::Immediate", "serialized audio writes"),
+    ("fn allowed_transition", "closed service transition matrix"),
+    ("verified_agent_message_linkage", "verified message-link capability"),
     (
         "linked Agent message was not found or does not match the transcript",
-        "service message-link verification",
+        "message-link verification",
     ),
-    (
-        "committed transcript linkage is immutable",
-        "service immutable transcript linkage",
-    ),
-    (
-        "MAX_RECORDING_DURATION_MS",
-        "recording duration limit",
-    ),
-    (
-        "MAX_RECORDING_BYTES",
-        "recording byte limit",
-    ),
-    (
-        "raw_audio_persistence\": false",
-        "ephemeral raw-audio capability boundary",
-    ),
-    (
-        "\"cloud_egress\": false",
-        "local-only egress boundary",
-    ),
-    (
-        "#[cfg(test)]",
-        "native audio contract tests",
-    ),
-    (
-        "hardening_migration_enforces_one_active_session",
-        "single-session native test",
-    ),
+    ("committed transcript linkage is immutable", "immutable transcript linkage"),
+    ("MAX_RECORDING_DURATION_MS", "recording duration limit"),
+    ("MAX_RECORDING_BYTES", "recording byte limit"),
+    ('"raw_audio_persistence": false', "ephemeral raw-audio capability"),
+    ('"cloud_egress": false', "local-only egress capability"),
+    ("#[cfg(test)]", "native audio contract tests"),
+    ("hardening_migration_enforces_one_active_session", "single-session native test"),
     (
         "committed_transcript_linkage_is_verified_and_immutable",
         "linkage native test",
@@ -349,68 +262,24 @@ require(index, "/src/homeserver-agent-audio.js", "Agent audio module loading")
 
 chat = read("src/homeserver-agent-audio.js")
 for token, label in (
-    (
-        "navigator.mediaDevices.getUserMedia",
-        "local microphone capture",
-    ),
-    (
-        "new MediaRecorder",
-        "local MediaRecorder capture",
-    ),
-    (
-        'retention_mode: "transcript"',
-        "persistent transcript metadata with ephemeral raw audio",
-    ),
-    (
-        "CAPTURE_STOP_MS",
-        "bounded recording duration",
-    ),
-    (
-        "CAPTURE_STOP_BYTES",
-        "bounded in-memory recording size",
-    ),
-    (
-        "reconcileOrphanedSession",
-        "stale webview-session recovery",
-    ),
-    (
-        "releaseLocalRecording",
-        "object URL cleanup",
-    ),
-    (
-        "MAX_LOCAL_RECORDINGS",
-        "bounded local playback memory",
-    ),
-    (
-        "workspaceMessageSnapshot",
-        "pre-submit message identity baseline",
-    ),
-    (
-        "!pending.messageIds.has(message.message_id)",
-        "new-message-only transcript linkage",
-    ),
-    (
-        "Agent Chat already contains an unsent draft",
-        "composer draft protection",
-    ),
-    (
-        "pagehide",
-        "capture-host shutdown handling",
-    ),
-    (
-        "devicechange",
-        "microphone device lifecycle handling",
-    ),
-    (
-        'raw_audio_retained: false',
-        "raw-audio persistence denial",
-    ),
+    ("navigator.mediaDevices.getUserMedia", "local microphone capture"),
+    ("new MediaRecorder", "local MediaRecorder capture"),
+    ('retention_mode: "transcript"', "transcript metadata retention"),
+    ("CAPTURE_STOP_MS", "bounded recording duration"),
+    ("CAPTURE_STOP_BYTES", "bounded in-memory recording size"),
+    ("reconcileOrphanedSession", "stale webview-session recovery"),
+    ("releaseLocalRecording", "object URL cleanup"),
+    ("MAX_LOCAL_RECORDINGS", "bounded local playback memory"),
+    ("workspaceMessageSnapshot", "pre-submit message identity baseline"),
+    ("!pending.messageIds.has(message.message_id)", "new-message-only linkage"),
+    ("Agent Chat already contains an unsent draft", "composer draft protection"),
+    ("pagehide", "capture-host shutdown handling"),
+    ("devicechange", "microphone device lifecycle handling"),
+    ("raw_audio_retained: false", "raw-audio persistence denial"),
 ):
     require(chat, token, label)
-
 for token, label in (
     ("SpeechRecognition", "browser/cloud speech recognition"),
-    ("webkitSpeechRecognition", "browser/cloud speech recognition"),
     ("audio_base64", "raw audio JSON upload"),
     ("FileReader", "raw audio serialization"),
     ("fetch(", "direct network egress"),
@@ -425,37 +294,23 @@ for javascript_path in (ROOT / "src").rglob("*.js"):
     javascript = javascript_path.read_text(encoding="utf-8")
     forbid(
         javascript,
-        "webkitSpeechRecognition",
+        "SpeechRecognition",
         f"browser/cloud speech recognition in {javascript_path.relative_to(ROOT)}",
-    )
-    require_pattern(
-        javascript,
-        r"\A[\s\S]*\Z",
-        f"readable JavaScript file {javascript_path.relative_to(ROOT)}",
     )
 
 css = read("src/homeserver-agent-audio.css")
-require(
-    css,
-    "Phase 23 Agent Chat ears and conversation engine",
-    "audio UI styles",
-)
-require(css, ".hs-agent-audio-panel", "audio panel styles")
-require(css, ".hs-agent-audio-mic", "microphone control styles")
-require(css, ":focus-visible", "keyboard focus styles")
-require(css, "prefers-reduced-motion", "reduced-motion styles")
+for token, label in (
+    ("Phase 23 Agent Chat ears and conversation engine", "audio UI styles"),
+    (".hs-agent-audio-panel", "audio panel styles"),
+    (".hs-agent-audio-mic", "microphone control styles"),
+    (":focus-visible", "keyboard focus styles"),
+    ("prefers-reduced-motion", "reduced-motion styles"),
+):
+    require(css, token, label)
 
 package = read("package.json")
-require(
-    package,
-    "node --check src/homeserver-agent-audio.js",
-    "Agent audio JavaScript syntax gate",
-)
-require(
-    package,
-    "validate-agent-audio-conversation.py",
-    "Agent audio permanent validator gate",
-)
+require(package, "node --check src/homeserver-agent-audio.js", "audio syntax gate")
+require(package, "validate-agent-audio-conversation.py", "permanent validator gate")
 
 for temporary_path in (
     ROOT / "src-tauri/src/audio.rs",
@@ -464,8 +319,7 @@ for temporary_path in (
 ):
     if temporary_path.exists():
         raise SystemExit(
-            f"Temporary Phase 23 staging file remains: "
-            f"{temporary_path.relative_to(ROOT)}"
+            f"Temporary Phase 23 staging file remains: {temporary_path.relative_to(ROOT)}"
         )
 
 print(
