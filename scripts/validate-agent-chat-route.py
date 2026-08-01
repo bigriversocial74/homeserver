@@ -57,7 +57,7 @@ required_durable = [
     'if (!injected && isAgentPage() && attempt < 20)',
 ]
 required_shared = [
-    'import { icon, logoMark } from "./icons.js"',
+    'import { logoMark } from "./icons.js"',
     '["agent", "HomeServer Agent", "integrations"]',
     '["home", "Home", "home"]',
     '["dashboard", "Dashboard", "dashboard"]',
@@ -69,6 +69,8 @@ required_shared = [
     'action: "rename_thread"',
     'action: "delete_thread"',
     'invoke("homeserver_create_agent_goal", { request })',
+    'lower.append(createSidebarState())',
+    'sidebar.replaceChildren(createBrand(), chatSection, lower)',
     'document.querySelector(\'[data-homeserver-agent-host="true"]\')',
     'observer.observe(host, { childList: true, subtree: true })',
     'window.addEventListener("homeserver:rendered", scheduleDecorate)',
@@ -77,7 +79,7 @@ required_shared_css = [
     '.shared-agent-sidebar.app-sidebar',
     '.shared-chat-row',
     '.shared-chat-actions',
-    '.shared-sidebar-navigation',
+    '.shared-sidebar-lower',
 ]
 required_activity = [
     '.route("/v1/agent/threads/rename", post(rename_agent_thread))',
@@ -106,7 +108,7 @@ for value in required_durable:
         raise SystemExit(f"Missing durable Agent activity lifecycle contract: {value}")
 for value in required_shared:
     if value not in shared:
-        raise SystemExit(f"Missing shared HomeServer sidebar contract: {value}")
+        raise SystemExit(f"Missing simplified Agent Chat sidebar contract: {value}")
 for value in required_shared_css:
     if value not in shared_css:
         raise SystemExit(f"Missing shared sidebar layout contract: {value}")
@@ -146,6 +148,22 @@ if 'current.hasAttribute("data-durable-activity-card")' in durable:
 if 'observer.observe(document.body' in shared or 'observer.observe(document.querySelector("#app")' in shared:
     raise SystemExit("Shared sidebar watches the complete application DOM instead of the Agent host")
 
+for forbidden in [
+    'function createNavigation()',
+    'function createServerCard()',
+    'createNavigation(), chatSection',
+    'lower.append(createServerCard()',
+]:
+    if forbidden in shared:
+        raise SystemExit(f"Agent Chat still injects removed sidebar UI: {forbidden}")
+
+for forbidden in [
+    '.shared-sidebar-navigation',
+    '.shared-sidebar-server-card',
+]:
+    if forbidden in shared_css:
+        raise SystemExit(f"Removed Agent Chat sidebar style remains: {forbidden}")
+
 for name, source in observer_modules.items():
     if 'MutationObserver' in source:
         raise SystemExit(f"{name} still watches the complete application DOM")
@@ -172,4 +190,4 @@ if 'window.setTimeout(() => mount(true), 0)' in chat:
 if 'event.target.closest("[data-page]")' in main:
     raise SystemExit("Competing delegated Control Center router remains")
 
-print("HomeServer uses one ordered shared sidebar, persistent Agent chat rename/delete controls, a repaintable durable activity card, and no duplicate app-wide observer network.")
+print("HomeServer keeps the ordered primary sidebar on Control Center pages, uses a chat-only Agent sidebar with rename/delete controls, and omits Agent navigation and the HomeServer status card.")
