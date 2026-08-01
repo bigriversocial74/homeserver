@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { logoMark } from "./icons.js";
 import "./shared-sidebar.css";
 
+const AGENT_SIDEBAR_MODE = "chat-only";
+
 let observer = null;
 let observedHost = null;
 let scheduled = false;
@@ -129,7 +131,7 @@ function decorateAgentSidebar() {
   decorating = true;
   try {
     sidebar.dataset.sharedSidebar = "true";
-    sidebar.dataset.agentSidebarMode = "chat-only";
+    sidebar.dataset.agentSidebarMode = AGENT_SIDEBAR_MODE;
     sidebar.classList.add("app-sidebar", "shared-agent-sidebar");
 
     const chatSection = document.createElement("section");
@@ -180,7 +182,7 @@ window.addEventListener("hashchange", scheduleDecorate);
 scheduleDecorate();
 
 window.__HOMESERVER_SHARED_SIDEBAR_V1__ = {
-  mode: "agent-chat-only",
+  mode: AGENT_SIDEBAR_MODE,
   refresh: scheduleDecorate,
 };
 window.__HOMESERVER_AGENT_SIDEBAR_CHAT_ONLY_V2__ = true;
