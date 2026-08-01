@@ -1,0 +1,64 @@
+name: Phase 23 Agent Audio Bootstrap
+
+on:
+  push:
+    branches:
+      - feature/phase-23-agent-chat-ears-conversation-engine
+    paths:
+      - scripts/apply-phase23-agent-audio.py
+      - .github/workflows/phase-23-bootstrap.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Phase 23 branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply Phase 23 source integration
+        run: python scripts/apply-phase23-agent-audio.py
+
+      - name: Format Rust source
+        run: cargo fmt --all
+
+      - name: Commit integrated source
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/homeserver-service/src/app.rs crates/homeserver-service/src/audio_runtime.rs src-tauri/src/lib.rs src-tauri/src/audio.rs src/homeserver-agent-chat.js src/homeserver-agent-chat.css
+          if git diff --cached --quiet; then
+            echo "No source changes to commit."
+          else
+            git commit -m "Integrate Phase 23 ears into Agent Chat"
+            git push origin HEAD:feature/phase-23-agent-chat-ears-conversation-engine
+          fi
+
+      - name: Validate Phase 23 contract
+        run: python scripts/validate-agent-audio-conversation.py
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Agent Chat frontend
+        run: npm run build
+
+      - name: Check HomeServer service
+        run: cargo check -p microgifter-homeserver-service
+
+      - name: Check Control Center
+        run: cargo check -p microgifter-homeserver-control-center
