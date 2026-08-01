@@ -56,6 +56,9 @@ for token, label in (
     ("capturePanelActions", "live-conversation takeover"),
     ("runtime.transitioning", "serialized state transitions"),
     ("detectedSpeechMs", "detected-speech short-burst rejection"),
+    ("escapeHtml(runtime.notice.message)", "escaped VAD notice text"),
+    ("duration_ms: durationMs", "exact captured-duration evidence"),
+    ("durationMs > maxDurationMs", "explicit duration-boundary rejection"),
     ("vad_control_center_closed", "closed-window recovery"),
 ):
     require(CONTROLLER, token, label)
@@ -83,6 +86,8 @@ for forbidden, label in (
     ("sessionStorage", "browser persistence"),
     ("indexedDB", "browser persistence"),
     ("MediaStreamTrackProcessor", "unbounded raw-frame pipeline"),
+    ("Math.min(durationMs", "silently clamped duration evidence"),
+    ('>${runtime.notice.message}</p>', "unescaped VAD notice text"),
 ):
     forbid(CONTROLLER, forbidden, label)
 

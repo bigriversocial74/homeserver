@@ -49,6 +49,15 @@ function selectedDeviceId() {
   return document.querySelector("[data-agent-audio-device]")?.value || "";
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function recordingSupported() {
   return Boolean(
     navigator.mediaDevices?.getUserMedia
@@ -319,10 +328,14 @@ async function finalizeUtterance() {
       );
       notify("A short noise burst was rejected without creating a recording.", "info");
     } else {
+      const maxDurationMs = VAD_DEFAULTS.maxSegmentMs + PRE_ROLL_MS + 2_000;
+      if (durationMs > maxDurationMs) {
+        throw new Error("The utterance exceeded the governed VAD duration boundary.");
+      }
       const segment = await audioAction("audio_finalize_segment", {
         session_id: session.session_id,
         mime_type: blob.type || "application/octet-stream",
-        duration_ms: Math.min(durationMs, VAD_DEFAULTS.maxSegmentMs + PRE_ROLL_MS + 2_000),
+        duration_ms: durationMs,
         byte_length: blob.size,
         content_sha256: await sha256(blob),
         transcript: null,
@@ -576,7 +589,7 @@ function enhancePanel() {
         <span>adaptive noise floor</span>
         <span>${PRE_ROLL_MS} ms pre-roll</span>
       </div>
-      ${runtime.notice ? `<p data-kind="${runtime.notice.kind}">${runtime.notice.message}</p>` : ""}
+      ${runtime.notice ? `<p data-kind="${escapeHtml(runtime.notice.kind)}">${escapeHtml(runtime.notice.message)}</p>` : ""}
     `;
     stateRow.insertAdjacentElement("afterend", shell);
   }
