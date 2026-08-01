@@ -86,9 +86,11 @@ assert.ok(Math.abs(rmsToDb(0.1) + 20) < 0.001);
 
 {
   const engine = new AdaptiveVadEngine();
-  feed(engine, 0, 1_500, -48);
+  const firstEvents = feed(engine, 0, 1_500, -64);
   const firstFloor = engine.noiseFloorDb;
-  feed(engine, 1_530, 3_000, -42);
+  const secondEvents = feed(engine, 1_530, 3_000, -58);
+  assert.equal(firstEvents.length, 0, "ambient calibration must remain non-speech");
+  assert.equal(secondEvents.length, 0, "sub-threshold ambient drift must remain non-speech");
   assert.ok(engine.noiseFloorDb > firstFloor, "noise floor must adapt upward locally");
   assert.ok(engine.noiseFloorDb <= engine.options.maxNoiseFloorDb);
 }
