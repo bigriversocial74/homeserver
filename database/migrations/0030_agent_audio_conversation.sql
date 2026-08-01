@@ -62,5 +62,5 @@ CREATE TABLE IF NOT EXISTS audio_permission_receipts (
     created_at_utc TEXT NOT NULL
 );
 
-INSERT OR IGNORE INTO schema_migrations (migration_key, applied_at_utc)
-VALUES ('0030_agent_audio_conversation', strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+INSERT OR IGNORE INTO schema_migrations(migration_key)
+VALUES('0030_agent_audio_conversation');
