@@ -1,0 +1,84 @@
+name: Phase 23A Final Certification Repair
+
+on:
+  push:
+    branches:
+      - feature/phase-23-agent-chat-ears-conversation-engine
+    paths:
+      - scripts/apply-phase23-final-certification.py
+      - .github/workflows/phase23-final-certification-repair.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phase23-final-certification-repair
+  cancel-in-progress: false
+
+jobs:
+  repair-and-certify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out draft branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/phase-23-agent-chat-ears-conversation-engine
+          fetch-depth: 0
+
+      - name: Configure Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Configure Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Apply permanent Phase 23A hardening
+        run: |
+          python scripts/apply-phase23-final-certification.py
+          cargo fmt --all
+          rm scripts/apply-phase23-final-certification.py
+          rm .github/workflows/phase23-final-certification-repair.yml
+
+      - name: Commit permanent repair
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Complete Phase 23A final integrity hardening"
+          git push origin HEAD:feature/phase-23-agent-chat-ears-conversation-engine
+          echo "head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run permanent frontend contracts
+        run: npm run check:frontend
+
+      - name: Build production frontend
+        run: npm run build
+
+      - name: Verify Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check Rust workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Run strict Rust lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run Rust workspace tests
+        run: cargo test --workspace
+
+      - name: Report certified exact head
+        run: echo "Phase 23A certification completed at ${{ steps.commit.outputs.head }}"
