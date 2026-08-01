@@ -10,6 +10,7 @@ FINAL = (ROOT / "database/migrations/0032_agent_audio_final_integrity.sql").read
 RUNTIME = (ROOT / "crates/homeserver-service/src/audio_runtime.rs").read_text(encoding="utf-8")
 CHAT = (ROOT / "src/homeserver-agent-chat.js").read_text(encoding="utf-8")
 AUDIO = (ROOT / "src/homeserver-agent-audio.js").read_text(encoding="utf-8")
+PACKAGE = (ROOT / "package.json").read_text(encoding="utf-8")
 
 
 def require(text: str, token: str, label: str) -> None:
@@ -43,6 +44,16 @@ require(CHAT, "result.user_message_id", "exact Agent user message identity")
 require(AUDIO, 'window.addEventListener("homeserver:agent-message-sent"', "exact message listener")
 require(AUDIO, 'recorder.addEventListener(\n      "error"', "MediaRecorder error handling")
 require(AUDIO, "pending.messageIds.has(detail.message_id)", "pre-submit message exclusion")
+require(PACKAGE, "validate-agent-audio-final-integrity.py", "permanent exact-head validator gate")
+
+for temporary_path in (
+    ROOT / "scripts/apply-phase23-final-certification.py",
+    ROOT / ".github/workflows/phase23-final-certification-repair.yml",
+):
+    if temporary_path.exists():
+        raise SystemExit(
+            f"Temporary Phase 23 certification file remains: {temporary_path.relative_to(ROOT)}"
+        )
 
 connection = sqlite3.connect(":memory:")
 connection.executescript(
@@ -139,4 +150,4 @@ reject(
     "one Agent message linked to two segments",
 )
 connection.close()
-print("Phase 23A final integrity validates exact message identity, post-capture linkage, unique evidence binding, retry-safe finalization, and recorder failure handling.")
+print("Phase 23A final integrity validates exact message identity, post-capture linkage, unique evidence binding, retry-safe finalization, recorder failure handling, and permanent exact-head certification hygiene.")
