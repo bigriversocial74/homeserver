@@ -1,0 +1,64 @@
+name: Phase 23B Local VAD and Segmentation
+
+on:
+  pull_request:
+    paths:
+      - "src/homeserver-vad-engine.js"
+      - "src/homeserver-agent-vad.js"
+      - "src/homeserver-agent-vad.css"
+      - "src/homeserver-agent-audio.js"
+      - "scripts/test-agent-audio-vad.mjs"
+      - "scripts/validate-agent-audio-vad.py"
+      - "index.html"
+      - "package.json"
+      - ".github/workflows/phase23b-local-vad.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase23b-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Configure stable Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+
+      - name: Configure Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Validate local VAD and retained frontend contracts
+        run: npm run check:frontend
+
+      - name: Build production frontend
+        run: npm run build
+
+      - name: Validate Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Compile and test HomeServer service
+        run: cargo test -p microgifter-homeserver-service
+
+      - name: Strict HomeServer service lint
+        run: cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings
