@@ -222,6 +222,60 @@ async fn read_manifest(app: &AppHandle) -> Result<Option<WhisperModelManifest>, 
     Ok(Some(manifest))
 }
 
+async fn install_temporary_file(
+    temporary: &Path,
+    destination: &Path,
+) -> Result<Option<PathBuf>, String> {
+    let backup = if fs::try_exists(destination)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        let file_name = destination
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| "Atomic replacement destination has an invalid file name.".to_owned())?;
+        let backup =
+            destination.with_file_name(format!(".{file_name}.{}.backup", Uuid::new_v4().simple()));
+        fs::rename(destination, &backup)
+            .await
+            .map_err(|error| error.to_string())?;
+        Some(backup)
+    } else {
+        None
+    };
+
+    if let Err(error) = fs::rename(temporary, destination).await {
+        if let Some(backup_path) = backup.as_ref() {
+            let _ = fs::rename(backup_path, destination).await;
+        }
+        return Err(error.to_string());
+    }
+    Ok(backup)
+}
+
+async fn rollback_temporary_file(destination: &Path, backup: Option<&Path>) -> Result<(), String> {
+    if fs::try_exists(destination)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        fs::remove_file(destination)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    if let Some(backup_path) = backup {
+        fs::rename(backup_path, destination)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+async fn commit_temporary_file(backup: Option<&Path>) {
+    if let Some(backup_path) = backup {
+        let _ = fs::remove_file(backup_path).await;
+    }
+}
+
 async fn write_manifest(app: &AppHandle, manifest: &WhisperModelManifest) -> Result<(), String> {
     let directory = speech_directory(app)?;
     fs::create_dir_all(&directory)
@@ -233,23 +287,26 @@ async fn write_manifest(app: &AppHandle, manifest: &WhisperModelManifest) -> Res
     let mut output = fs::File::create(&temporary)
         .await
         .map_err(|error| error.to_string())?;
-    output
-        .write_all(&bytes)
-        .await
-        .map_err(|error| error.to_string())?;
-    output.sync_all().await.map_err(|error| error.to_string())?;
-    drop(output);
-    if fs::try_exists(&path)
-        .await
-        .map_err(|error| error.to_string())?
-    {
-        fs::remove_file(&path)
-            .await
-            .map_err(|error| error.to_string())?;
+    if let Err(error) = output.write_all(&bytes).await {
+        drop(output);
+        let _ = fs::remove_file(&temporary).await;
+        return Err(error.to_string());
     }
-    fs::rename(&temporary, &path)
-        .await
-        .map_err(|error| error.to_string())
+    if let Err(error) = output.sync_all().await {
+        drop(output);
+        let _ = fs::remove_file(&temporary).await;
+        return Err(error.to_string());
+    }
+    drop(output);
+    let backup = match install_temporary_file(&temporary, &path).await {
+        Ok(backup) => backup,
+        Err(error) => {
+            let _ = fs::remove_file(&temporary).await;
+            return Err(error);
+        }
+    };
+    commit_temporary_file(backup.as_deref()).await;
+    Ok(())
 }
 
 async fn hash_file(path: &Path, maximum_bytes: u64) -> Result<(String, u64), String> {
@@ -433,17 +490,13 @@ pub(crate) async fn homeserver_import_whisper_model(
         let _ = fs::remove_file(&temporary).await;
         return Err("Whisper model SHA-256 did not match; the copied file was removed.".to_owned());
     }
-    if fs::try_exists(&destination)
-        .await
-        .map_err(|error| error.to_string())?
-    {
-        fs::remove_file(&destination)
-            .await
-            .map_err(|error| error.to_string())?;
-    }
-    fs::rename(&temporary, &destination)
-        .await
-        .map_err(|error| error.to_string())?;
+    let model_backup = match install_temporary_file(&temporary, &destination).await {
+        Ok(backup) => backup,
+        Err(error) => {
+            let _ = fs::remove_file(&temporary).await;
+            return Err(error);
+        }
+    };
 
     #[cfg(unix)]
     {
@@ -464,7 +517,18 @@ pub(crate) async fn homeserver_import_whisper_model(
         imported_at_utc: imported_at_utc.clone(),
         last_verified_at_utc: imported_at_utc,
     };
-    write_manifest(&app, &manifest).await?;
+    if let Err(error) = write_manifest(&app, &manifest).await {
+        let rollback_error = rollback_temporary_file(&destination, model_backup.as_deref())
+            .await
+            .err();
+        return Err(match rollback_error {
+            Some(rollback) => {
+                format!("{error}; local Whisper model rollback also failed: {rollback}")
+            }
+            None => error,
+        });
+    }
+    commit_temporary_file(model_backup.as_deref()).await;
     if let Some(previous) = previous {
         if previous.model_file != manifest.model_file {
             let old = directory.join(previous.model_file);
@@ -703,7 +767,7 @@ fn run_whisper(
             segment_id,
             kind: "final",
             progress: 100,
-            partial_transcript: transcript,
+            partial_transcript: transcript.clone(),
             model_sha256,
         },
     );
@@ -760,5 +824,37 @@ mod tests {
         assert_eq!(validate_language(Some("AUTO".to_owned())).unwrap(), "auto");
         assert_eq!(validate_language(None).unwrap(), "en");
         assert!(validate_language(Some("en<script>".to_owned())).is_err());
+    }
+
+    #[tokio::test]
+    async fn atomic_replacement_commits_and_rolls_back() {
+        let root = std::env::temp_dir().join(format!(
+            "homeserver-whisper-atomic-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&root).await.unwrap();
+        let destination = root.join("model.bin");
+        let temporary = root.join("model.tmp");
+        fs::write(&destination, b"old").await.unwrap();
+        fs::write(&temporary, b"new").await.unwrap();
+
+        let backup = install_temporary_file(&temporary, &destination)
+            .await
+            .unwrap();
+        assert_eq!(fs::read(&destination).await.unwrap(), b"new");
+        assert!(backup.as_ref().is_some_and(|path| path.exists()));
+
+        rollback_temporary_file(&destination, backup.as_deref())
+            .await
+            .unwrap();
+        assert_eq!(fs::read(&destination).await.unwrap(), b"old");
+
+        let second = root.join("second.tmp");
+        fs::write(&second, b"committed").await.unwrap();
+        let backup = install_temporary_file(&second, &destination).await.unwrap();
+        commit_temporary_file(backup.as_deref()).await;
+        assert_eq!(fs::read(&destination).await.unwrap(), b"committed");
+        assert!(backup.as_ref().is_none_or(|path| !path.exists()));
+        fs::remove_dir_all(root).await.unwrap();
     }
 }

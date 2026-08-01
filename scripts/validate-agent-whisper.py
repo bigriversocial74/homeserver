@@ -49,6 +49,12 @@ for token, label in (
     ("let transcript = tokio::task::spawn_blocking", "direct worker transcript return"),
     ("Ok(transcript)", "native final transcript return"),
     ("fs::remove_file(&temporary)", "failed-import cleanup"),
+    ("install_temporary_file", "atomic file replacement"),
+    ("rollback_temporary_file", "replacement rollback"),
+    ("commit_temporary_file", "post-commit backup cleanup"),
+    ("model_backup.as_deref()", "model replacement receipt"),
+    ("partial_transcript: transcript.clone()", "non-consuming final transcript event"),
+    ("atomic_replacement_commits_and_rolls_back", "native rollback test"),
 ):
     require(NATIVE, token, label)
 
@@ -154,6 +160,8 @@ for text, token, label in (
     (NATIVE, "std::process", "external executable invocation"),
     (NATIVE, "FINAL_TRANSCRIPTS", "global transcript transfer state"),
     (NATIVE, "worker_transcript_placeholder", "placeholder transcript receipt"),
+    (NATIVE, "fs::remove_file(&destination)", "delete-before-replace model update"),
+    (NATIVE, "fs::remove_file(&path)", "delete-before-replace manifest update"),
 ):
     forbid(text, token, label)
 
