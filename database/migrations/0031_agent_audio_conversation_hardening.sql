@@ -78,6 +78,28 @@ BEGIN
     SELECT RAISE(ABORT, 'invalid Phase 23 audio session boundary');
 END;
 
+CREATE TRIGGER IF NOT EXISTS trg_audio_sessions_phase23_immutable
+BEFORE UPDATE OF session_id,mode,retention_mode,input_device_id,input_device_label,raw_audio_retained,started_at_utc
+ON audio_sessions
+WHEN NEW.session_id IS NOT OLD.session_id
+   OR NEW.mode IS NOT OLD.mode
+   OR NEW.retention_mode IS NOT OLD.retention_mode
+   OR NEW.input_device_id IS NOT OLD.input_device_id
+   OR NEW.input_device_label IS NOT OLD.input_device_label
+   OR NEW.raw_audio_retained IS NOT OLD.raw_audio_retained
+   OR NEW.started_at_utc IS NOT OLD.started_at_utc
+BEGIN
+    SELECT RAISE(ABORT, 'immutable Phase 23 audio session evidence');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_audio_sessions_phase23_thread_binding
+BEFORE UPDATE OF thread_id ON audio_sessions
+WHEN NEW.thread_id IS NOT OLD.thread_id
+ AND NOT (OLD.thread_id IS NULL AND NEW.thread_id IS NOT NULL)
+BEGIN
+    SELECT RAISE(ABORT, 'immutable Phase 23 audio thread binding');
+END;
+
 CREATE TRIGGER IF NOT EXISTS trg_audio_sessions_phase23_transition
 BEFORE UPDATE OF state ON audio_sessions
 WHEN OLD.state <> NEW.state
@@ -109,6 +131,19 @@ WHEN NEW.microphone_authorized <> 1
    OR NEW.retention_mode NOT IN ('ephemeral','transcript')
 BEGIN
     SELECT RAISE(ABORT, 'invalid Phase 23 audio permission receipt');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_audio_permission_receipts_phase23_immutable
+BEFORE UPDATE ON audio_permission_receipts
+WHEN NEW.receipt_id IS NOT OLD.receipt_id
+   OR NEW.session_id IS NOT OLD.session_id
+   OR NEW.microphone_authorized IS NOT OLD.microphone_authorized
+   OR NEW.recording_authorized IS NOT OLD.recording_authorized
+   OR NEW.retention_mode IS NOT OLD.retention_mode
+   OR NEW.actor_id IS NOT OLD.actor_id
+   OR NEW.created_at_utc IS NOT OLD.created_at_utc
+BEGIN
+    SELECT RAISE(ABORT, 'immutable Phase 23 audio permission receipt');
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_audio_segments_phase23_insert
@@ -143,6 +178,21 @@ BEGIN
     SELECT RAISE(ABORT, 'invalid Phase 23 audio segment');
 END;
 
+CREATE TRIGGER IF NOT EXISTS trg_audio_segments_phase23_capture_immutable
+BEFORE UPDATE OF segment_id,session_id,sequence_no,mime_type,duration_ms,byte_length,content_sha256,created_at_utc
+ON audio_segments
+WHEN NEW.segment_id IS NOT OLD.segment_id
+   OR NEW.session_id IS NOT OLD.session_id
+   OR NEW.sequence_no IS NOT OLD.sequence_no
+   OR NEW.mime_type IS NOT OLD.mime_type
+   OR NEW.duration_ms IS NOT OLD.duration_ms
+   OR NEW.byte_length IS NOT OLD.byte_length
+   OR NEW.content_sha256 IS NOT OLD.content_sha256
+   OR NEW.created_at_utc IS NOT OLD.created_at_utc
+BEGIN
+    SELECT RAISE(ABORT, 'immutable Phase 23 audio segment evidence');
+END;
+
 CREATE TRIGGER IF NOT EXISTS trg_audio_segments_phase23_update
 BEFORE UPDATE OF transcript, linked_message_id, state ON audio_segments
 WHEN (OLD.linked_message_id IS NOT NULL AND (
@@ -167,6 +217,12 @@ WHEN (OLD.linked_message_id IS NOT NULL AND (
    ))
 BEGIN
     SELECT RAISE(ABORT, 'invalid Phase 23 transcript linkage');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_conversation_events_phase23_immutable
+BEFORE UPDATE ON conversation_events
+BEGIN
+    SELECT RAISE(ABORT, 'immutable Phase 23 conversation event');
 END;
 
 INSERT OR IGNORE INTO schema_migrations(migration_key)
