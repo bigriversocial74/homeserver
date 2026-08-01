@@ -59,6 +59,9 @@ required_durable = [
 required_shared = [
     'import { logoMark } from "./icons.js"',
     'const AGENT_SIDEBAR_MODE = "chat-only"',
+    'const PRIMARY_NAV_ORDER = ["agent", "home", "dashboard", "knowledge", "apps", "integrations"]',
+    'const SYSTEM_NAV_ORDER = ["models", "backups", "sync", "settings", "system"]',
+    'return window.location.hash.replace("#", "") || "dashboard"',
     'data-shared-chat-rename',
     'data-shared-chat-delete',
     'action: "rename_thread"',
@@ -69,15 +72,24 @@ required_shared = [
     '.app-sidebar > .sidebar-state',
     '.hs-chat-sidebar > .hs-chat-provider-summary',
     '.hs-chat-sidebar > .hs-chat-sidebar-footer',
+    'function createNavigationGroup(',
+    'function reorderMainSidebarNavigation()',
+    '"primary-nav-main"',
+    '"primary-nav-system"',
+    'nav.replaceChildren(primaryGroup, systemGroup)',
+    'nav.dataset.navigationOrder = "primary-system-v1"',
     'function removeUnexpectedControlCenterUi()',
     '.agent-chat-shell > .app-sidebar:not(.hs-chat-sidebar)',
     'sidebar.dataset.agentSidebarMode = AGENT_SIDEBAR_MODE',
     'sidebar.replaceChildren(createBrand(), chatSection)',
+    'reorderMainSidebarNavigation()',
     'document.querySelector(\'[data-homeserver-agent-host="true"]\')',
     'observer.observe(host, { childList: true, subtree: true })',
     'window.addEventListener("homeserver:rendered", scheduleDecorate)',
     'mode: AGENT_SIDEBAR_MODE',
     'footerSections: "removed"',
+    'primaryNavigation: [...PRIMARY_NAV_ORDER]',
+    'systemNavigation: [...SYSTEM_NAV_ORDER]',
     'window.__HOMESERVER_AGENT_SIDEBAR_CHAT_ONLY_V2__ = true',
 ]
 required_shared_css = [
@@ -86,6 +98,9 @@ required_shared_css = [
     '.hs-chat-sidebar>.hs-chat-provider-summary',
     '.hs-chat-sidebar>.hs-chat-sidebar-footer',
     'display:none!important',
+    '.app-sidebar>.primary-nav{display:flex;flex:1;min-height:0;flex-direction:column',
+    '.primary-nav-main,.primary-nav-system{display:grid;gap:4px}',
+    '.primary-nav-system{margin-top:auto;padding-top:14px;border-top:1px solid #e5e7eb}',
     '.shared-agent-sidebar.app-sidebar',
     '.shared-chat-row',
     '.shared-chat-actions',
@@ -117,28 +132,16 @@ for value in required_durable:
         raise SystemExit(f"Missing durable Agent activity lifecycle contract: {value}")
 for value in required_shared:
     if value not in shared:
-        raise SystemExit(f"Missing footer-free shared sidebar contract: {value}")
+        raise SystemExit(f"Missing ordered, footer-free shared sidebar contract: {value}")
 for value in required_shared_css:
     if value not in shared_css:
-        raise SystemExit(f"Missing footer-free shared sidebar style contract: {value}")
+        raise SystemExit(f"Missing ordered, footer-free shared sidebar style contract: {value}")
 for value in required_activity:
     if value not in activity:
         raise SystemExit(f"Missing Agent chat service contract: {value}")
 for value in required_tauri_agent:
     if value not in tauri_agent:
         raise SystemExit(f"Missing Agent chat desktop bridge contract: {value}")
-
-requested_order = [
-    '["agent", "HomeServer Agent", "integrations"]',
-    '["home", "Home", "home"]',
-    '["dashboard", "Dashboard", "dashboard"]',
-    '["models", "Model Center", "model"]',
-    '["apps", "Apps", "apps"]',
-    '["knowledge", "Knowledge Vault", "vault"]',
-]
-positions = [main.index(value) for value in requested_order]
-if positions != sorted(positions):
-    raise SystemExit("Requested HomeServer Control Center sidebar order is not preserved")
 
 if '/src/agent-workspace.js' in index:
     raise SystemExit("Legacy Agent Workspace is still loaded beside Agent Chat")
@@ -206,4 +209,4 @@ if 'window.setTimeout(() => mount(true), 0)' in chat:
 if 'event.target.closest("[data-page]")' in main:
     raise SystemExit("Competing delegated Control Center router remains")
 
-print("HomeServer removes the footer/status section from both the Control Center sidebar and the chat-only Agent sidebar after every render.")
+print("HomeServer renders Agent, Home, Dashboard, Knowledge Vault, Apps, and Integrations in the primary sidebar group, with Model Center, Backups, Sync Cloud, Settings, and System pinned to the bottom.")
