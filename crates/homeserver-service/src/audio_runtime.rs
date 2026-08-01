@@ -25,6 +25,8 @@ const MIGRATION_KEYS: &[&str] = &[
     "0032_agent_audio_final_integrity",
 ];
 const LOCAL_ACTOR_ID: &str = "local_control_center";
+const LOCAL_WHISPER_ENGINE: &str = "whisper.cpp/whisper-rs-0.16.0";
+const LOCAL_WHISPER_ID_PREFIX: &str = "whisper_";
 const MAX_BODY_BYTES: usize = 256 * 1024;
 const MAX_TRANSCRIPT_CHARS: usize = 20_000;
 const MAX_DEVICE_VALUE_CHARS: usize = 500;
@@ -156,6 +158,18 @@ pub struct UpdateAudioTranscriptRequest {
     pub segment_id: String,
     pub transcript: String,
     pub linked_message_id: Option<String>,
+    #[serde(default)]
+    pub transcription_id: Option<String>,
+    #[serde(default)]
+    pub transcription_engine: Option<String>,
+    #[serde(default)]
+    pub transcription_model_sha256: Option<String>,
+    #[serde(default)]
+    pub transcription_language: Option<String>,
+    #[serde(default)]
+    pub transcription_final: bool,
+    #[serde(default)]
+    pub raw_audio_retained: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -684,6 +698,54 @@ fn save_transcript(
     validate_transcript(Some(&transcript))?;
     let linked_message_id =
         normalized_optional_identifier(request.linked_message_id, "linked message ID")?;
+    let transcription_id =
+        normalized_optional_identifier(request.transcription_id, "transcription ID")?;
+    let transcription_engine =
+        normalized_optional_value(request.transcription_engine, 160, "transcription engine")?;
+    let transcription_model_sha256 = request
+        .transcription_model_sha256
+        .map(|value| normalized_sha256(&value))
+        .transpose()?;
+    let transcription_language =
+        normalized_optional_value(request.transcription_language, 32, "transcription language")?;
+    let has_transcription_receipt = transcription_id.is_some()
+        || transcription_engine.is_some()
+        || transcription_model_sha256.is_some()
+        || transcription_language.is_some();
+    if has_transcription_receipt {
+        ensure!(
+            transcription_id.is_some()
+                && transcription_engine.is_some()
+                && transcription_model_sha256.is_some()
+                && transcription_language.is_some()
+                && request.transcription_final,
+            "complete final local transcription metadata is required"
+        );
+        ensure!(
+            transcription_id
+                .as_deref()
+                .is_some_and(valid_local_whisper_transcription_id),
+            "local transcription ID is invalid"
+        );
+        ensure!(
+            transcription_engine.as_deref() == Some(LOCAL_WHISPER_ENGINE),
+            "local transcription engine is unsupported"
+        );
+        ensure!(
+            transcription_language
+                .as_deref()
+                .is_some_and(valid_local_whisper_language),
+            "local transcription language is invalid"
+        );
+        ensure!(
+            !request.raw_audio_retained,
+            "local transcription cannot retain raw audio"
+        );
+        ensure!(
+            linked_message_id.is_none(),
+            "local transcription receipt must precede Agent message linkage"
+        );
+    }
 
     let now = now_utc();
     let mut connection = state.connection()?;
@@ -782,12 +844,20 @@ fn save_transcript(
         Some(&request.segment_id),
         if linked_message_id.is_some() {
             "transcript_committed"
+        } else if has_transcription_receipt {
+            "local_whisper_transcription_completed"
         } else {
             "transcript_updated"
         },
         json!({
             "linked_message_id": linked_message_id,
-            "thread_id": resolved_thread_id
+            "thread_id": resolved_thread_id,
+            "transcription_id": transcription_id,
+            "transcription_engine": transcription_engine,
+            "transcription_model_sha256": transcription_model_sha256,
+            "transcription_language": transcription_language,
+            "transcription_final": has_transcription_receipt.then_some(true),
+            "raw_audio_retained": has_transcription_receipt.then_some(false)
         }),
     )?;
     transaction.commit()?;
@@ -1014,6 +1084,22 @@ fn normalized_mime_type(value: &str) -> Result<String> {
         "recording MIME type contains unsupported characters"
     );
     Ok(value)
+}
+
+fn valid_local_whisper_transcription_id(value: &str) -> bool {
+    value.len() == LOCAL_WHISPER_ID_PREFIX.len() + 32
+        && value.starts_with(LOCAL_WHISPER_ID_PREFIX)
+        && value[LOCAL_WHISPER_ID_PREFIX.len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn valid_local_whisper_language(value: &str) -> bool {
+    value == "auto"
+        || ((2..=8).contains(&value.len())
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'-'))
 }
 
 fn normalized_sha256(value: &str) -> Result<String> {
@@ -1340,6 +1426,25 @@ mod tests {
         assert!(duplicate_error
             .to_string()
             .contains("UNIQUE constraint failed"));
+    }
+
+    #[test]
+    fn local_whisper_receipt_boundaries_are_closed() {
+        assert!(valid_local_whisper_transcription_id(
+            "whisper_0123456789abcdef0123456789abcdef"
+        ));
+        assert!(!valid_local_whisper_transcription_id("whisper_short"));
+        assert!(!valid_local_whisper_transcription_id(
+            "other_0123456789abcdef0123456789abcdef"
+        ));
+        assert!(!valid_local_whisper_transcription_id(
+            "whisper_0123456789ABCDEF0123456789ABCDEF"
+        ));
+        assert!(valid_local_whisper_language("en"));
+        assert!(valid_local_whisper_language("auto"));
+        assert!(valid_local_whisper_language("pt-br"));
+        assert!(!valid_local_whisper_language("EN"));
+        assert!(!valid_local_whisper_language("en<script>"));
     }
 
     #[test]

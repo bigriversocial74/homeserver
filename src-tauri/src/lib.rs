@@ -10,6 +10,7 @@ mod review_intelligence;
 mod runtime;
 mod vault;
 mod vp3_authority;
+mod whisper;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use futures_util::StreamExt;
@@ -518,6 +519,7 @@ async fn homeserver_export_evidence_archive(
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            app.manage(whisper::WhisperRuntimeState::default());
             #[cfg(desktop)]
             {
                 use tauri_plugin_autostart::MacosLauncher;
@@ -618,6 +620,11 @@ pub fn run() {
             agent::homeserver_agent_integrations,
             agent::homeserver_agent_integration_action,
             agent::homeserver_open_agent_authorization,
+            whisper::homeserver_whisper_status,
+            whisper::homeserver_import_whisper_model,
+            whisper::homeserver_remove_whisper_model,
+            whisper::homeserver_whisper_transcribe,
+            whisper::homeserver_cancel_whisper_transcription,
             operational::homeserver_operational_data,
             operational::homeserver_update_operational_dataset_grant,
             operational::homeserver_import_operational_data,

@@ -14,6 +14,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 base64.workspace = true
+chrono.workspace = true
 futures-util.workspace = true
 microgifter-homeserver-core = { path = "../crates/homeserver-core" }
 reqwest.workspace = true
@@ -27,4 +28,5 @@ tauri-plugin-autostart = "2"
 tokio.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true
+whisper-rs.workspace = true
 zeroize.workspace = true

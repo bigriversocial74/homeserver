@@ -1,0 +1,210 @@
+name: Phase 23C Local Whisper Transcription
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "src-tauri/Cargo.toml"
+      - "src-tauri/src/lib.rs"
+      - "src-tauri/src/whisper.rs"
+      - "src-tauri/icons/icon.ico.base64"
+      - "crates/homeserver-service/src/audio_runtime.rs"
+      - "src/homeserver-agent-vad.js"
+      - "src/homeserver-whisper-codec.js"
+      - "src/homeserver-whisper-queue.js"
+      - "src/homeserver-agent-whisper.js"
+      - "src/homeserver-agent-whisper.css"
+      - "scripts/prepare-icons.mjs"
+      - "scripts/test-agent-whisper-codec.mjs"
+      - "scripts/test-agent-whisper-queue.mjs"
+      - "scripts/validate-agent-whisper.py"
+      - "index.html"
+      - "package.json"
+      - ".github/workflows/phase23c-local-whisper.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase23c-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact candidate identity
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$EXPECTED_SHA"
+          echo "Certified candidate: $actual_sha"
+
+      - name: Reject temporary Phase 23C hardening assets
+        shell: bash
+        run: |
+          for path in \
+            scripts/apply-phase23c-atomic-hardening.py \
+            .github/workflows/phase23c-atomic-hardening.yml \
+            scripts/apply-phase23c-operation-hardening.py \
+            .github/workflows/phase23c-operation-hardening.yml \
+            scripts/apply-phase23c-queue-hardening.py \
+            .github/workflows/phase23c-queue-hardening.yml \
+            scripts/apply-phase23c-final-contract-hardening.py \
+            .github/workflows/phase23c-final-contract-hardening.yml \
+            scripts/apply-phase23c-removal-hardening.py \
+            .github/workflows/phase23c-removal-hardening.yml \
+            scripts/apply-phase23c-callback-type-repair.py \
+            .github/workflows/phase23c-callback-type-repair.yml \
+            scripts/apply-phase23c-progress-type-repair.py \
+            .github/workflows/phase23c-progress-type-repair.yml \
+            .github/workflows/phase23c-callback-option-repair.yml \
+            .github/workflows/phase23c-clippy-then-some-repair.yml \
+            .github/workflows/phase23c-whisper-errors.yml \
+            phase23c-whisper-errors.txt \
+            phase23c-whisper-exit.txt
+          do
+            if [ -e "$path" ]; then
+              echo "Temporary Phase 23C asset remains: $path" >&2
+              exit 1
+            fi
+          done
+
+      - name: Verify permanent callback, transaction, and icon contracts
+        shell: bash
+        run: |
+          grep -F 'set_segment_callback_safe_lossy(move |data: SegmentCallbackData|' src-tauri/src/whisper.rs
+          grep -F 'set_progress_callback_safe(move |progress: i32|' src-tauri/src/whisper.rs
+          grep -F 'set_abort_callback_safe(move ||' src-tauri/src/whisper.rs
+          if grep -F 'callback_safe_lossy(Some(' src-tauri/src/whisper.rs; then exit 1; fi
+          if grep -F 'progress_callback_safe(Some(' src-tauri/src/whisper.rs; then exit 1; fi
+          if grep -F 'abort_callback_safe(Some(' src-tauri/src/whisper.rs; then exit 1; fi
+          grep -F 'let model_backup = match install_temporary_file(&temporary, &destination).await {' src-tauri/src/whisper.rs
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path('src-tauri/src/whisper.rs').read_text(encoding='utf-8')
+          if re.search(r'\.then\(\s*\|\|\s*unique_sibling\(\s*&model_destination', text):
+              raise SystemExit('Stale lazy model-backup implementation remains')
+          PY
+          grep -F 'const pngTarget' scripts/prepare-icons.mjs
+          grep -F 'ICO does not contain an embedded PNG icon' scripts/prepare-icons.mjs
+
+      - name: Install Linux desktop prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            cmake \
+            clang \
+            libclang-dev \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            patchelf
+
+      - name: Configure stable Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+
+      - name: Configure Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Validate local Whisper and retained frontend contracts
+        run: npm run check:frontend
+
+      - name: Build production frontend
+        run: npm run build
+
+      - name: Prepare generated desktop resources
+        run: npm run prepare:icons
+
+      - name: Verify generated desktop icons
+        shell: bash
+        run: |
+          test -s src-tauri/icons/icon.ico
+          test -s src-tauri/icons/icon.png
+          node --input-type=module - <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const png = await readFile('src-tauri/icons/icon.png');
+          const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+          if (!png.subarray(0, signature.length).equals(signature)) {
+            throw new Error('Generated Tauri icon.png is not a PNG image');
+          }
+          NODE
+
+      - name: Build packaged HomeServer binaries
+        run: >-
+          cargo build
+          -p microgifter-homeserver-service
+          -p microgifter-homeserver-updater
+          -p microgifter-homeserver-mcp
+
+      - name: Stage packaged resources on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p src-tauri/resources
+          install -m 0755 target/debug/microgifter-homeserver-service src-tauri/resources/microgifter-homeserver-service.exe
+          install -m 0755 target/debug/microgifter-homeserver-updater src-tauri/resources/microgifter-homeserver-updater.exe
+          install -m 0755 target/debug/microgifter-homeserver-mcp src-tauri/resources/microgifter-homeserver-mcp.exe
+          test -s src-tauri/resources/microgifter-homeserver-service.exe
+          test -s src-tauri/resources/microgifter-homeserver-updater.exe
+          test -s src-tauri/resources/microgifter-homeserver-mcp.exe
+
+      - name: Stage packaged resources on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force src-tauri/resources | Out-Null
+          Copy-Item target/debug/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe
+          Copy-Item target/debug/microgifter-homeserver-updater.exe src-tauri/resources/microgifter-homeserver-updater.exe
+          Copy-Item target/debug/microgifter-homeserver-mcp.exe src-tauri/resources/microgifter-homeserver-mcp.exe
+          foreach ($path in @(
+            'src-tauri/resources/microgifter-homeserver-service.exe',
+            'src-tauri/resources/microgifter-homeserver-updater.exe',
+            'src-tauri/resources/microgifter-homeserver-mcp.exe'
+          )) {
+            if (-not (Test-Path $path) -or (Get-Item $path).Length -le 0) { throw "Missing packaged resource: $path" }
+          }
+
+      - name: Validate Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Test native Whisper boundaries
+        run: cargo test -p microgifter-homeserver-control-center whisper::tests
+
+      - name: Test governed audio transcript receipts
+        run: cargo test -p microgifter-homeserver-service audio_runtime::tests
+
+      - name: Strict Control Center lint
+        run: cargo clippy -p microgifter-homeserver-control-center --all-targets -- -D warnings
+
+      - name: Strict HomeServer service lint
+        run: cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings
