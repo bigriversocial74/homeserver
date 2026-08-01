@@ -44,6 +44,7 @@ require(runtime, '"cloud_egress": false', "local-only egress boundary")
 require(runtime, "another audio session is already active", "single active capture boundary")
 require(runtime, "microphone authorization is required", "microphone authorization boundary")
 require(runtime, "recording authorization is required", "recording authorization boundary")
+require(runtime, "Phase 23A supports ephemeral audio or transcript retention", "raw-audio retention denial")
 
 app = read("crates/homeserver-service/src/app.rs")
 for token in (
@@ -54,46 +55,59 @@ for token in (
 ):
     require(app, token, "audio service registration")
 
-bridge = read("src-tauri/src/audio.rs")
-require(bridge, "homeserver_audio_status", "audio status bridge")
-require(bridge, "homeserver_audio_action", "audio action bridge")
-for action in (
-    "start_session",
-    "set_state",
-    "finalize_segment",
-    "update_transcript",
-    "delete_session",
+bridge = read("src-tauri/src/agent.rs")
+require(bridge, '"audio".to_owned()', "audio status in Agent workspace")
+for action, route in (
+    ("audio_status", "/v1/audio/status"),
+    ("audio_start_session", "/v1/audio/sessions/start"),
+    ("audio_set_state", "/v1/audio/sessions/state"),
+    ("audio_finalize_segment", "/v1/audio/segments"),
+    ("audio_update_transcript", "/v1/audio/segments/transcript"),
+    ("audio_delete_session", "/v1/audio/sessions/delete"),
 ):
-    require(bridge, f'Some("{action}")', f"Tauri action {action}")
+    require(bridge, f'Some("{action}")', f"trusted Tauri action {action}")
+    require(bridge, route, f"trusted Tauri route {route}")
 
-lib = read("src-tauri/src/lib.rs")
-require(lib, "mod audio;", "audio command module")
-require(lib, "audio::homeserver_audio_status", "audio status handler")
-require(lib, "audio::homeserver_audio_action", "audio action handler")
+index = read("index.html")
+require(index, "/src/homeserver-agent-audio.js", "Agent audio module loading")
 
-chat = read("src/homeserver-agent-chat.js")
+chat = read("src/homeserver-agent-audio.js")
 for token in (
     "navigator.mediaDevices.getUserMedia",
     "new MediaRecorder",
-    "homeserver_audio_status",
-    "homeserver_audio_action",
-    "startAudioCapture",
-    "stopAudioCapture",
-    "finalizeAudioCapture",
-    "sendAudioTranscript",
+    'audioAction("audio_status")',
+    'audioAction("audio_start_session"',
+    'audioAction("audio_set_state"',
+    'audioAction("audio_finalize_segment"',
+    'audioAction("audio_update_transcript"',
+    'audioAction("audio_delete_session"',
+    "startCapture",
+    "stopCapture",
+    "finalizeCapture",
+    "sendTranscript",
     "raw_audio_retained: false",
+    "URL.createObjectURL(blob)",
 ):
     require(chat, token, "Agent Chat audio integration")
 forbid(chat, "SpeechRecognition", "browser/cloud speech recognition")
 forbid(chat, "webkitSpeechRecognition", "browser/cloud speech recognition")
 forbid(chat, "audio_base64", "raw audio JSON upload")
+forbid(chat, "FileReader", "raw audio serialization")
 
-css = read("src/homeserver-agent-chat.css")
+css = read("src/homeserver-agent-audio.css")
 require(css, "Phase 23 Agent Chat ears and conversation engine", "audio UI styles")
-require(css, ".hs-audio-panel", "audio panel styles")
-require(css, ".hs-chat-mic", "microphone control styles")
+require(css, ".hs-agent-audio-panel", "audio panel styles")
+require(css, ".hs-agent-audio-mic", "microphone control styles")
+
+for temporary_path in (
+    ROOT / "src-tauri/src/audio.rs",
+    ROOT / "scripts/apply-phase23-agent-audio.py",
+    ROOT / ".github/workflows/phase-23-bootstrap.yml",
+):
+    if temporary_path.exists():
+        raise SystemExit(f"Temporary Phase 23 staging file remains: {temporary_path.relative_to(ROOT)}")
 
 print(
     "Phase 23A validates governed Agent Chat microphone capture, ephemeral recordings, "
-    "persistent session/transcript metadata, and conversation-event boundaries."
+    "persistent local session/transcript metadata, and conversation-event boundaries."
 )
