@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { audioBlobToWhisperPcm } from "./homeserver-whisper-codec.js";
+import { WhisperSegmentQueue } from "./homeserver-whisper-queue.js";
 import "./homeserver-agent-whisper.css";
 
 const state = {
@@ -12,6 +13,7 @@ const state = {
   language: "en",
   notice: null,
   partials: new Map(),
+  queue: new WhisperSegmentQueue(),
 };
 
 let observer = null;
@@ -54,7 +56,13 @@ async function refreshStatus() {
 
 async function importModel() {
   const expected = state.expectedSha256.trim().toLowerCase();
-  if (!validSha256(expected) || state.importing || state.active) {
+  if (
+    !validSha256(expected)
+    || state.importing
+    || state.active
+    || state.busy
+    || state.queue.length
+  ) {
     notify("Enter the trusted model's 64-character SHA-256 before importing it.", "warning");
     return;
   }
@@ -80,7 +88,7 @@ async function importModel() {
 }
 
 async function removeModel() {
-  if (state.active || state.importing) return;
+  if (state.active || state.busy || state.importing || state.queue.length) return;
   try {
     state.status = await invoke("homeserver_remove_whisper_model", {
       confirmation: "REMOVE LOCAL WHISPER MODEL",
@@ -120,8 +128,35 @@ function updateTranscriptElement(segmentId, text, final = false) {
   textarea.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+function queueSegment(detail) {
+  const result = state.queue.enqueue(detail);
+  if (result.accepted) {
+    notify(
+      `Queued ${result.length} local utterance${result.length === 1 ? "" : "s"} for transcription.`,
+    );
+    return;
+  }
+  if (result.reason === "capacity") {
+    notify(
+      "The bounded local transcription queue is full; this utterance was not queued.",
+      "warning",
+    );
+  }
+}
+
+function drainQueuedSegment() {
+  if (state.active || state.busy) return;
+  const next = state.queue.shift();
+  if (next) void transcribeLocalSegment(next);
+}
+
 async function transcribeLocalSegment(detail) {
-  if (!detail?.segment_id || !(detail.blob instanceof Blob) || state.active) return;
+  if (!detail?.segment_id || !(detail.blob instanceof Blob)) return;
+  if (state.active?.segmentId === detail.segment_id) return;
+  if (state.active || state.busy) {
+    queueSegment(detail);
+    return;
+  }
   const status = await refreshStatus();
   if (!status?.model_ready) {
     notify("The utterance is ready, but a verified local Whisper model has not been imported.", "warning");
@@ -167,9 +202,10 @@ async function transcribeLocalSegment(detail) {
     );
   } finally {
     state.active = null;
+    await refreshStatus();
     state.busy = false;
     scheduleRender();
-    await refreshStatus();
+    drainQueuedSegment();
   }
 }
 
@@ -251,12 +287,13 @@ function renderWhisperPanel() {
       </select>
     </label>
     <div class="hs-agent-whisper-actions">
-      <button type="button" data-agent-whisper-import ${!validSha256(state.expectedSha256) || state.importing || active ? "disabled" : ""}>${state.importing ? "Importing…" : ready ? "Replace model" : "Import model"}</button>
-      <button type="button" data-agent-whisper-remove ${!ready || state.importing || active ? "disabled" : ""}>Remove model</button>
+      <button type="button" data-agent-whisper-import ${!validSha256(state.expectedSha256) || state.importing || state.busy || active || state.queue.length ? "disabled" : ""}>${state.importing ? "Importing…" : ready ? "Replace model" : "Import model"}</button>
+      <button type="button" data-agent-whisper-remove ${!ready || state.importing || state.busy || active || state.queue.length ? "disabled" : ""}>Remove model</button>
       <button type="button" class="danger" data-agent-whisper-cancel ${!active ? "disabled" : ""}>Cancel transcription</button>
     </div>
     ${modelHash ? `<small>Model ${escapeHtml(modelHash.slice(0, 16))}… · verified again before each transcription</small>` : ""}
     ${active ? `<div class="hs-agent-whisper-progress"><i style="width:${progress}%"></i><span>${progress}%</span></div>` : ""}
+    ${state.queue.length ? `<small>${state.queue.length} utterance${state.queue.length === 1 ? "" : "s"} queued locally · ${state.queue.byteLength.toLocaleString()} bytes ephemeral</small>` : ""}
     ${state.notice ? `<div class="hs-agent-whisper-notice" data-kind="${escapeHtml(state.notice.kind)}">${escapeHtml(state.notice.message)}</div>` : ""}
   `;
 }
@@ -320,6 +357,7 @@ async function initialize() {
 }
 
 window.addEventListener("pagehide", () => {
+  state.queue.clear();
   unlistenProgress?.();
   observer?.disconnect();
 });

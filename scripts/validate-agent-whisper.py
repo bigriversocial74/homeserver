@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 NATIVE = (ROOT / "src-tauri/src/whisper.rs").read_text(encoding="utf-8")
 CONTROLLER = (ROOT / "src/homeserver-agent-whisper.js").read_text(encoding="utf-8")
 CODEC = (ROOT / "src/homeserver-whisper-codec.js").read_text(encoding="utf-8")
+QUEUE = (ROOT / "src/homeserver-whisper-queue.js").read_text(encoding="utf-8")
 VAD = (ROOT / "src/homeserver-agent-vad.js").read_text(encoding="utf-8")
 SERVICE = (ROOT / "crates/homeserver-service/src/audio_runtime.rs").read_text(
     encoding="utf-8"
@@ -82,10 +83,22 @@ for token, label in (
     ("transcription_model_sha256", "model evidence persistence"),
     ("escapeHtml(state.notice.message)", "escaped transcription notices"),
     ("Final local transcript is ready", "editable final transcript UX"),
+    ("WhisperSegmentQueue", "bounded utterance queue integration"),
+    ("queueSegment(detail)", "non-dropping active transcription handoff"),
+    ("drainQueuedSegment()", "FIFO queue drain"),
+    ("state.queue.clear()", "ephemeral queue cleanup"),
 ):
     require(CONTROLLER, token, label)
 
 require(VAD, "homeserver:vad-segment-finalized", "VAD-to-Whisper local blob handoff")
+for token, label in (
+    ("DEFAULT_MAX_SEGMENTS = 6", "bounded queue segment count"),
+    ("DEFAULT_MAX_BYTES = 64 * 1024 * 1024", "bounded queue byte count"),
+    ("this.segmentIds", "duplicate segment rejection"),
+    ("this.bytes + blob.size > this.maxBytes", "aggregate byte boundary"),
+    ("this.items.shift()", "FIFO queue order"),
+):
+    require(QUEUE, token, label)
 
 for token, label in (
     ("transcription_id", "governed transcription identity"),
@@ -110,8 +123,10 @@ require(TAURI_CARGO, "whisper-rs.workspace = true", "desktop Whisper dependency"
 
 for token, label in (
     ("node --check src/homeserver-whisper-codec.js", "Whisper codec syntax gate"),
+    ("node --check src/homeserver-whisper-queue.js", "Whisper queue syntax gate"),
     ("node --check src/homeserver-agent-whisper.js", "Whisper controller syntax gate"),
     ("node scripts/test-agent-whisper-codec.mjs", "Whisper codec behavior gate"),
+    ("node scripts/test-agent-whisper-queue.mjs", "Whisper queue behavior gate"),
     ("validate-agent-whisper.py", "permanent Phase 23C validator gate"),
 ):
     require(PACKAGE, token, label)
@@ -160,6 +175,7 @@ for text, token, label in (
     (CONTROLLER, "localStorage", "browser persistence"),
     (CONTROLLER, "sessionStorage", "browser persistence"),
     (CONTROLLER, "indexedDB", "browser persistence"),
+    (CONTROLLER, "|| state.active) return;", "silent active-transcription segment drop"),
     (NATIVE, "reqwest", "native cloud speech or model download"),
     (NATIVE, "Command::new", "external executable invocation"),
     (NATIVE, "std::process", "external executable invocation"),
@@ -187,6 +203,8 @@ for temporary_path in (
     ROOT / ".github/workflows/phase23c-atomic-hardening.yml",
     ROOT / "scripts/apply-phase23c-operation-hardening.py",
     ROOT / ".github/workflows/phase23c-operation-hardening.yml",
+    ROOT / "scripts/apply-phase23c-queue-hardening.py",
+    ROOT / ".github/workflows/phase23c-queue-hardening.yml",
 ):
     if temporary_path.exists():
         raise SystemExit(
