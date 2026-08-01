@@ -11,9 +11,11 @@ on:
       - "crates/homeserver-service/src/audio_runtime.rs"
       - "src/homeserver-agent-vad.js"
       - "src/homeserver-whisper-codec.js"
+      - "src/homeserver-whisper-queue.js"
       - "src/homeserver-agent-whisper.js"
       - "src/homeserver-agent-whisper.css"
       - "scripts/test-agent-whisper-codec.mjs"
+      - "scripts/test-agent-whisper-queue.mjs"
       - "scripts/validate-agent-whisper.py"
       - "index.html"
       - "package.json"
@@ -48,6 +50,8 @@ jobs:
             .github/workflows/phase23c-atomic-hardening.yml \
             scripts/apply-phase23c-operation-hardening.py \
             .github/workflows/phase23c-operation-hardening.yml \
+            scripts/apply-phase23c-queue-hardening.py \
+            .github/workflows/phase23c-queue-hardening.yml \
             .github/workflows/phase23c-whisper-errors.yml \
             phase23c-whisper-errors.txt \
             phase23c-whisper-exit.txt
