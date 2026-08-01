@@ -1,3 +1,6 @@
+#[path = "audio_runtime.rs"]
+mod audio_runtime;
+
 #[path = "activity.rs"]
 mod activity;
 
@@ -61,9 +64,9 @@ mod wrapper_scheduling;
 mod wrapper_runtime_policy;
 
 use crate::{
-    agent_integrations, agent_runtime, backup, config::AppConfig, database, document_extraction,
-    evidence_archive, http, inference_governance, knowledge_vault, mcp_runtime,
-    microgifter_connection, model_center, openrouter_provider, operational_data,
+    agent_integrations, agent_runtime, audio_runtime, backup, config::AppConfig, database,
+    document_extraction, evidence_archive, http, inference_governance, knowledge_vault,
+    mcp_runtime, microgifter_connection, model_center, openrouter_provider, operational_data,
     review_intelligence, semantic_vault, software_authority, update, update_store, AppState,
 };
 use anyhow::{Context, Result};
@@ -118,6 +121,7 @@ pub async fn run(
     review_intelligence::initialize(&connection)?;
     agent_runtime::initialize(&connection)?;
     agent_integrations::initialize(&connection)?;
+    audio_runtime::initialize(&connection)?;
     mcp_runtime::initialize(&connection)?;
     if let Some(outcome) = restore_outcome {
         match outcome {
@@ -238,6 +242,7 @@ pub async fn run(
             .merge(review_intelligence::router(state.clone()))
             .merge(agent_runtime::router(state.clone()))
             .merge(agent_integrations::router(state.clone()))
+            .merge(audio_runtime::router(state.clone()))
             .merge(mcp_runtime::router(state.clone())),
     );
     let router = axum::Router::new()
@@ -318,6 +323,9 @@ async fn run_backup_scheduler(state: Arc<AppState>, mut shutdown: watch::Receive
                         }
                         if let Err(error) = agent_integrations::maintain_history(&connection) {
                             warn!(?error, "scheduled unified Agent retention failed");
+                        }
+                        if let Err(error) = audio_runtime::maintain_history(&connection) {
+                            warn!(?error, "scheduled Agent audio retention failed");
                         }
                     }
                     if let Err(error) = evidence_archive::create_automatic_if_due(scheduled_state.clone()) {
