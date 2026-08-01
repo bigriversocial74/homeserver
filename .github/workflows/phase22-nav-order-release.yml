@@ -37,46 +37,52 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
+          import json
+          import re
           from pathlib import Path
+
+          ordered_pages = '''const pages = [
+            ["agent", "HomeServer Agent", "integrations"],
+            ["home", "Home", "home"],
+            ["dashboard", "Dashboard", "dashboard"],
+            ["knowledge", "Knowledge Vault", "vault"],
+            ["apps", "Apps", "apps"],
+            ["integrations", "Integrations & Agents", "integrations"],
+            ["models", "Model Center", "model"],
+            ["backups", "Backups", "backup"],
+            ["sync", "Sync Cloud", "cloud"],
+            ["settings", "Settings", "settings"],
+            ["system", "System", "system"],
+          ];'''
 
           main_path = Path('src/main.js')
           main = main_path.read_text(encoding='utf-8')
-          old = '''const pages = [
-            ["agent", "HomeServer Agent", "integrations"],
-            ["home", "Home", "home"],
-            ["dashboard", "Dashboard", "dashboard"],
-            ["models", "Model Center", "model"],
-            ["apps", "Apps", "apps"],
-            ["knowledge", "Knowledge Vault", "vault"],
-            ["backups", "Backups", "backup"],
-            ["integrations", "Integrations & Agents", "integrations"],
-            ["settings", "Settings", "settings"],
-            ["sync", "Sync Cloud", "cloud"],
-            ["system", "System", "system"],
-          ];'''
-          new = '''const pages = [
-            ["agent", "HomeServer Agent", "integrations"],
-            ["home", "Home", "home"],
-            ["dashboard", "Dashboard", "dashboard"],
-            ["knowledge", "Knowledge Vault", "vault"],
-            ["apps", "Apps", "apps"],
-            ["integrations", "Integrations & Agents", "integrations"],
-            ["models", "Model Center", "model"],
-            ["backups", "Backups", "backup"],
-            ["sync", "Sync Cloud", "cloud"],
-            ["settings", "Settings", "settings"],
-            ["system", "System", "system"],
-          ];'''
-          if old not in main:
-              raise SystemExit('The expected main navigation block was not found')
-          main_path.write_text(main.replace(old, new, 1), encoding='utf-8')
+          updated, count = re.subn(r'const pages = \[.*?\n\];', ordered_pages, main, count=1, flags=re.S)
+          if count != 1:
+              raise SystemExit(f'Expected one pages array, replaced {count}')
+          main_path.write_text(updated, encoding='utf-8')
 
-          for relative in ['package.json', 'Cargo.toml', 'src-tauri/tauri.conf.json']:
-              path = Path(relative)
-              source = path.read_text(encoding='utf-8')
-              if '0.1.5' not in source:
-                  raise SystemExit(f'Expected 0.1.5 in {relative}')
-              path.write_text(source.replace('0.1.5', '0.1.6'), encoding='utf-8')
+          package_path = Path('package.json')
+          package = json.loads(package_path.read_text(encoding='utf-8'))
+          package['version'] = '0.1.6'
+          package_path.write_text(json.dumps(package, indent=2) + '\n', encoding='utf-8')
+
+          tauri_path = Path('src-tauri/tauri.conf.json')
+          tauri = json.loads(tauri_path.read_text(encoding='utf-8'))
+          tauri['version'] = '0.1.6'
+          tauri_path.write_text(json.dumps(tauri, indent=2) + '\n', encoding='utf-8')
+
+          cargo_path = Path('Cargo.toml')
+          cargo = cargo_path.read_text(encoding='utf-8')
+          cargo, count = re.subn(
+              r'(?ms)(\[workspace\.package\].*?^version\s*=\s*")[^"]+("\s*$)',
+              r'\g<1>0.1.6\g<2>',
+              cargo,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f'Expected one workspace version, replaced {count}')
+          cargo_path.write_text(cargo, encoding='utf-8')
           PY
 
           npm install --package-lock-only --ignore-scripts
@@ -130,9 +136,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/phase22-nav-order-release.yml
-          if [ -f .github/phase22-nav-order-release.trigger ]; then
-            git rm .github/phase22-nav-order-release.trigger
-          fi
+          git rm -f .github/phase22-nav-order-release.trigger
           git add src/main.js package.json package-lock.json Cargo.toml Cargo.lock src-tauri/tauri.conf.json
           git commit -m "Release HomeServer 0.1.6 with ordered sidebar navigation"
           git push origin HEAD:feature/unified-homeserver-agent-orchestration
