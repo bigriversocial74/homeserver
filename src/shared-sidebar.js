@@ -1,20 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import { icon, logoMark } from "./icons.js";
+import { logoMark } from "./icons.js";
 import "./shared-sidebar.css";
 
-const MENU_ITEMS = [
-  ["agent", "HomeServer Agent", "integrations"],
-  ["home", "Home", "home"],
-  ["dashboard", "Dashboard", "dashboard"],
-  ["models", "Model Center", "model"],
-  ["apps", "Apps", "apps"],
-  ["knowledge", "Knowledge Vault", "vault"],
-  ["backups", "Backups", "backup"],
-  ["integrations", "Integrations & Agents", "integrations"],
-  ["settings", "Settings", "settings"],
-  ["sync", "Sync Cloud", "cloud"],
-  ["system", "System", "system"],
-];
+const AGENT_SIDEBAR_MODE = "chat-only";
+const PRIMARY_NAV_ORDER = ["agent", "home", "dashboard", "knowledge", "apps", "integrations"];
+const SYSTEM_NAV_ORDER = ["models", "backups", "sync", "settings", "system"];
 
 let observer = null;
 let observedHost = null;
@@ -31,7 +21,7 @@ function escapeHtml(value) {
 }
 
 function currentPage() {
-  return window.location.hash.replace("#", "") || "agent";
+  return window.location.hash.replace("#", "") || "dashboard";
 }
 
 function isAgentPage() {
@@ -43,56 +33,14 @@ function navigate(page) {
   window.location.hash = `#${page}`;
 }
 
-function menuMarkup(activePage, shared = false) {
-  const attribute = shared ? "data-shared-page" : "data-page";
-  return MENU_ITEMS.map(([key, label, iconName]) => `<button type="button" class="nav-item ${activePage === key ? "active" : ""}" ${attribute}="${key}">${icon(iconName, 19)}<span>${escapeHtml(label)}</span></button>`).join("");
-}
-
-function reorderPrimaryNavigation() {
-  if (isAgentPage()) return;
-  const nav = document.querySelector(".app-sidebar .primary-nav");
-  if (!nav) return;
-  const buttons = new Map([...nav.querySelectorAll("[data-page]")].map((button) => [button.dataset.page, button]));
-  for (const [key] of MENU_ITEMS) {
-    const button = buttons.get(key);
-    if (button) nav.append(button);
-  }
-}
-
 function createBrand() {
   const brand = document.createElement("button");
   brand.type = "button";
   brand.className = "brand-lockup shared-sidebar-brand";
   brand.setAttribute("aria-label", "Open HomeServer dashboard");
-  brand.innerHTML = `${logoMark(43)}<div><strong>Microgifter</strong><span>HomeServer</span></div>`;
+  brand.innerHTML = `${logoMark(43)}<div><strong>Microgifter</strong><span>HomeServer Agent</span></div>`;
   brand.addEventListener("click", () => navigate("dashboard"));
   return brand;
-}
-
-function createNavigation() {
-  const nav = document.createElement("nav");
-  nav.className = "primary-nav shared-sidebar-navigation";
-  nav.setAttribute("aria-label", "HomeServer pages");
-  nav.innerHTML = menuMarkup("agent", true);
-  nav.querySelectorAll("[data-shared-page]").forEach((button) => {
-    button.addEventListener("click", () => navigate(button.dataset.sharedPage));
-  });
-  return nav;
-}
-
-function createServerCard() {
-  const card = document.createElement("div");
-  card.className = "server-card shared-sidebar-server-card";
-  card.innerHTML = `<div class="server-card-top"><div class="server-glyph">${icon("system", 22)}</div><div><strong>HomeServer</strong><span><i class="live-dot"></i>Online</span></div></div><div class="server-divider"></div><small>Local Control Center</small><button type="button" class="text-button" data-shared-system>View system status</button>`;
-  card.querySelector("[data-shared-system]")?.addEventListener("click", () => navigate("system"));
-  return card;
-}
-
-function createSidebarState() {
-  const state = document.createElement("div");
-  state.className = "sidebar-state";
-  state.innerHTML = '<span class="state-orb healthy"></span><span>online</span>';
-  return state;
 }
 
 function threadTitle(button) {
@@ -155,8 +103,68 @@ function addThreadActions(history) {
   });
 }
 
+function removeSidebarFooters() {
+  document.querySelectorAll(
+    ".app-sidebar > .server-card, .app-sidebar > .sidebar-state, .hs-chat-sidebar > .hs-chat-provider-summary, .hs-chat-sidebar > .hs-chat-sidebar-footer",
+  ).forEach((element) => element.remove());
+}
+
+function createNavigationGroup(className, label, order, buttons) {
+  const group = document.createElement("div");
+  group.className = className;
+  group.setAttribute("role", "group");
+  group.setAttribute("aria-label", label);
+  order.forEach((page) => {
+    const button = buttons.get(page);
+    if (button) group.append(button);
+  });
+  return group;
+}
+
+function reorderMainSidebarNavigation() {
+  if (isAgentPage()) return;
+  const nav = document.querySelector(".app-sidebar > .primary-nav");
+  if (!nav || nav.dataset.navigationOrder === "primary-system-v1") return;
+
+  const buttons = new Map(
+    [...nav.querySelectorAll(":scope > .nav-item[data-page]")]
+      .map((button) => [button.dataset.page, button]),
+  );
+  if (!buttons.size) return;
+
+  const primaryGroup = createNavigationGroup(
+    "primary-nav-main",
+    "HomeServer main pages",
+    PRIMARY_NAV_ORDER,
+    buttons,
+  );
+  const systemGroup = createNavigationGroup(
+    "primary-nav-system",
+    "HomeServer system pages",
+    SYSTEM_NAV_ORDER,
+    buttons,
+  );
+  const knownPages = new Set([...PRIMARY_NAV_ORDER, ...SYSTEM_NAV_ORDER]);
+  buttons.forEach((button, page) => {
+    if (!knownPages.has(page)) primaryGroup.append(button);
+  });
+
+  nav.replaceChildren(primaryGroup, systemGroup);
+  nav.dataset.navigationOrder = "primary-system-v1";
+}
+
+function removeUnexpectedControlCenterUi() {
+  removeSidebarFooters();
+  if (!isAgentPage()) return;
+  document.querySelectorAll(
+    ".agent-chat-shell > .app-sidebar:not(.hs-chat-sidebar), .agent-chat-shell .primary-nav",
+  ).forEach((element) => element.remove());
+}
+
 function decorateAgentSidebar() {
   if (!isAgentPage() || decorating) return;
+  removeUnexpectedControlCenterUi();
+
   const sidebar = document.querySelector(".hs-chat-sidebar");
   if (!sidebar || sidebar.dataset.sharedSidebar === "true") return;
 
@@ -164,12 +172,12 @@ function decorateAgentSidebar() {
   const search = sidebar.querySelector("#hs-chat-history-search")?.closest("label");
   const historyLabel = sidebar.querySelector(".hs-chat-history-label");
   const history = sidebar.querySelector(".hs-chat-history");
-  const provider = sidebar.querySelector("#hs-chat-provider-summary");
   if (!newChat || !search || !historyLabel || !history) return;
 
   decorating = true;
   try {
     sidebar.dataset.sharedSidebar = "true";
+    sidebar.dataset.agentSidebarMode = AGENT_SIDEBAR_MODE;
     sidebar.classList.add("app-sidebar", "shared-agent-sidebar");
 
     const chatSection = document.createElement("section");
@@ -177,12 +185,7 @@ function decorateAgentSidebar() {
     chatSection.append(newChat, search, historyLabel, history);
     addThreadActions(history);
 
-    const lower = document.createElement("div");
-    lower.className = "shared-sidebar-lower";
-    if (provider) lower.append(provider);
-    lower.append(createServerCard(), createSidebarState());
-
-    sidebar.replaceChildren(createBrand(), createNavigation(), chatSection, lower);
+    sidebar.replaceChildren(createBrand(), chatSection);
   } finally {
     decorating = false;
   }
@@ -193,7 +196,8 @@ function scheduleDecorate() {
   scheduled = true;
   window.requestAnimationFrame(() => {
     scheduled = false;
-    reorderPrimaryNavigation();
+    removeUnexpectedControlCenterUi();
+    reorderMainSidebarNavigation();
     decorateAgentSidebar();
     bindAgentObserver();
   });
@@ -220,6 +224,10 @@ window.addEventListener("hashchange", scheduleDecorate);
 scheduleDecorate();
 
 window.__HOMESERVER_SHARED_SIDEBAR_V1__ = {
-  menu: MENU_ITEMS.map(([key]) => key),
+  mode: AGENT_SIDEBAR_MODE,
   refresh: scheduleDecorate,
+  footerSections: "removed",
+  primaryNavigation: [...PRIMARY_NAV_ORDER],
+  systemNavigation: [...SYSTEM_NAV_ORDER],
 };
+window.__HOMESERVER_AGENT_SIDEBAR_CHAT_ONLY_V2__ = true;

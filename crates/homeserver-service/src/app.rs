@@ -61,10 +61,10 @@ mod wrapper_scheduling;
 mod wrapper_runtime_policy;
 
 use crate::{
-    agent_runtime, backup, config::AppConfig, database, document_extraction, evidence_archive,
-    http, inference_governance, knowledge_vault, mcp_runtime, microgifter_connection, model_center,
-    openrouter_provider, operational_data, review_intelligence, semantic_vault, software_authority,
-    update, update_store, AppState,
+    agent_integrations, agent_runtime, backup, config::AppConfig, database, document_extraction,
+    evidence_archive, http, inference_governance, knowledge_vault, mcp_runtime,
+    microgifter_connection, model_center, openrouter_provider, operational_data,
+    review_intelligence, semantic_vault, software_authority, update, update_store, AppState,
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -117,6 +117,7 @@ pub async fn run(
     semantic_vault::initialize(&connection)?;
     review_intelligence::initialize(&connection)?;
     agent_runtime::initialize(&connection)?;
+    agent_integrations::initialize(&connection)?;
     mcp_runtime::initialize(&connection)?;
     if let Some(outcome) = restore_outcome {
         match outcome {
@@ -206,7 +207,7 @@ pub async fn run(
         state.clone(),
         vp3_device_binding::bind_activation_identity,
     ));
-    let router = http::secure(
+    let protected_router = http::secure(
         http::router(state.clone())
             .merge(activity::router(state.clone()))
             .merge(cloud_connector::router(state.clone()))
@@ -236,8 +237,12 @@ pub async fn run(
             .merge(operational_data::router(state.clone()))
             .merge(review_intelligence::router(state.clone()))
             .merge(agent_runtime::router(state.clone()))
+            .merge(agent_integrations::router(state.clone()))
             .merge(mcp_runtime::router(state.clone())),
     );
+    let router = axum::Router::new()
+        .merge(agent_integrations::oauth_callback_router(state.clone()))
+        .merge(protected_router);
     let result = axum::serve(listener, router)
         .with_graceful_shutdown(wait_for_shutdown(shutdown))
         .await;
@@ -310,6 +315,9 @@ async fn run_backup_scheduler(state: Arc<AppState>, mut shutdown: watch::Receive
                         }
                         if let Err(error) = wrapper_scheduling::maintain_history(&connection) {
                             warn!(?error, "scheduled agent scheduling retention failed");
+                        }
+                        if let Err(error) = agent_integrations::maintain_history(&connection) {
+                            warn!(?error, "scheduled unified Agent retention failed");
                         }
                     }
                     if let Err(error) = evidence_archive::create_automatic_if_due(scheduled_state.clone()) {

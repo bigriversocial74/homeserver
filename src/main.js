@@ -16,6 +16,7 @@ let modelTestResult = null;
 let mcpSnapshot = null;
 let mcpCredential = null;
 let mcpBridgePath = null;
+let agentIntegrationSnapshot = null;
 let notice = null;
 let busy = false;
 let activePage = window.location.hash.replace("#", "") || "dashboard";
@@ -23,14 +24,14 @@ let notificationMenuOpen = false;
 let desktopAutostartEnabled = false;
 
 const pages = [
-  ["dashboard", "Dashboard", "dashboard"],
   ["agent", "HomeServer Agent", "integrations"],
   ["home", "Home", "home"],
+  ["dashboard", "Dashboard", "dashboard"],
+  ["models", "Model Center", "model"],
   ["apps", "Apps", "apps"],
+  ["knowledge", "Knowledge Vault", "vault"],
   ["backups", "Backups", "backup"],
   ["integrations", "Integrations & Agents", "integrations"],
-  ["knowledge", "Knowledge Vault", "vault"],
-  ["models", "Model Center", "model"],
   ["settings", "Settings", "settings"],
   ["sync", "Sync Cloud", "cloud"],
   ["system", "System", "system"],
@@ -156,7 +157,7 @@ function renderSidebar() {
     <div class="server-card">
       <div class="server-card-top"><div class="server-glyph">${icon("system", 22)}</div><div><strong>HomeServer</strong><span><i class="live-dot"></i>${isHealthy() ? "Online" : "Unavailable"}</span></div></div>
       <div class="server-divider"></div>
-      <small>v${escapeHtml(statusSnapshot?.version || "0.1.3")} ${updateStatus?.channel ? `(${escapeHtml(humanize(updateStatus.channel))})` : ""}</small>
+      <small>v${escapeHtml(statusSnapshot?.version || "0.1.5")} ${updateStatus?.channel ? `(${escapeHtml(humanize(updateStatus.channel))})` : ""}</small>
       <button type="button" class="text-button" data-page="system">${updateDisplayState() === "not_configured" ? "Release channel setup" : "Check for updates"}</button>
     </div>
     <div class="sidebar-state"><span class="state-orb ${statusClass(state)}"></span><span>${escapeHtml(humanize(state))}</span></div>
@@ -171,6 +172,8 @@ function notificationItems() {
   if (!lastBackup()) items.push({ tone: "warning", icon: "backup", title: "No protected backup yet", detail: "Create a verified local recovery point.", page: "backups" });
   if (modelSnapshot?.runtime?.state !== "running") items.push({ tone: "warning", icon: "model", title: "Model runtime is offline", detail: "Open Model Center to install or start Ollama.", page: "models" });
   if (updateDisplayState() === "not_configured") items.push({ tone: "info", icon: "update", title: "Release channel setup needed", detail: "Configure the signed HomeServer update source.", page: "system" });
+  const agentPrompt = agentIntegrationSnapshot?.active_prompt;
+  if (agentPrompt) items.push({ tone: "info", icon: "integrations", title: agentPrompt.title, detail: agentPrompt.message, page: "agent" });
   if (!items.length) items.push({ tone: "success", icon: "shield", title: "HomeServer is healthy", detail: "No active system alerts require attention.", page: "dashboard" });
   return items;
 }
@@ -218,7 +221,7 @@ function renderDashboard() {
         <dl class="detail-list">
           <div><dt>Device Name</dt><dd>${escapeHtml(statusSnapshot?.server_name || "HomeServer")}</dd></div>
           <div><dt>Operating System</dt><dd>Windows</dd></div>
-          <div><dt>Version</dt><dd>${escapeHtml(statusSnapshot?.version || "0.1.3")}</dd></div>
+          <div><dt>Version</dt><dd>${escapeHtml(statusSnapshot?.version || "0.1.5")}</dd></div>
           <div><dt>Local API</dt><dd>${statusSnapshot?.api_available ? "Available" : "Offline"}</dd></div>
           <div><dt>Database</dt><dd>${escapeHtml(humanize(statusSnapshot?.database || "unknown"))}</dd></div>
           <div><dt>Sync Queue</dt><dd>${pending}</dd></div>
@@ -253,7 +256,7 @@ function renderDashboard() {
         ${glanceRow("apps", "Running Services", String(serviceRows.filter((_, i) => i < 6).length), "apps")}
         ${glanceRow("backup", "Total Backups", String(backupCount()), "backups")}
         ${glanceRow("integrations", "Integrations", isConnected() ? "1" : "0", "integrations")}
-        ${glanceRow("update", "Version", statusSnapshot?.version || "0.1.3", "system")}
+        ${glanceRow("update", "Version", statusSnapshot?.version || "0.1.5", "system")}
       </div></article>
     </section>`;
 }
@@ -271,7 +274,7 @@ function renderHome() {
     <section class="home-hero-grid">
       <article class="panel welcome-card"><div class="hero-symbol tone-blue">${icon("home", 29)}</div><div><h2>Welcome Back</h2><p>Your HomeServer is ${isHealthy() ? "healthy and ready to protect what matters most" : "installed, but the local API is not responding yet"}.</p><div class="inline-badges">${badge(isHealthy() ? "All services running" : "Service attention", isHealthy() ? "healthy" : "degraded")}${badge(updateDisplayState() === "not_configured" ? "Beta channel" : "Up to date", updateDisplayState() === "not_configured" ? "planned" : "healthy")}</div></div></article>
       <article class="panel pairing-card"><div class="hero-symbol tone-blue">${icon("key", 28)}</div><div><h2>Pairing Connection</h2><p>${connected ? "Your HomeServer is paired and connected to Microgifter." : "Pair this HomeServer to your Microgifter account."}</p><div class="paired-stats"><span>Paired devices<strong>${connected ? "1" : "0"}</strong></span><span>Connection status<strong class="${connected ? "positive" : "warning-text"}">${connected ? "Connected" : "Not paired"}</strong></span></div></div><button type="button" class="button secondary" data-page="sync">${connected ? "View Connection" : "Pair Device"}</button></article>
-      <article class="panel summary-card"><div class="hero-symbol tone-blue">${icon("system", 27)}</div><div><h2>System Summary</h2><dl class="summary-list"><div><dt>Version</dt><dd>${escapeHtml(statusSnapshot?.version || "0.1.3")}</dd></div><div><dt>Backups</dt><dd>${backupCount()}</dd></div><div><dt>Pending sync</dt><dd>${Number(cloudSnapshot?.pending_sync || 0)}</dd></div><div><dt>Health status</dt><dd>${badge(isHealthy() ? "Healthy" : "Attention", isHealthy() ? "healthy" : "degraded")}</dd></div></dl><button class="text-button" data-page="dashboard">Open Dashboard</button></div></article>
+      <article class="panel summary-card"><div class="hero-symbol tone-blue">${icon("system", 27)}</div><div><h2>System Summary</h2><dl class="summary-list"><div><dt>Version</dt><dd>${escapeHtml(statusSnapshot?.version || "0.1.5")}</dd></div><div><dt>Backups</dt><dd>${backupCount()}</dd></div><div><dt>Pending sync</dt><dd>${Number(cloudSnapshot?.pending_sync || 0)}</dd></div><div><dt>Health status</dt><dd>${badge(isHealthy() ? "Healthy" : "Attention", isHealthy() ? "healthy" : "degraded")}</dd></div></dl><button class="text-button" data-page="dashboard">Open Dashboard</button></div></article>
     </section>
     <section class="panel quick-actions"><div class="panel-title"><div><h2>Quick Actions</h2></div></div><div class="quick-action-grid">
       ${quickAction("key", "Pair Device", "Connect this HomeServer to your Microgifter account.", "Pair Device", "sync", "green")}
@@ -331,7 +334,7 @@ function renderApps() {
 
 function appCard([name, description, iconName], index) {
   const running = index < 3 || (index === 3 && isConnected()) || (index === 4 && isHealthy()) || (index === 5 && isHealthy());
-  return `<article class="app-card"><div class="app-card-head"><div class="app-icon tone-${["blue","blue","teal","purple","green","amber"][index]}">${icon(iconName, 27)}</div><div><h3>${escapeHtml(name)}</h3><span>v${escapeHtml(statusSnapshot?.version || "0.1.3")}</span></div>${badge(running ? "Healthy" : "Planned", running ? "healthy" : "planned")}</div><p>${escapeHtml(description)}</p><div class="app-card-stats"><span>State<strong>${running ? "Running" : "Planned"}</strong></span><span>CPU<strong>${running ? `${Math.max(1, index + 1)}.${index}%` : "0%"}</strong></span><span>Memory<strong>${running ? `${64 + index * 24} MB` : "—"}</strong></span></div><div class="app-card-actions"><button class="button secondary" data-page="${["dashboard","system","system","sync","backups","system"][index]}">Open</button><button class="button ghost" data-page="settings">Configure</button><button class="icon-button">${icon("menu", 17)}</button></div></article>`;
+  return `<article class="app-card"><div class="app-card-head"><div class="app-icon tone-${["blue","blue","teal","purple","green","amber"][index]}">${icon(iconName, 27)}</div><div><h3>${escapeHtml(name)}</h3><span>v${escapeHtml(statusSnapshot?.version || "0.1.5")}</span></div>${badge(running ? "Healthy" : "Planned", running ? "healthy" : "planned")}</div><p>${escapeHtml(description)}</p><div class="app-card-stats"><span>State<strong>${running ? "Running" : "Planned"}</strong></span><span>CPU<strong>${running ? `${Math.max(1, index + 1)}.${index}%` : "0%"}</strong></span><span>Memory<strong>${running ? `${64 + index * 24} MB` : "—"}</strong></span></div><div class="app-card-actions"><button class="button secondary" data-page="${["dashboard","system","system","sync","backups","system"][index]}">Open</button><button class="button ghost" data-page="settings">Configure</button><button class="icon-button">${icon("menu", 17)}</button></div></article>`;
 }
 
 function availableApp(iconName, title, copy, tone) {
@@ -613,9 +616,9 @@ function renderSystem() {
   const signer = updateRelease?.authenticode_thumbprint ? `${updateRelease.authenticode_thumbprint.slice(0, 12)}…${updateRelease.authenticode_thumbprint.slice(-8)}` : "Not staged";
   return `${pageHeader("System", "View and manage your HomeServer system, services, updates, and diagnostics.")}
     <section class="system-grid top-system-grid">
-      <article class="panel"><div class="panel-title"><div>${icon("system", 18)}<h2>System Overview</h2></div></div><dl class="detail-list"><div><dt>Machine Name</dt><dd>${escapeHtml(statusSnapshot?.server_name || "HomeServer")}</dd></div><div><dt>Version</dt><dd>${escapeHtml(statusSnapshot?.version || "0.1.3")}</dd></div><div><dt>API URL</dt><dd class="mono">${escapeHtml(statusSnapshot?.api_url || "http://127.0.0.1:47831")}</dd></div><div><dt>Database</dt><dd>${escapeHtml(humanize(statusSnapshot?.database || "unknown"))}</dd></div><div><dt>Cloud State</dt><dd>${escapeHtml(humanize(cloudSnapshot?.state || "not_paired"))}</dd></div><div><dt>Last Updated</dt><dd>${escapeHtml(formatDate(statusSnapshot?.last_updated_utc))}</dd></div></dl><div class="resource-row"><span>Service health</span><strong>${isHealthy() ? "100%" : "35%"}</strong></div>${progress(isHealthy() ? 100 : 35, isHealthy() ? "green" : "amber")}</article>
-      <article class="panel"><div class="panel-title"><div>${icon("apps", 18)}<h2>Service Status</h2></div><button class="text-button" data-page="apps">View all services</button></div><div class="service-status-list">${serviceRows.slice(0, 6).map(([name], index) => { const running = index < 3 || (index === 3 && isConnected()) || index === 4 || index === 5; return `<div>${icon(running ? "check" : "warning", 16)}<span>${escapeHtml(name)}</span><strong>${running ? "Running" : "Waiting"}</strong><small>v${escapeHtml(statusSnapshot?.version || "0.1.3")}</small></div>`; }).join("")}</div><div class="service-footer"><i class="live-dot"></i>${isHealthy() ? "All core services are operational" : "Local service requires attention"}</div></article>
-      <article class="panel update-delivery"><div class="panel-title"><div>${icon("cloud", 18)}<h2>Update & Delivery</h2></div></div><dl class="detail-list"><div><dt>Current Version</dt><dd>${escapeHtml(updateStatus?.current_version || statusSnapshot?.version || "0.1.3")}</dd></div><div><dt>Stable Release</dt><dd>${escapeHtml(updateRelease?.version || "No newer release")}</dd></div><div><dt>Last Checked</dt><dd>${escapeHtml(formatDate(updateStatus?.last_checked_at_utc))}</dd></div><div><dt>Update Channel</dt><dd>${escapeHtml(humanize(updateStatus?.channel || "stable"))}</dd></div><div><dt>Signer</dt><dd class="mono">${escapeHtml(signer)}</dd></div><div><dt>Status</dt><dd>${badge(updateState === "not_configured" ? "Not configured" : humanize(updateState), updateState)}</dd></div></dl>${updateErrorText() ? `<div class="inline-warning">${icon("warning", 17)}${escapeHtml(updateErrorText())}</div>` : ""}<div class="button-row"><button id="check-updates" class="button secondary" ${busy ? "disabled" : ""}>Check now</button><button id="download-update" class="button primary" ${busy || updateState !== "available" || !updateRelease ? "disabled" : ""}>Download</button><button id="apply-update" class="button danger" ${busy || updateState !== "staged" || !updateRelease ? "disabled" : ""}>Apply</button></div></article>
+      <article class="panel"><div class="panel-title"><div>${icon("system", 18)}<h2>System Overview</h2></div></div><dl class="detail-list"><div><dt>Machine Name</dt><dd>${escapeHtml(statusSnapshot?.server_name || "HomeServer")}</dd></div><div><dt>Version</dt><dd>${escapeHtml(statusSnapshot?.version || "0.1.5")}</dd></div><div><dt>API URL</dt><dd class="mono">${escapeHtml(statusSnapshot?.api_url || "http://127.0.0.1:47831")}</dd></div><div><dt>Database</dt><dd>${escapeHtml(humanize(statusSnapshot?.database || "unknown"))}</dd></div><div><dt>Cloud State</dt><dd>${escapeHtml(humanize(cloudSnapshot?.state || "not_paired"))}</dd></div><div><dt>Last Updated</dt><dd>${escapeHtml(formatDate(statusSnapshot?.last_updated_utc))}</dd></div></dl><div class="resource-row"><span>Service health</span><strong>${isHealthy() ? "100%" : "35%"}</strong></div>${progress(isHealthy() ? 100 : 35, isHealthy() ? "green" : "amber")}</article>
+      <article class="panel"><div class="panel-title"><div>${icon("apps", 18)}<h2>Service Status</h2></div><button class="text-button" data-page="apps">View all services</button></div><div class="service-status-list">${serviceRows.slice(0, 6).map(([name], index) => { const running = index < 3 || (index === 3 && isConnected()) || index === 4 || index === 5; return `<div>${icon(running ? "check" : "warning", 16)}<span>${escapeHtml(name)}</span><strong>${running ? "Running" : "Waiting"}</strong><small>v${escapeHtml(statusSnapshot?.version || "0.1.5")}</small></div>`; }).join("")}</div><div class="service-footer"><i class="live-dot"></i>${isHealthy() ? "All core services are operational" : "Local service requires attention"}</div></article>
+      <article class="panel update-delivery"><div class="panel-title"><div>${icon("cloud", 18)}<h2>Update & Delivery</h2></div></div><dl class="detail-list"><div><dt>Current Version</dt><dd>${escapeHtml(updateStatus?.current_version || statusSnapshot?.version || "0.1.5")}</dd></div><div><dt>Stable Release</dt><dd>${escapeHtml(updateRelease?.version || "No newer release")}</dd></div><div><dt>Last Checked</dt><dd>${escapeHtml(formatDate(updateStatus?.last_checked_at_utc))}</dd></div><div><dt>Update Channel</dt><dd>${escapeHtml(humanize(updateStatus?.channel || "stable"))}</dd></div><div><dt>Signer</dt><dd class="mono">${escapeHtml(signer)}</dd></div><div><dt>Status</dt><dd>${badge(updateState === "not_configured" ? "Not configured" : humanize(updateState), updateState)}</dd></div></dl>${updateErrorText() ? `<div class="inline-warning">${icon("warning", 17)}${escapeHtml(updateErrorText())}</div>` : ""}<div class="button-row"><button id="check-updates" class="button secondary" ${busy ? "disabled" : ""}>Check now</button><button id="download-update" class="button primary" ${busy || updateState !== "available" || !updateRelease ? "disabled" : ""}>Download</button><button id="apply-update" class="button danger" ${busy || updateState !== "staged" || !updateRelease ? "disabled" : ""}>Apply</button></div></article>
     </section>
     <section class="system-grid resource-system-grid"><article class="panel system-resources"><div class="panel-title"><div><h2>System Resources</h2></div>${badge("Live", isHealthy() ? "healthy" : "planned")}</div><div class="resource-chart-grid">${resourceChart("CPU Usage", isHealthy() ? 18 : 0, "2.1 GHz", "blue")}${resourceChart("Memory Usage", isHealthy() ? 42 : 0, "Local service", "purple")}${resourceChart("Backup Catalog", Math.min(100, backupCount() * 5), `${backupCount()} records`, "green")}${resourceChart("Network", isConnected() ? 32 : 0, isConnected() ? "Cloud active" : "Local only", "blue")}</div></article>
       <article class="panel quick-system-actions"><div class="panel-title"><div><h2>Quick Actions</h2></div></div><div class="next-steps">${nextStep("refresh", "Refresh Status", "Reload local service, cloud, backup, and update state.", "system")}${nextStep("logs", "Export Logs", "Review diagnostic output from the Windows service.", "system")}${nextStep("update", "Check for Updates", "Check the pinned signed release channel.", "system")}${nextStep("shield", "Run Diagnostics", "Validate service and credential boundaries.", "settings")}</div></article>
@@ -1102,9 +1105,10 @@ async function loadAll(clearNotice = true) {
     invoke("homeserver_models"),
     invoke("homeserver_mcp"),
     invoke("homeserver_mcp_bridge_path"),
+    invoke("homeserver_agent_integrations"),
     invoke("control_center_autostart_enabled"),
   ]);
-  if (results[9].status === "fulfilled") desktopAutostartEnabled = Boolean(results[9].value);
+  if (results[10].status === "fulfilled") desktopAutostartEnabled = Boolean(results[10].value);
   if (results[0].status === "rejected") {
     statusSnapshot = null;
     if (activePage === "agent") {
@@ -1132,6 +1136,7 @@ async function loadAll(clearNotice = true) {
   modelSnapshot = results[6].status === "fulfilled" ? results[6].value : modelSnapshot;
   mcpSnapshot = results[7].status === "fulfilled" ? results[7].value : mcpSnapshot;
   mcpBridgePath = results[8].status === "fulfilled" ? results[8].value : mcpBridgePath;
+  agentIntegrationSnapshot = results[9].status === "fulfilled" ? results[9].value : agentIntegrationSnapshot;
 
   const health = {
     service: "online",

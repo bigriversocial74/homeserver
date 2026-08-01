@@ -1,3 +1,4 @@
+mod agent_integrations;
 mod agent_runtime;
 mod app;
 mod backup;
@@ -207,6 +208,16 @@ impl AppState {
                 "agent_workspace_integrity_check_failed",
             );
         }
+        if let Err(error) = agent_integrations::health_check(&connection) {
+            error!(
+                ?error,
+                "HomeServer unified Agent integration health check failed"
+            );
+            return HealthSnapshot::needs_attention(
+                &self.config.server_name,
+                "agent_integration_integrity_check_failed",
+            );
+        }
 
         let mut snapshot = HealthSnapshot::running(&self.config.server_name, "ready");
         snapshot.pending_sync = match database::pending_sync_count(&connection) {
@@ -308,6 +319,7 @@ impl AppState {
             operational_data::maintain_history(&connection)?;
             review_intelligence::maintain_history(&connection)?;
             agent_runtime::maintain_history(&connection)?;
+            agent_integrations::maintain_history(&connection)?;
             mcp_runtime::maintain_history(&connection)?;
             backup::enforce_pre_update_retention(&connection)?;
         }
