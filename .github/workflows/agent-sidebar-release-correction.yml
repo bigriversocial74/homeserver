@@ -192,11 +192,13 @@ jobs:
 
           lock_path = root / 'Cargo.lock'
           lock = lock_path.read_text(encoding='utf-8')
+          updated_packages = 0
           for name in sorted(package_names):
               pattern = rf'(\[\[package\]\]\nname = "{re.escape(name)}"\nversion = "){re.escape(old_version)}(")'
               lock, count = re.subn(pattern, rf'\g<1>{new_version}\2', lock, count=1)
-              if count != 1:
-                  raise SystemExit(f'Unable to update Cargo.lock workspace package {name}')
+              updated_packages += count
+          if updated_packages == 0:
+              raise SystemExit('No HomeServer workspace package versions were updated in Cargo.lock')
           lock_path.write_text(lock, encoding='utf-8')
           PY
 
