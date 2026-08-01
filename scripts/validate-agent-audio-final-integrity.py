@@ -282,9 +282,31 @@ reject(
     "one Agent message linked to two segments",
 )
 connection.close()
+
+idempotence = sqlite3.connect(":memory:")
+supporting_schema(idempotence)
+for _ in range(2):
+    idempotence.executescript(BASE)
+    idempotence.executescript(HARDENING)
+    idempotence.executescript(FINAL)
+for migration_key in (
+    "0030_agent_audio_conversation",
+    "0031_agent_audio_conversation_hardening",
+    "0032_agent_audio_final_integrity",
+):
+    count = idempotence.execute(
+        "SELECT COUNT(*) FROM schema_migrations WHERE migration_key=?",
+        (migration_key,),
+    ).fetchone()[0]
+    if count != 1:
+        raise SystemExit(
+            f"Phase 23 migration is not idempotently registered: {migration_key}"
+        )
+idempotence.close()
+
 print(
     "Phase 23A final integrity validates upgrade reconciliation, exact message "
     "identity, post-capture linkage, unique evidence binding, retry-safe "
     "finalization, recorder failure handling, native linked-thread fixtures, "
-    "and permanent exact-head certification hygiene."
+    "migration idempotence, and permanent exact-head certification hygiene."
 )
