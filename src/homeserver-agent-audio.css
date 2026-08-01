@@ -1,0 +1,53 @@
+/* Phase 23 Agent Chat ears and conversation engine */
+.hs-agent-audio-toggle{display:inline-flex;align-items:center;gap:6px}
+.hs-agent-audio-toggle span{font-size:10px;text-transform:capitalize;color:#64748b}
+.hs-agent-audio-mic{width:42px;height:42px;flex:0 0 42px;border:1px solid #d8dee8;border-radius:50%;background:#f7f8fa;color:#111827;font-size:13px;cursor:pointer;transition:background .18s ease,border-color .18s ease,box-shadow .18s ease,color .18s ease}
+.hs-agent-audio-mic:hover:not(:disabled){background:#eef2f7;border-color:#bcc6d4}
+.hs-agent-audio-mic.active{background:#111827;color:#fff;border-color:#111827;box-shadow:0 0 0 5px rgba(17,24,39,.1)}
+.hs-agent-audio-mic:disabled{opacity:.5;cursor:not-allowed}
+.hs-agent-audio-panel{display:grid;gap:12px;margin:10px 0 12px;padding:16px;border:1px solid #dde3eb;border-radius:18px;background:#fbfcfd;box-shadow:0 12px 30px rgba(15,23,42,.06)}
+.hs-agent-audio-panel.hidden{display:none}
+.hs-agent-audio-panel>header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}
+.hs-agent-audio-panel>header>div{display:grid;gap:3px}
+.hs-agent-audio-panel>header span{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#64748b}
+.hs-agent-audio-panel>header strong{font-size:16px;color:#111827}
+.hs-agent-audio-panel>header p{max-width:680px;margin:0;font-size:12px;line-height:1.55;color:#64748b}
+.hs-agent-audio-panel>header button{border:0;background:transparent;font-size:22px;color:#64748b;cursor:pointer}
+.hs-agent-audio-notice{padding:9px 11px;border-radius:10px;background:#eef2ff;font-size:12px;color:#3730a3}
+.hs-agent-audio-notice[data-kind="success"]{background:#ecfdf5;color:#166534}
+.hs-agent-audio-notice[data-kind="warning"]{background:#fff7ed;color:#9a3412}
+.hs-agent-audio-state{display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:12px;background:#fff}
+.hs-agent-audio-state i{width:9px;height:9px;border-radius:50%;background:#94a3b8}
+.hs-agent-audio-state i.active{background:#111827;box-shadow:0 0 0 5px rgba(15,23,42,.1);animation:hsAgentAudioPulse 1.4s ease-in-out infinite}
+.hs-agent-audio-state strong{font-size:13px;text-transform:capitalize;color:#111827}
+.hs-agent-audio-state span{margin-left:auto;font-variant-numeric:tabular-nums;color:#64748b}
+@keyframes hsAgentAudioPulse{50%{transform:scale(.75);opacity:.65}}
+.hs-agent-audio-device{display:grid;grid-template-columns:110px minmax(0,1fr);align-items:center;gap:12px;font-size:12px;font-weight:700;color:#475569}
+.hs-agent-audio-device select{min-width:0;border:1px solid #dbe2ea;border-radius:10px;background:#fff;padding:9px 10px;color:#111827}
+.hs-agent-audio-device select:disabled{background:#f1f5f9;color:#64748b}
+.hs-agent-audio-actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.hs-agent-audio-actions button{border:1px solid #d7dee8;border-radius:10px;background:#fff;padding:10px;font-weight:700;color:#1f2937;cursor:pointer}
+.hs-agent-audio-actions button:hover:not(:disabled){background:#f1f5f9}
+.hs-agent-audio-actions button.danger{color:#991b1b}
+.hs-agent-audio-actions button:disabled{opacity:.45;cursor:not-allowed}
+.hs-agent-audio-boundary{display:grid;gap:2px;padding:10px 12px;border-radius:12px;background:#f1f5f9;font-size:12px}
+.hs-agent-audio-boundary strong{color:#334155}
+.hs-agent-audio-boundary span{color:#64748b;line-height:1.45}
+.hs-agent-audio-list{display:grid;gap:9px}
+.hs-agent-audio-list-title{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#475569}
+.hs-agent-audio-recording{display:grid;gap:9px;padding:12px;border:1px solid #e2e8f0;border-radius:14px;background:#fff}
+.hs-agent-audio-recording-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.hs-agent-audio-recording-head>div{display:grid;gap:2px;min-width:0}
+.hs-agent-audio-recording-head strong{font-size:13px;color:#111827;overflow-wrap:anywhere}
+.hs-agent-audio-recording-head span,.hs-agent-audio-recording small{font-size:11px;color:#64748b}
+.hs-agent-audio-recording-head button{border:0;background:transparent;color:#991b1b;font-size:11px;cursor:pointer}
+.hs-agent-audio-recording audio{width:100%;height:34px}
+.hs-agent-audio-transcript{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:stretch}
+.hs-agent-audio-transcript textarea{resize:vertical;min-height:54px;border:1px solid #dbe2ea;border-radius:10px;padding:9px 10px;font:inherit;color:#111827}
+.hs-agent-audio-transcript textarea[readonly]{resize:none;background:#f8fafc;color:#475569}
+.hs-agent-audio-transcript button{border:0;border-radius:10px;background:#111827;color:#fff;padding:0 14px;font-weight:700;cursor:pointer}
+.hs-agent-audio-transcript button:disabled{background:#64748b;cursor:not-allowed}
+.hs-agent-audio-empty{padding:18px;border:1px dashed #cbd5e1;border-radius:12px;text-align:center;font-size:12px;color:#64748b}
+.hs-agent-audio-toggle:focus-visible,.hs-agent-audio-mic:focus-visible,.hs-agent-audio-panel button:focus-visible,.hs-agent-audio-panel select:focus-visible,.hs-agent-audio-panel textarea:focus-visible{outline:3px solid rgba(37,99,235,.3);outline-offset:2px}
+@media(max-width:860px){.hs-agent-audio-actions{grid-template-columns:1fr 1fr}.hs-agent-audio-device{grid-template-columns:1fr}.hs-agent-audio-transcript{grid-template-columns:1fr}.hs-agent-audio-transcript button{min-height:40px}}
+@media(prefers-reduced-motion:reduce){.hs-agent-audio-mic{transition:none}.hs-agent-audio-state i.active{animation:none}}

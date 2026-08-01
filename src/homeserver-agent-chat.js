@@ -493,6 +493,15 @@ async function submitPrompt(event) {
   try {
     const result = await invoke("homeserver_agent_prompt", { request });
     activeThreadId = result.thread_id;
+    window.dispatchEvent(
+      new CustomEvent("homeserver:agent-message-sent", {
+        detail: {
+          message_id: result.user_message_id,
+          thread_id: result.thread_id,
+          prompt,
+        },
+      }),
+    );
     workspace = await invoke("homeserver_agent_workspace");
     ensureActiveThread();
     notice = result.approvals_required ? { kind: "info", message: "HomeServer answered and created a supervised approval request." } : null;

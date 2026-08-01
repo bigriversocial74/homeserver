@@ -34,6 +34,22 @@ pub(crate) async fn homeserver_agent_workspace() -> Result<Value, String> {
     }
     if let Some(object) = workspace.as_object_mut() {
         object.insert("activity".to_owned(), activity);
+        object.insert(
+            "audio".to_owned(),
+            get_json::<Value>("/v1/audio/status")
+                .await
+                .unwrap_or_else(|_| {
+                    json!({
+                        "schema": "homeserver.agent-audio.v1",
+                        "host_state": "unavailable",
+                        "active_session": null,
+                        "sessions": [],
+                        "segments": [],
+                        "events": [],
+                        "capabilities": {}
+                    })
+                }),
+        );
     }
     let _: Result<Value, String> = post_json("/v1/activity/active", &json!({})).await;
     Ok(workspace)
@@ -151,6 +167,14 @@ pub(crate) async fn homeserver_agent_integration_action(request: Value) -> Resul
         Some("refresh_tools") => post_json("/v1/agent/integrations/tools", &request).await,
         Some("call_tool") => post_json("/v1/agent/integrations/call", &request).await,
         Some("dismiss_guidance") => post_json("/v1/agent/guidance/dismiss", &request).await,
+        Some("audio_status") => get_json("/v1/audio/status").await,
+        Some("audio_start_session") => post_json("/v1/audio/sessions/start", &request).await,
+        Some("audio_set_state") => post_json("/v1/audio/sessions/state", &request).await,
+        Some("audio_finalize_segment") => post_json("/v1/audio/segments", &request).await,
+        Some("audio_update_transcript") => {
+            post_json("/v1/audio/segments/transcript", &request).await
+        }
+        Some("audio_delete_session") => post_json("/v1/audio/sessions/delete", &request).await,
         _ => Err("Unsupported Agent integration action.".to_owned()),
     }
 }
