@@ -113,6 +113,13 @@ for token, label in (
     ("npm run check:frontend", "retained frontend validation"),
     ("npm run build", "production frontend build"),
     ("npm run prepare:icons", "generated Tauri desktop resources"),
+    ("cargo build", "packaged HomeServer binary build"),
+    ("-p microgifter-homeserver-service", "service package staging"),
+    ("-p microgifter-homeserver-updater", "updater package staging"),
+    ("-p microgifter-homeserver-mcp", "MCP package staging"),
+    ("src-tauri/resources/microgifter-homeserver-service.exe", "service bundle resource"),
+    ("src-tauri/resources/microgifter-homeserver-updater.exe", "updater bundle resource"),
+    ("src-tauri/resources/microgifter-homeserver-mcp.exe", "MCP bundle resource"),
     ("cargo fmt --all -- --check", "Rust formatting gate"),
     (
         "cargo test -p microgifter-homeserver-control-center whisper::tests",
@@ -159,6 +166,9 @@ for temporary_path in (
     ROOT / ".github/workflows/phase23c-native-diagnostics.yml",
     ROOT / "phase23c-native-errors.txt",
     ROOT / "phase23c-native-exit-code.txt",
+    ROOT / ".github/workflows/phase23c-whisper-errors.yml",
+    ROOT / "phase23c-whisper-errors.txt",
+    ROOT / "phase23c-whisper-exit.txt",
 ):
     if temporary_path.exists():
         raise SystemExit(
@@ -170,6 +180,6 @@ print(
     "Phase 23C validates embedded whisper.cpp inference, verified local model import, "
     "bounded and zeroized PCM, partial/final transcript events, cancellation, durable "
     "model/engine receipts, editable Agent Chat transcripts, generated desktop resources, "
-    "cross-platform native certification, permanent cleanup hygiene, and zero cloud "
-    "speech egress."
+    "real packaged binary staging, cross-platform native certification, permanent cleanup "
+    "hygiene, and zero cloud speech egress."
 )
