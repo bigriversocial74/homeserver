@@ -132,6 +132,8 @@ for temporary_path in (
     ROOT / ".github/workflows/phase23-linkage-fixture-repair.yml",
     ROOT / ".github/workflows/phase23-test-fixture-fix.yml",
     ROOT / ".github/workflows/phase-23-format-fix.yml",
+    ROOT / ".github/workflows/phase23-lock-refresh.yml",
+    ROOT / ".github/workflows/phase23-cargo-lock-refresh.yml",
 ):
     if temporary_path.exists():
         raise SystemExit(
