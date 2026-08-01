@@ -174,8 +174,12 @@ async function transcribeLocalSegment(detail) {
 }
 
 async function cancelActive() {
-  const transcriptionId = state.active?.transcriptionId
+  let transcriptionId = state.active?.transcriptionId
     || state.status?.active_transcription_id;
+  if (!transcriptionId && state.active) {
+    const status = await refreshStatus();
+    transcriptionId = status?.active_transcription_id || null;
+  }
   if (!transcriptionId) {
     notify("Local Whisper has not entered the cancellable decode stage yet.");
     return;

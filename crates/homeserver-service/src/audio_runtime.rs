@@ -696,24 +696,16 @@ fn save_transcript(
     validate_transcript(Some(&transcript))?;
     let linked_message_id =
         normalized_optional_identifier(request.linked_message_id, "linked message ID")?;
-    let transcription_id = normalized_optional_identifier(
-        request.transcription_id,
-        "transcription ID",
-    )?;
-    let transcription_engine = normalized_optional_value(
-        request.transcription_engine,
-        160,
-        "transcription engine",
-    )?;
+    let transcription_id =
+        normalized_optional_identifier(request.transcription_id, "transcription ID")?;
+    let transcription_engine =
+        normalized_optional_value(request.transcription_engine, 160, "transcription engine")?;
     let transcription_model_sha256 = request
         .transcription_model_sha256
         .map(|value| normalized_sha256(&value))
         .transpose()?;
-    let transcription_language = normalized_optional_value(
-        request.transcription_language,
-        32,
-        "transcription language",
-    )?;
+    let transcription_language =
+        normalized_optional_value(request.transcription_language, 32, "transcription language")?;
     let has_transcription_receipt = transcription_id.is_some()
         || transcription_engine.is_some()
         || transcription_model_sha256.is_some()

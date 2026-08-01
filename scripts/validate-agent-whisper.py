@@ -43,6 +43,8 @@ for token, label in (
     ("WhisperContext::new_with_params", "embedded whisper.cpp model runtime"),
     ("whisper_state.full", "embedded local inference"),
     ("raw_audio_retained: false", "raw-audio non-retention receipt"),
+    ("let transcript = tokio::task::spawn_blocking", "direct worker transcript return"),
+    ("Ok(transcript)", "native final transcript return"),
     ("fs::remove_file(&temporary)", "failed-import cleanup"),
 ):
     require(NATIVE, token, label)
@@ -60,6 +62,7 @@ for token, label in (
     ("audioBlobToWhisperPcm", "local PCM handoff"),
     ('invoke("homeserver_whisper_transcribe"', "native transcription command"),
     ('invoke("homeserver_cancel_whisper_transcription"', "native cancellation command"),
+    ("const status = await refreshStatus()", "pre-progress cancellation discovery"),
     ('invoke("homeserver_import_whisper_model"', "local model import command"),
     ("audio_update_transcript", "governed final transcript persistence"),
     ("transcription_model_sha256", "model evidence persistence"),
@@ -111,6 +114,8 @@ for text, token, label in (
     (NATIVE, "reqwest", "native cloud speech or model download"),
     (NATIVE, "Command::new", "external executable invocation"),
     (NATIVE, "std::process", "external executable invocation"),
+    (NATIVE, "FINAL_TRANSCRIPTS", "global transcript transfer state"),
+    (NATIVE, "worker_transcript_placeholder", "placeholder transcript receipt"),
 ):
     forbid(text, token, label)
 

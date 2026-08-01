@@ -111,7 +111,9 @@ fn now_utc() -> String {
 fn validate_sha256(value: &str) -> Result<String, String> {
     let normalized = value.trim().to_ascii_lowercase();
     if normalized.len() != 64 || !normalized.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err("Whisper model SHA-256 must contain exactly 64 hexadecimal characters.".to_owned());
+        return Err(
+            "Whisper model SHA-256 must contain exactly 64 hexadecimal characters.".to_owned(),
+        );
     }
     Ok(normalized)
 }
@@ -175,7 +177,9 @@ fn decode_pcm16(request: &WhisperTranscriptionRequest) -> Result<Zeroizing<Vec<f
     }
     let sample_count = bytes.len() / 2;
     if !(MIN_PCM_SAMPLES..=MAX_PCM_SAMPLES).contains(&sample_count) {
-        return Err("Local Whisper PCM sample count is outside the governed duration boundary.".to_owned());
+        return Err(
+            "Local Whisper PCM sample count is outside the governed duration boundary.".to_owned(),
+        );
     }
     let mut samples = Zeroizing::new(Vec::with_capacity(sample_count));
     for chunk in bytes.chunks_exact(2) {
@@ -235,7 +239,10 @@ async fn write_manifest(app: &AppHandle, manifest: &WhisperModelManifest) -> Res
         .map_err(|error| error.to_string())?;
     output.sync_all().await.map_err(|error| error.to_string())?;
     drop(output);
-    if fs::try_exists(&path).await.map_err(|error| error.to_string())? {
+    if fs::try_exists(&path)
+        .await
+        .map_err(|error| error.to_string())?
+    {
         fs::remove_file(&path)
             .await
             .map_err(|error| error.to_string())?;
@@ -307,7 +314,14 @@ pub(crate) async fn homeserver_whisper_status(
             .await
             .map(|metadata| metadata.is_file() && metadata.len() == manifest.byte_length)
             .unwrap_or(false);
-        (ready, if ready { "verified_on_import" } else { "missing_or_changed" })
+        (
+            ready,
+            if ready {
+                "verified_on_import"
+            } else {
+                "missing_or_changed"
+            },
+        )
     } else {
         (false, "not_configured")
     };
@@ -529,7 +543,7 @@ pub(crate) async fn homeserver_whisper_transcribe(
         let worker_segment_id = segment_id.clone();
         let worker_model_sha256 = manifest.model_sha256.clone();
         let worker_language = language.clone();
-        tokio::task::spawn_blocking(move || {
+        let transcript = tokio::task::spawn_blocking(move || {
             run_whisper(
                 worker_app,
                 model_path,
@@ -553,7 +567,7 @@ pub(crate) async fn homeserver_whisper_transcribe(
             sample_rate_hz: SAMPLE_RATE_HZ,
             sample_count,
             duration_ms,
-            transcript: worker_transcript_placeholder(),
+            transcript,
             completed_at_utc: now_utc(),
             raw_audio_retained: false,
         })
@@ -569,30 +583,7 @@ pub(crate) async fn homeserver_whisper_transcribe(
     }
     drop(active);
 
-    match result {
-        Ok(mut receipt) => {
-            let final_event = FINAL_TRANSCRIPTS
-                .lock()
-                .map_err(|_| "Local Whisper transcript lock was poisoned.".to_owned())?
-                .remove(&transcription_id)
-                .ok_or_else(|| "Local Whisper final transcript was unavailable.".to_owned())?;
-            receipt.transcript = final_event;
-            Ok(receipt)
-        }
-        Err(error) => {
-            if let Ok(mut transcripts) = FINAL_TRANSCRIPTS.lock() {
-                transcripts.remove(&transcription_id);
-            }
-            Err(error)
-        }
-    }
-}
-
-static FINAL_TRANSCRIPTS: std::sync::LazyLock<Mutex<BTreeMap<String, String>>> =
-    std::sync::LazyLock::new(|| Mutex::new(BTreeMap::new()));
-
-fn worker_transcript_placeholder() -> String {
-    String::new()
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -605,18 +596,15 @@ fn run_whisper(
     model_sha256: String,
     language: String,
     cancel: Arc<AtomicBool>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     if cancel.load(Ordering::SeqCst) {
         return Err("Local Whisper transcription was cancelled.".to_owned());
     }
     let model_path = model_path
         .to_str()
         .ok_or_else(|| "Local Whisper model path is not valid UTF-8.".to_owned())?;
-    let context = WhisperContext::new_with_params(
-        model_path,
-        WhisperContextParameters::default(),
-    )
-    .map_err(|error| format!("Unable to load the local Whisper model: {error}"))?;
+    let context = WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
+        .map_err(|error| format!("Unable to load the local Whisper model: {error}"))?;
     let mut whisper_state = context
         .create_state()
         .map_err(|error| format!("Unable to create the local Whisper state: {error}"))?;
@@ -707,10 +695,6 @@ fn run_whisper(
         text.push(' ');
     }
     let transcript = normalize_transcript(&text)?;
-    FINAL_TRANSCRIPTS
-        .lock()
-        .map_err(|_| "Local Whisper transcript lock was poisoned.".to_owned())?
-        .insert(transcription_id.clone(), transcript.clone());
     let _ = app.emit(
         "homeserver-whisper-progress",
         WhisperProgressEvent {
@@ -723,7 +707,7 @@ fn run_whisper(
             model_sha256,
         },
     );
-    Ok(())
+    Ok(transcript)
 }
 
 #[cfg(test)]
@@ -763,7 +747,10 @@ mod tests {
 
     #[test]
     fn normalizes_and_bounds_transcripts() {
-        assert_eq!(normalize_transcript(" hello\n  local   world ").unwrap(), "hello local world");
+        assert_eq!(
+            normalize_transcript(" hello\n  local   world ").unwrap(),
+            "hello local world"
+        );
         assert!(normalize_transcript("   ").is_err());
         assert!(normalize_transcript(&"x".repeat(MAX_TRANSCRIPT_CHARS + 1)).is_err());
     }
