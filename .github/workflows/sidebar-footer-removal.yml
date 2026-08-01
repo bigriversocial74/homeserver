@@ -1,0 +1,182 @@
+name: Sidebar Footer Removal
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/sidebar-footer-removal.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sidebar-footer-removal-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  remove:
+    if: github.event.pull_request.head.ref == 'feature/unified-homeserver-agent-orchestration'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Remove both sidebar footer sections
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path('.')
+
+          main_path = root / 'src' / 'main.js'
+          main = main_path.read_text(encoding='utf-8')
+          old_main = '''function renderSidebar() {
+            const state = statusSnapshot?.state || "offline";
+            return `<aside class="app-sidebar">
+              <div class="brand-lockup">${logoMark(43)}<div><strong>Microgifter</strong><span>HomeServer</span></div></div>
+              <nav class="primary-nav" aria-label="HomeServer pages">
+                ${pages.map(([key, label, iconName]) => `<button type="button" class="nav-item ${activePage === key ? "active" : ""}" data-page="${key}">${icon(iconName, 19)}<span>${escapeHtml(label)}</span></button>`).join("")}
+              </nav>
+              <div class="server-card">
+                <div class="server-card-top"><div class="server-glyph">${icon("system", 22)}</div><div><strong>HomeServer</strong><span><i class="live-dot"></i>${isHealthy() ? "Online" : "Unavailable"}</span></div></div>
+                <div class="server-divider"></div>
+                <small>v${escapeHtml(statusSnapshot?.version || "0.1.5")} ${updateStatus?.channel ? `(${escapeHtml(humanize(updateStatus.channel))})` : ""}</small>
+                <button type="button" class="text-button" data-page="system">${updateDisplayState() === "not_configured" ? "Release channel setup" : "Check for updates"}</button>
+              </div>
+              <div class="sidebar-state"><span class="state-orb ${statusClass(state)}"></span><span>${escapeHtml(humanize(state))}</span></div>
+            </aside>`;
+          }'''
+          new_main = '''function renderSidebar() {
+            return `<aside class="app-sidebar">
+              <div class="brand-lockup">${logoMark(43)}<div><strong>Microgifter</strong><span>HomeServer</span></div></div>
+              <nav class="primary-nav" aria-label="HomeServer pages">
+                ${pages.map(([key, label, iconName]) => `<button type="button" class="nav-item ${activePage === key ? "active" : ""}" data-page="${key}">${icon(iconName, 19)}<span>${escapeHtml(label)}</span></button>`).join("")}
+              </nav>
+            </aside>`;
+          }'''
+          if old_main not in main:
+              raise SystemExit('Unable to locate the main sidebar footer block')
+          main_path.write_text(main.replace(old_main, new_main, 1), encoding='utf-8')
+
+          chat_path = root / 'src' / 'homeserver-agent-chat.js'
+          chat = chat_path.read_text(encoding='utf-8')
+          chat = chat.replace('''function renderPage() {
+            const thread = activeThread();
+            const state = overallProviderState();
+            return `<div class="hs-chat-page" data-homeserver-chat-mounted="true">''', '''function renderPage() {
+            const thread = activeThread();
+            return `<div class="hs-chat-page" data-homeserver-chat-mounted="true">''', 1)
+          old_agent_footer = '''      <div class="hs-chat-history">${renderThreadList()}</div>
+              <button type="button" class="hs-chat-provider-summary" id="hs-chat-provider-summary"><span class="hs-provider-state ${providerTone(state)}"><i></i>${escapeHtml(humanize(state))}</span><strong>Microgifter</strong><small>${providerConnections().length} connection${providerConnections().length === 1 ? "" : "s"}</small></button>
+              <div class="hs-chat-sidebar-footer">
+                <button type="button" id="hs-chat-control-center"><span>←</span><div><strong>Control Center</strong><small>Return to dashboard</small></div></button>
+              </div>'''
+          new_agent_footer = '''      <div class="hs-chat-history">${renderThreadList()}</div>'''
+          if old_agent_footer not in chat:
+              raise SystemExit('Unable to locate the Agent sidebar footer block')
+          chat = chat.replace(old_agent_footer, new_agent_footer, 1)
+          chat = chat.replace('''  document.querySelectorAll("#hs-chat-logo-home,#hs-chat-control-center").forEach((button) => {
+            button.addEventListener("click", () => { window.location.hash = "#dashboard"; });
+          });''', '''  document.querySelector("#hs-chat-logo-home")?.addEventListener("click", () => {
+            window.location.hash = "#dashboard";
+          });''', 1)
+          chat = chat.replace('''  document.querySelectorAll("#hs-chat-open-connections,#hs-chat-provider-summary,#hs-chat-connection-toggle").forEach((button) => button?.addEventListener("click", () => {''', '''  document.querySelectorAll("#hs-chat-open-connections,#hs-chat-connection-toggle").forEach((button) => button?.addEventListener("click", () => {''', 1)
+          chat_path.write_text(chat, encoding='utf-8')
+
+          shared_path = root / 'src' / 'shared-sidebar.js'
+          shared = shared_path.read_text(encoding='utf-8')
+          create_state = '''function createSidebarState() {
+            const state = document.createElement("div");
+            state.className = "sidebar-state";
+            state.innerHTML = '<span class="state-orb healthy"></span><span>agent online</span>';
+            return state;
+          }
+
+'''
+          if create_state not in shared:
+              raise SystemExit('Unable to locate Agent sidebar state function')
+          shared = shared.replace(create_state, '', 1)
+          shared = shared.replace('''  const history = sidebar.querySelector(".hs-chat-history");
+            const provider = sidebar.querySelector("#hs-chat-provider-summary");
+            if (!newChat || !search || !historyLabel || !history) return;''', '''  const history = sidebar.querySelector(".hs-chat-history");
+            if (!newChat || !search || !historyLabel || !history) return;''', 1)
+          old_lower = '''    const lower = document.createElement("div");
+              lower.className = "shared-sidebar-lower";
+              if (provider) lower.append(provider);
+              lower.append(createSidebarState());
+
+              sidebar.replaceChildren(createBrand(), chatSection, lower);'''
+          new_lower = '''    sidebar.replaceChildren(createBrand(), chatSection);'''
+          if old_lower not in shared:
+              raise SystemExit('Unable to locate Agent shared-sidebar footer composition')
+          shared_path.write_text(shared.replace(old_lower, new_lower, 1), encoding='utf-8')
+
+          shared_css_path = root / 'src' / 'shared-sidebar.css'
+          shared_css = shared_css_path.read_text(encoding='utf-8')
+          for rule in [
+              '.shared-sidebar-lower{display:grid;flex:0 0 auto;gap:9px;margin-top:10px}\n',
+              '.shared-sidebar-lower .hs-chat-provider-summary{width:100%;margin:0}\n',
+              '.shared-agent-sidebar .sidebar-state{margin-top:0}\n',
+          ]:
+              shared_css = shared_css.replace(rule, '')
+          shared_css_path.write_text(shared_css, encoding='utf-8')
+
+          validator_path = root / 'scripts' / 'validate-agent-chat-route.py'
+          validator = validator_path.read_text(encoding='utf-8')
+          validator = validator.replace('    \'id="hs-chat-control-center"\',\n', '')
+          validator = validator.replace('    \'lower.append(createSidebarState())\',\n', '')
+          validator = validator.replace('    \'sidebar.replaceChildren(createBrand(), chatSection, lower)\',\n', '    \'sidebar.replaceChildren(createBrand(), chatSection)\',\n')
+          validator = validator.replace('    \'.shared-sidebar-lower\',\n', '')
+          anchor = '''if 'event.target.closest("[data-page]")' in main:
+              raise SystemExit("Competing delegated Control Center router remains")
+
+'''
+          checks = '''if 'class="server-card"' in main or 'class="sidebar-state"' in main:
+              raise SystemExit("Main sidebar still renders the removed HomeServer footer section")
+          if 'id="hs-chat-provider-summary"' in chat or 'class="hs-chat-sidebar-footer"' in chat:
+              raise SystemExit("Agent sidebar still renders a footer section")
+          for forbidden in ['function createSidebarState()', 'shared-sidebar-lower', 'hs-chat-provider-summary']:
+              if forbidden in shared:
+                  raise SystemExit(f"Shared Agent sidebar still composes removed footer UI: {forbidden}")
+          if '.shared-sidebar-lower' in shared_css or '.shared-agent-sidebar .sidebar-state' in shared_css:
+              raise SystemExit("Removed Agent sidebar footer styles remain")
+
+'''
+          if anchor not in validator:
+              raise SystemExit('Unable to locate validator footer assertion anchor')
+          validator = validator.replace(anchor, anchor + checks, 1)
+          validator = validator.replace(
+              'HomeServer renders the ordered primary sidebar only on Control Center pages and a single chat-only sidebar on Agent Chat, with no Control Center navigation or HomeServer status card.',
+              'HomeServer renders no footer/status section in either the Control Center sidebar or the chat-only Agent sidebar.',
+          )
+          validator_path.write_text(validator, encoding='utf-8')
+          PY
+
+      - name: Validate footer-free sidebars
+        shell: bash
+        run: |
+          node --check src/main.js
+          node --check src/homeserver-agent-chat.js
+          node --check src/shared-sidebar.js
+          python scripts/validate-agent-chat-route.py
+          npm ci
+          npm run build
+
+      - name: Commit production-only sidebar cleanup
+        shell: bash
+        run: |
+          git rm .github/workflows/sidebar-footer-removal.yml
+          git config user.name "David Evans"
+          git config user.email "bigriversocial74@users.noreply.github.com"
+          git add src/main.js src/homeserver-agent-chat.js src/shared-sidebar.js src/shared-sidebar.css scripts/validate-agent-chat-route.py
+          git commit -m "Remove sidebar footer sections"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
