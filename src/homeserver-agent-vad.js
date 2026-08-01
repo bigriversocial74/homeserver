@@ -15,6 +15,7 @@ const runtime = {
   starting: false,
   stopping: false,
   finalizing: false,
+  transitioning: false,
   stream: null,
   audioContext: null,
   analyser: null,
@@ -250,6 +251,7 @@ async function beginSpeech(snapshot) {
     !runtime.active
     || runtime.stopping
     || runtime.finalizing
+    || runtime.transitioning
     || runtime.segmentStartedAt
     || !runtime.session?.session_id
   ) {
@@ -261,13 +263,24 @@ async function beginSpeech(snapshot) {
   runtime.preRollBytes = 0;
   runtime.segmentStartedAt = Date.now() - PRE_ROLL_MS;
   runtime.currentSnapshot = snapshot;
-  await setSessionState("user_speaking", vadDetail(snapshot, "speech_start"));
-  notify("Voice detected. Capturing this utterance locally.", "success");
+  runtime.transitioning = true;
+  try {
+    await setSessionState("user_speaking", vadDetail(snapshot, "speech_start"));
+    notify("Voice detected. Capturing this utterance locally.", "success");
+  } catch (error) {
+    await failRuntime(
+      "vad_speech_transition_failed",
+      `Unable to enter the governed speech state: ${String(error)}`,
+    );
+  } finally {
+    runtime.transitioning = false;
+  }
 }
 
 async function finishSpeech(reason) {
   if (
     runtime.finalizing
+    || runtime.transitioning
     || !runtime.segmentStartedAt
     || !runtime.session?.session_id
     || !runtime.recorder
@@ -296,8 +309,9 @@ async function finalizeUtterance() {
     const mimeType = runtime.recorder?.mimeType || chunks[0]?.type || "audio/webm";
     const blob = new Blob(chunks, { type: mimeType });
     const minimumSpeechMs = runtime.engine?.options.minSpeechMs || VAD_DEFAULTS.minSpeechMs;
+    const detectedSpeechMs = Math.max(0, snapshot?.speechMs || durationMs - PRE_ROLL_MS);
 
-    if (durationMs < minimumSpeechMs || blob.size < MIN_SEGMENT_BYTES) {
+    if (detectedSpeechMs < minimumSpeechMs || blob.size < MIN_SEGMENT_BYTES) {
       await setSessionState(
         "failed",
         vadDetail(snapshot, "short_burst_rejected"),
@@ -353,6 +367,7 @@ function sampleVad() {
     !runtime.active
     || runtime.stopping
     || runtime.finalizing
+    || runtime.transitioning
     || !runtime.analyser
     || !runtime.samples
     || !runtime.engine
@@ -511,6 +526,7 @@ async function cleanupRuntime() {
   runtime.starting = false;
   runtime.stopping = false;
   runtime.finalizing = false;
+  runtime.transitioning = false;
   runtime.session = null;
   runtime.recorder = null;
   runtime.discardRecorder = false;

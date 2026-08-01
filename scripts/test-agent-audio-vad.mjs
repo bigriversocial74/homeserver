@@ -39,6 +39,19 @@ assert.ok(Math.abs(rmsToDb(0.1) + 20) < 0.001);
   const engine = new AdaptiveVadEngine();
   feed(engine, 0, 1_200, -60);
   const events = [];
+  feed(engine, 1_230, 1_380, -24, events);
+  feed(engine, 1_410, 2_400, -65, events);
+  assert.equal(
+    events.some((event) => event.event === "speech_start"),
+    false,
+    "speech shorter than the minimum sustained boundary must be rejected",
+  );
+}
+
+{
+  const engine = new AdaptiveVadEngine();
+  feed(engine, 0, 1_200, -60);
+  const events = [];
   feed(engine, 1_230, 1_650, -24, events);
   feed(engine, 1_680, 2_700, -65, events);
   assert.equal(events.filter((event) => event.event === "speech_start").length, 1);

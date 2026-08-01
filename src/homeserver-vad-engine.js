@@ -165,7 +165,11 @@ export class AdaptiveVadEngine {
         return this.snapshot(now);
       }
       if (this.candidateSpeechAtMs === null) this.candidateSpeechAtMs = now;
-      if (now - this.candidateSpeechAtMs >= this.options.attackMs) {
+      const requiredSpeechMs = Math.max(
+        this.options.attackMs,
+        this.options.minSpeechMs,
+      );
+      if (now - this.candidateSpeechAtMs >= requiredSpeechMs) {
         this.speaking = true;
         this.speechStartedAtMs = this.candidateSpeechAtMs;
         this.candidateSpeechAtMs = null;

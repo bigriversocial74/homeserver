@@ -30,6 +30,7 @@ for token, label in (
     ("speech_start", "speech-start event"),
     ("speech_end", "speech-end event"),
     ("segment_limit", "maximum-segment event"),
+    ("Math.max(", "minimum sustained-speech activation"),
     ("timestamps must be monotonic", "monotonic frame validation"),
 ):
     require(ENGINE, token, label)
@@ -50,6 +51,8 @@ for token, label in (
     ("noiseSuppression: false", "unmodified local VAD input"),
     ("autoGainControl: false", "stable local VAD input"),
     ("capturePanelActions", "live-conversation takeover"),
+    ("runtime.transitioning", "serialized state transitions"),
+    ("detectedSpeechMs", "detected-speech short-burst rejection"),
     ("vad_control_center_closed", "closed-window recovery"),
 ):
     require(CONTROLLER, token, label)
