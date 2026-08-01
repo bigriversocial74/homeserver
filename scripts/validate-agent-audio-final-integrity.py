@@ -13,6 +13,31 @@ AUDIO = (ROOT / "src/homeserver-agent-audio.js").read_text(encoding="utf-8")
 PACKAGE = (ROOT / "package.json").read_text(encoding="utf-8")
 
 
+def supporting_schema(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        PRAGMA foreign_keys = ON;
+        CREATE TABLE schema_migrations(migration_key TEXT PRIMARY KEY);
+        CREATE TABLE agent_threads(
+            thread_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            state TEXT NOT NULL,
+            created_at_utc TEXT NOT NULL,
+            updated_at_utc TEXT NOT NULL
+        );
+        CREATE TABLE agent_messages(
+            message_id TEXT PRIMARY KEY,
+            thread_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            content TEXT NOT NULL,
+            context_json TEXT NOT NULL,
+            created_at_utc TEXT NOT NULL
+        );
+        """
+    )
+
+
 def require(text: str, token: str, label: str) -> None:
     if token not in text:
         raise SystemExit(f"Missing {label}: {token}")
@@ -31,6 +56,10 @@ for token, label in (
     ("m.created_at_utc >= NEW.created_at_utc", "post-capture message boundary"),
     ("trg_audio_sessions_phase23_thread_insert", "thread insert verification"),
     ("trg_audio_sessions_phase23_thread_update", "thread update verification"),
+    ("trg_audio_sessions_phase23_thread_binding", "one-way thread binding"),
+    ("SET thread_id = NULL", "invalid legacy thread reconciliation"),
+    ("SET state = 'final'", "invalid legacy link reconciliation"),
+    ("JOIN agent_threads t ON t.thread_id = m.thread_id", "linked-message thread existence"),
     ("0032_agent_audio_final_integrity", "migration registration"),
 ):
     require(FINAL, token, label)
@@ -55,29 +84,55 @@ for temporary_path in (
             f"Temporary Phase 23 certification file remains: {temporary_path.relative_to(ROOT)}"
         )
 
-connection = sqlite3.connect(":memory:")
-connection.executescript(
+upgrade = sqlite3.connect(":memory:")
+supporting_schema(upgrade)
+upgrade.executescript(BASE)
+upgrade.execute(
     """
-    PRAGMA foreign_keys = ON;
-    CREATE TABLE schema_migrations(migration_key TEXT PRIMARY KEY);
-    CREATE TABLE agent_threads(
-        thread_id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        state TEXT NOT NULL,
-        created_at_utc TEXT NOT NULL,
-        updated_at_utc TEXT NOT NULL
-    );
-    CREATE TABLE agent_messages(
-        message_id TEXT PRIMARY KEY,
-        thread_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        mode TEXT NOT NULL,
-        content TEXT NOT NULL,
-        context_json TEXT NOT NULL,
-        created_at_utc TEXT NOT NULL
-    );
+    INSERT INTO audio_sessions(
+        session_id,thread_id,mode,state,retention_mode,input_device_id,
+        input_device_label,raw_audio_retained,failure_code,started_at_utc,
+        updated_at_utc,ended_at_utc
+    ) VALUES(
+        'aud_legacy','missing_legacy_thread','push_to_talk','stopped','transcript',
+        NULL,NULL,0,NULL,'2026-08-01T00:00:00.000Z',
+        '2026-08-01T00:00:03.000Z','2026-08-01T00:00:03.000Z'
+    )
     """
 )
+upgrade.execute(
+    """
+    INSERT INTO audio_segments(
+        segment_id,session_id,sequence_no,state,mime_type,duration_ms,
+        byte_length,content_sha256,transcript,linked_message_id,
+        created_at_utc,updated_at_utc,finalized_at_utc
+    ) VALUES(
+        'audseg_legacy','aud_legacy',1,'committed','audio/webm',1000,100,
+        'abababababababababababababababababababababababababababababababab',
+        'legacy transcript','missing_legacy_message',
+        '2026-08-01T00:00:01.000Z','2026-08-01T00:00:03.000Z',
+        '2026-08-01T00:00:03.000Z'
+    )
+    """
+)
+upgrade.executescript(HARDENING)
+upgrade.executescript(FINAL)
+legacy_thread, legacy_state, legacy_link = upgrade.execute(
+    """
+    SELECT s.thread_id,g.state,g.linked_message_id
+    FROM audio_sessions s
+    JOIN audio_segments g ON g.session_id=s.session_id
+    WHERE s.session_id='aud_legacy'
+    """
+).fetchone()
+if legacy_thread is not None:
+    raise SystemExit("Final Phase 23 migration did not clear an invalid legacy thread")
+if legacy_state != "final" or legacy_link is not None:
+    raise SystemExit("Final Phase 23 migration did not clear an invalid legacy message link")
+upgrade.close()
+
+connection = sqlite3.connect(":memory:")
+supporting_schema(connection)
 connection.executescript(BASE)
 connection.executescript(HARDENING)
 connection.executescript(FINAL)
@@ -150,4 +205,8 @@ reject(
     "one Agent message linked to two segments",
 )
 connection.close()
-print("Phase 23A final integrity validates exact message identity, post-capture linkage, unique evidence binding, retry-safe finalization, recorder failure handling, and permanent exact-head certification hygiene.")
+print(
+    "Phase 23A final integrity validates upgrade reconciliation, exact message identity, "
+    "post-capture linkage, unique evidence binding, retry-safe finalization, recorder failure handling, "
+    "and permanent exact-head certification hygiene."
+)
