@@ -84,6 +84,7 @@ export class AdaptiveVadEngine {
     this.silenceAtMs = null;
     this.speechStartedAtMs = null;
     this.speaking = false;
+    this.segmentLimitEmitted = false;
     this.lastDb = -120;
     this.frameCount = 0;
     return this.snapshot(now);
@@ -96,6 +97,7 @@ export class AdaptiveVadEngine {
     this.silenceAtMs = null;
     this.speechStartedAtMs = null;
     this.speaking = false;
+    this.segmentLimitEmitted = false;
     return this.snapshot(now);
   }
 
@@ -171,6 +173,7 @@ export class AdaptiveVadEngine {
       );
       if (now - this.candidateSpeechAtMs >= requiredSpeechMs) {
         this.speaking = true;
+        this.segmentLimitEmitted = false;
         this.speechStartedAtMs = this.candidateSpeechAtMs;
         this.candidateSpeechAtMs = null;
         return this.snapshot(now, "speech_start");
@@ -181,7 +184,11 @@ export class AdaptiveVadEngine {
     const speechMs = Math.max(0, now - this.speechStartedAtMs);
     if (speechMs >= this.options.maxSegmentMs) {
       this.silenceAtMs = null;
-      return this.snapshot(now, "segment_limit");
+      if (!this.segmentLimitEmitted) {
+        this.segmentLimitEmitted = true;
+        return this.snapshot(now, "segment_limit");
+      }
+      return this.snapshot(now);
     }
 
     if (levelDb >= stopThresholdDb) {
@@ -193,7 +200,13 @@ export class AdaptiveVadEngine {
       speechMs >= this.options.minSpeechMs
       && now - this.silenceAtMs >= this.options.silenceHangoverMs
     ) {
-      return this.snapshot(now, "speech_end");
+      const boundary = this.snapshot(now, "speech_end");
+      this.speaking = false;
+      this.candidateSpeechAtMs = null;
+      this.silenceAtMs = null;
+      this.speechStartedAtMs = null;
+      this.segmentLimitEmitted = false;
+      return boundary;
     }
     return this.snapshot(now);
   }
