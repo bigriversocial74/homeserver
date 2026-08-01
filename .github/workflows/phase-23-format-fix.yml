@@ -1,0 +1,52 @@
+name: Phase 23 Focused Rust Fix
+
+on:
+  push:
+    branches:
+      - feature/phase-23-agent-chat-ears-conversation-engine
+    paths:
+      - .github/workflows/phase-23-format-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  format-check-and-clean:
+    runs-on: windows-latest
+    steps:
+      - name: Check out Phase 23 branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-23-agent-chat-ears-conversation-engine
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt, clippy
+
+      - name: Normalize Phase 23 source
+        shell: pwsh
+        run: |
+          $path = 'crates/homeserver-service/src/audio_runtime.rs'
+          $source = Get-Content -Raw $path
+          $source = $source.Replace('use anyhow::{bail, ensure, Context, Result};', 'use anyhow::{ensure, Context, Result};')
+          $source = $source.Replace('i64::from(terminal)', 'if terminal { 1_i64 } else { 0_i64 }')
+          [IO.File]::WriteAllText((Resolve-Path $path), $source, [Text.UTF8Encoding]::new($false))
+          cargo fmt --all
+
+      - name: Check HomeServer service
+        run: cargo check -p microgifter-homeserver-service
+
+      - name: Strict HomeServer service lint
+        run: cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings
+
+      - name: Remove temporary workflow and commit
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/phase-23-format-fix.yml
+          git add crates/homeserver-service/src/audio_runtime.rs crates/homeserver-service/src/app.rs src-tauri/src/agent.rs
+          git commit -m "Format and verify Phase 23 audio runtime"
+          git push origin HEAD:feature/phase-23-agent-chat-ears-conversation-engine
