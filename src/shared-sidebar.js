@@ -41,13 +41,6 @@ function createBrand() {
   return brand;
 }
 
-function createSidebarState() {
-  const state = document.createElement("div");
-  state.className = "sidebar-state";
-  state.innerHTML = '<span class="state-orb healthy"></span><span>agent online</span>';
-  return state;
-}
-
 function threadTitle(button) {
   return button.querySelector("strong")?.textContent?.trim() || "HomeServer chat";
 }
@@ -108,9 +101,17 @@ function addThreadActions(history) {
   });
 }
 
-function removeUnexpectedControlCenterUi() {
+function removeSidebarFooters() {
   document.querySelectorAll(
-    ".agent-chat-shell > .app-sidebar:not(.hs-chat-sidebar), .agent-chat-shell .primary-nav, .agent-chat-shell .server-card",
+    ".app-sidebar > .server-card, .app-sidebar > .sidebar-state, .hs-chat-sidebar > .hs-chat-provider-summary, .hs-chat-sidebar > .hs-chat-sidebar-footer, .shared-agent-sidebar > .shared-sidebar-lower",
+  ).forEach((element) => element.remove());
+}
+
+function removeUnexpectedControlCenterUi() {
+  removeSidebarFooters();
+  if (!isAgentPage()) return;
+  document.querySelectorAll(
+    ".agent-chat-shell > .app-sidebar:not(.hs-chat-sidebar), .agent-chat-shell .primary-nav",
   ).forEach((element) => element.remove());
 }
 
@@ -125,7 +126,6 @@ function decorateAgentSidebar() {
   const search = sidebar.querySelector("#hs-chat-history-search")?.closest("label");
   const historyLabel = sidebar.querySelector(".hs-chat-history-label");
   const history = sidebar.querySelector(".hs-chat-history");
-  const provider = sidebar.querySelector("#hs-chat-provider-summary");
   if (!newChat || !search || !historyLabel || !history) return;
 
   decorating = true;
@@ -139,12 +139,7 @@ function decorateAgentSidebar() {
     chatSection.append(newChat, search, historyLabel, history);
     addThreadActions(history);
 
-    const lower = document.createElement("div");
-    lower.className = "shared-sidebar-lower";
-    if (provider) lower.append(provider);
-    lower.append(createSidebarState());
-
-    sidebar.replaceChildren(createBrand(), chatSection, lower);
+    sidebar.replaceChildren(createBrand(), chatSection);
   } finally {
     decorating = false;
   }
@@ -183,6 +178,7 @@ scheduleDecorate();
 
 window.__HOMESERVER_SHARED_SIDEBAR_V1__ = {
   mode: AGENT_SIDEBAR_MODE,
+  footerSections: "removed",
   refresh: scheduleDecorate,
 };
 window.__HOMESERVER_AGENT_SIDEBAR_CHAT_ONLY_V2__ = true;
