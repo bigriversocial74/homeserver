@@ -25,6 +25,8 @@ const MIGRATION_KEYS: &[&str] = &[
     "0032_agent_audio_final_integrity",
 ];
 const LOCAL_ACTOR_ID: &str = "local_control_center";
+const LOCAL_WHISPER_ENGINE: &str = "whisper.cpp/whisper-rs-0.16.0";
+const LOCAL_WHISPER_ID_PREFIX: &str = "whisper_";
 const MAX_BODY_BYTES: usize = 256 * 1024;
 const MAX_TRANSCRIPT_CHARS: usize = 20_000;
 const MAX_DEVICE_VALUE_CHARS: usize = 500;
@@ -720,6 +722,22 @@ fn save_transcript(
             "complete final local transcription metadata is required"
         );
         ensure!(
+            transcription_id
+                .as_deref()
+                .is_some_and(valid_local_whisper_transcription_id),
+            "local transcription ID is invalid"
+        );
+        ensure!(
+            transcription_engine.as_deref() == Some(LOCAL_WHISPER_ENGINE),
+            "local transcription engine is unsupported"
+        );
+        ensure!(
+            transcription_language
+                .as_deref()
+                .is_some_and(valid_local_whisper_language),
+            "local transcription language is invalid"
+        );
+        ensure!(
             !request.raw_audio_retained,
             "local transcription cannot retain raw audio"
         );
@@ -1068,6 +1086,22 @@ fn normalized_mime_type(value: &str) -> Result<String> {
     Ok(value)
 }
 
+fn valid_local_whisper_transcription_id(value: &str) -> bool {
+    value.len() == LOCAL_WHISPER_ID_PREFIX.len() + 32
+        && value.starts_with(LOCAL_WHISPER_ID_PREFIX)
+        && value[LOCAL_WHISPER_ID_PREFIX.len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_local_whisper_language(value: &str) -> bool {
+    value == "auto"
+        || ((2..=8).contains(&value.len())
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'-'))
+}
+
 fn normalized_sha256(value: &str) -> Result<String> {
     let value = value.trim().to_ascii_lowercase();
     ensure!(
@@ -1392,6 +1426,22 @@ mod tests {
         assert!(duplicate_error
             .to_string()
             .contains("UNIQUE constraint failed"));
+    }
+
+    #[test]
+    fn local_whisper_receipt_boundaries_are_closed() {
+        assert!(valid_local_whisper_transcription_id(
+            "whisper_0123456789abcdef0123456789abcdef"
+        ));
+        assert!(!valid_local_whisper_transcription_id("whisper_short"));
+        assert!(!valid_local_whisper_transcription_id(
+            "other_0123456789abcdef0123456789abcdef"
+        ));
+        assert!(valid_local_whisper_language("en"));
+        assert!(valid_local_whisper_language("auto"));
+        assert!(valid_local_whisper_language("pt-br"));
+        assert!(!valid_local_whisper_language("EN"));
+        assert!(!valid_local_whisper_language("en<script>"));
     }
 
     #[test]

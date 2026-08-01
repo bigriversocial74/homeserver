@@ -83,6 +83,10 @@ for token, label in (
     ("transcription_model_sha256", "model evidence persistence"),
     ("escapeHtml(state.notice.message)", "escaped transcription notices"),
     ("Final local transcript is ready", "editable final transcript UX"),
+    ("LOCAL_WHISPER_ENGINE", "pinned browser receipt engine"),
+    ("validateFinalReceipt", "strict native receipt validation"),
+    ("state.busy = true;", "pre-await controller reservation"),
+    ("receipt?.raw_audio_retained !== false", "raw-audio receipt validation"),
     ("WhisperSegmentQueue", "bounded utterance queue integration"),
     ("queueSegment(detail)", "non-dropping active transcription handoff"),
     ("drainQueuedSegment()", "FIFO queue drain"),
@@ -105,6 +109,10 @@ for token, label in (
     ("transcription_engine", "governed engine identity"),
     ("transcription_model_sha256", "governed model identity"),
     ("local_whisper_transcription_completed", "durable transcription receipt event"),
+    ("LOCAL_WHISPER_ENGINE", "pinned service receipt engine"),
+    ("valid_local_whisper_transcription_id", "service transcription ID boundary"),
+    ("valid_local_whisper_language", "service language boundary"),
+    ("local_whisper_receipt_boundaries_are_closed", "service receipt tests"),
 ):
     require(SERVICE, token, label)
 
@@ -205,6 +213,8 @@ for temporary_path in (
     ROOT / ".github/workflows/phase23c-operation-hardening.yml",
     ROOT / "scripts/apply-phase23c-queue-hardening.py",
     ROOT / ".github/workflows/phase23c-queue-hardening.yml",
+    ROOT / "scripts/apply-phase23c-final-contract-hardening.py",
+    ROOT / ".github/workflows/phase23c-final-contract-hardening.yml",
 ):
     if temporary_path.exists():
         raise SystemExit(

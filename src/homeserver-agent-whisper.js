@@ -4,6 +4,8 @@ import { audioBlobToWhisperPcm } from "./homeserver-whisper-codec.js";
 import { WhisperSegmentQueue } from "./homeserver-whisper-queue.js";
 import "./homeserver-agent-whisper.css";
 
+const LOCAL_WHISPER_ENGINE = "whisper.cpp/whisper-rs-0.16.0";
+
 const state = {
   status: null,
   busy: false,
@@ -31,6 +33,31 @@ function escapeHtml(value) {
 
 function validSha256(value) {
   return /^[a-f0-9]{64}$/i.test(String(value || "").trim());
+}
+
+function validateFinalReceipt(receipt, segmentId, status, language) {
+  const transcript = String(receipt?.transcript || "").trim();
+  if (
+    receipt?.segment_id !== segmentId
+    || !/^whisper_[a-f0-9]{32}$/.test(String(receipt?.transcription_id || ""))
+    || receipt?.engine !== LOCAL_WHISPER_ENGINE
+    || !validSha256(receipt?.model_sha256)
+    || receipt.model_sha256 !== status?.model_sha256
+    || receipt?.language !== language
+    || receipt?.sample_rate_hz !== 16_000
+    || !Number.isSafeInteger(receipt?.sample_count)
+    || receipt.sample_count < 1_600
+    || receipt.sample_count > 16_000 * 32
+    || !Number.isSafeInteger(receipt?.duration_ms)
+    || receipt.duration_ms < 100
+    || receipt.duration_ms > 32_000
+    || receipt?.raw_audio_retained !== false
+    || !transcript
+    || transcript.length > 20_000
+  ) {
+    throw new Error("Local Whisper returned an invalid final transcript receipt.");
+  }
+  return transcript;
 }
 
 function notify(message, kind = "info") {
@@ -157,13 +184,17 @@ async function transcribeLocalSegment(detail) {
     queueSegment(detail);
     return;
   }
+  state.busy = true;
+  scheduleRender();
   const status = await refreshStatus();
   if (!status?.model_ready) {
+    state.queue.clear();
+    state.busy = false;
     notify("The utterance is ready, but a verified local Whisper model has not been imported.", "warning");
+    scheduleRender();
     return;
   }
 
-  state.busy = true;
   state.active = {
     segmentId: detail.segment_id,
     transcriptionId: null,
@@ -185,11 +216,14 @@ async function transcribeLocalSegment(detail) {
         language: state.language,
       },
     });
-    if (receipt.segment_id !== detail.segment_id || !receipt.transcript?.trim()) {
-      throw new Error("Local Whisper returned an invalid final transcript receipt.");
-    }
-    await updateGovernedTranscript(detail.segment_id, receipt.transcript.trim(), receipt);
-    updateTranscriptElement(detail.segment_id, receipt.transcript.trim(), true);
+    const transcript = validateFinalReceipt(
+      receipt,
+      detail.segment_id,
+      status,
+      state.language,
+    );
+    await updateGovernedTranscript(detail.segment_id, transcript, receipt);
+    updateTranscriptElement(detail.segment_id, transcript, true);
     notify("Final local transcript is ready and remains editable before sending to the Agent.", "success");
     await window.__HOMESERVER_AGENT_AUDIO_V1__?.refresh?.().catch(() => null);
   } catch (error) {
