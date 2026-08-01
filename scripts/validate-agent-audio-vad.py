@@ -7,6 +7,9 @@ ENGINE = (ROOT / "src/homeserver-vad-engine.js").read_text(encoding="utf-8")
 CONTROLLER = (ROOT / "src/homeserver-agent-vad.js").read_text(encoding="utf-8")
 INDEX = (ROOT / "index.html").read_text(encoding="utf-8")
 PACKAGE = (ROOT / "package.json").read_text(encoding="utf-8")
+WORKFLOW = (ROOT / ".github/workflows/phase23b-local-vad.yml").read_text(
+    encoding="utf-8"
+)
 
 
 def require(text: str, token: str, label: str) -> None:
@@ -63,10 +66,7 @@ for token, label in (
 ):
     require(CONTROLLER, token, label)
 
-for token, label in (
-    ("homeserver-agent-vad.js", "Phase 23B browser module"),
-):
-    require(INDEX, token, label)
+require(INDEX, "homeserver-agent-vad.js", "Phase 23B browser module")
 
 for token, label in (
     ("node --check src/homeserver-vad-engine.js", "VAD engine syntax gate"),
@@ -75,6 +75,16 @@ for token, label in (
     ("validate-agent-audio-vad.py", "permanent Phase 23B validator gate"),
 ):
     require(PACKAGE, token, label)
+
+for token, label in (
+    ("ubuntu-24.04", "Linux certification job"),
+    ("windows-2025", "Windows certification job"),
+    ("npm run check:frontend", "retained frontend validation"),
+    ("npm run build", "production frontend build"),
+    ("cargo test -p homeserver-service", "native service tests"),
+    ("cargo clippy -p homeserver-service --all-targets -- -D warnings", "strict native lint"),
+):
+    require(WORKFLOW, token, label)
 
 for forbidden, label in (
     ("SpeechRecognition", "browser/cloud speech recognition"),
@@ -91,9 +101,22 @@ for forbidden, label in (
 ):
     forbid(CONTROLLER, forbidden, label)
 
+for temporary_path in (
+    ROOT / "scripts/apply-phase23b-audit-hardening.py",
+    ROOT / ".github/workflows/phase23b-audit-hardening.yml",
+    ROOT / "scripts/apply-phase23b-final-audit.py",
+    ROOT / ".github/workflows/phase23b-final-audit.yml",
+):
+    if temporary_path.exists():
+        raise SystemExit(
+            "Temporary Phase 23B audit asset remains: "
+            f"{temporary_path.relative_to(ROOT)}"
+        )
+
 print(
     "Phase 23B local VAD validates adaptive calibration, sustained hysteresis, "
     "edge-triggered speech boundaries, pre-roll, short-burst rejection, bounded "
-    "utterance segmentation, governed evidence, ephemeral raw audio, and zero "
+    "utterance segmentation, governed evidence, exact duration metadata, escaped "
+    "UI notices, ephemeral raw audio, cross-platform certification, and zero "
     "browser/cloud speech or network egress."
 )
