@@ -7,6 +7,15 @@ on:
     paths:
       - scripts/apply-phase23-agent-audio.py
       - .github/workflows/phase-23-bootstrap.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - scripts/apply-phase23-agent-audio.py
+      - .github/workflows/phase-23-bootstrap.yml
+      - crates/homeserver-service/src/audio_runtime.rs
+      - database/migrations/0030_agent_audio_conversation.sql
+      - src-tauri/src/audio.rs
 
 permissions:
   contents: write
@@ -18,6 +27,7 @@ jobs:
       - name: Check out Phase 23 branch
         uses: actions/checkout@v4
         with:
+          ref: feature/phase-23-agent-chat-ears-conversation-engine
           fetch-depth: 0
 
       - name: Install Rust toolchain
