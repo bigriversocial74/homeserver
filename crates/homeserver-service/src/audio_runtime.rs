@@ -1,5 +1,5 @@
 use crate::AppState;
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use axum::{
     extract::{DefaultBodyLimit, State},
     http::StatusCode,
@@ -308,14 +308,26 @@ fn read_status(state: &AppState) -> Result<AudioStatusSnapshot> {
     })
 }
 
-fn save_session(state: &AppState, request: StartAudioSessionRequest) -> Result<AudioSessionSummary> {
-    ensure!(SESSION_MODES.contains(&request.mode.as_str()), "unsupported audio mode");
+fn save_session(
+    state: &AppState,
+    request: StartAudioSessionRequest,
+) -> Result<AudioSessionSummary> {
+    ensure!(
+        SESSION_MODES.contains(&request.mode.as_str()),
+        "unsupported audio mode"
+    );
     ensure!(
         RETENTION_MODES.contains(&request.retention_mode.as_str()),
         "Phase 23A supports ephemeral audio or transcript retention; encrypted raw-audio retention is not enabled yet"
     );
-    ensure!(request.microphone_authorized, "microphone authorization is required");
-    ensure!(request.recording_authorized, "recording authorization is required");
+    ensure!(
+        request.microphone_authorized,
+        "microphone authorization is required"
+    );
+    ensure!(
+        request.recording_authorized,
+        "recording authorization is required"
+    );
     validate_optional_value(request.thread_id.as_deref(), 160, "thread ID")?;
     validate_optional_value(
         request.input_device_id.as_deref(),
@@ -378,11 +390,17 @@ fn update_session_state(
         SESSION_STATES.contains(&request.state.as_str()),
         "unsupported audio session state"
     );
-    ensure!(request.session_id.len() <= 160, "audio session ID is too long");
+    ensure!(
+        request.session_id.len() <= 160,
+        "audio session ID is too long"
+    );
     validate_optional_value(request.failure_code.as_deref(), 160, "failure code")?;
     if request.state == "failed" {
         ensure!(
-            request.failure_code.as_deref().is_some_and(|value| !value.trim().is_empty()),
+            request
+                .failure_code
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty()),
             "failed audio sessions require a failure code"
         );
     }
@@ -409,7 +427,7 @@ fn update_session_state(
             request.state,
             request.failure_code,
             now,
-            i64::from(terminal),
+            if terminal { 1_i64 } else { 0_i64 },
         ],
     )?;
     insert_event(
@@ -427,19 +445,29 @@ fn save_segment(
     state: &AppState,
     request: FinalizeAudioSegmentRequest,
 ) -> Result<AudioSegmentSummary> {
-    ensure!(request.session_id.len() <= 160, "audio session ID is too long");
     ensure!(
-        !request.mime_type.trim().is_empty() && request.mime_type.chars().count() <= MAX_MIME_CHARS,
+        request.session_id.len() <= 160,
+        "audio session ID is too long"
+    );
+    ensure!(
+        !request.mime_type.trim().is_empty()
+            && request.mime_type.chars().count() <= MAX_MIME_CHARS,
         "recording MIME type is invalid"
     );
-    ensure!(request.duration_ms >= 0, "recording duration cannot be negative");
+    ensure!(
+        request.duration_ms >= 0,
+        "recording duration cannot be negative"
+    );
     ensure!(
         (0..=MAX_RECORDING_BYTES).contains(&request.byte_length),
         "recording byte length is invalid"
     );
     ensure!(
         request.content_sha256.len() == 64
-            && request.content_sha256.chars().all(|character| character.is_ascii_hexdigit()),
+            && request
+                .content_sha256
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
         "recording SHA-256 is invalid"
     );
     validate_transcript(request.transcript.as_deref())?;
@@ -456,7 +484,10 @@ fn save_segment(
         )
         .optional()?
         .context("audio session was not found")?;
-    ensure!(session_state != "failed", "failed audio sessions cannot accept recordings");
+    ensure!(
+        session_state != "failed",
+        "failed audio sessions cannot accept recordings"
+    );
     let sequence_no: i64 = transaction.query_row(
         "SELECT COALESCE(MAX(sequence_no),0)+1 FROM audio_segments WHERE session_id=?1",
         params![request.session_id],
@@ -510,7 +541,11 @@ fn save_transcript(
     let transcript = request.transcript.trim();
     ensure!(!transcript.is_empty(), "transcript cannot be empty");
     validate_transcript(Some(transcript))?;
-    validate_optional_value(request.linked_message_id.as_deref(), 160, "linked message ID")?;
+    validate_optional_value(
+        request.linked_message_id.as_deref(),
+        160,
+        "linked message ID",
+    )?;
     let now = now_utc();
     let mut connection = state.connection()?;
     let transaction = connection.transaction()?;
@@ -565,7 +600,8 @@ fn query_sessions(connection: &Connection, limit: i64) -> Result<Vec<AudioSessio
     );
     let mut statement = connection.prepare(&sql)?;
     let rows = statement.query_map(params![limit], map_session)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 fn query_segments(connection: &Connection, limit: i64) -> Result<Vec<AudioSegmentSummary>> {
@@ -574,7 +610,8 @@ fn query_segments(connection: &Connection, limit: i64) -> Result<Vec<AudioSegmen
     );
     let mut statement = connection.prepare(&sql)?;
     let rows = statement.query_map(params![limit], map_segment)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 fn query_events(connection: &Connection, limit: i64) -> Result<Vec<ConversationEventSummary>> {
@@ -583,7 +620,8 @@ fn query_events(connection: &Connection, limit: i64) -> Result<Vec<ConversationE
     );
     let mut statement = connection.prepare(&sql)?;
     let rows = statement.query_map(params![limit], map_event)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 fn read_session(connection: &Connection, session_id: &str) -> Result<AudioSessionSummary> {
@@ -702,7 +740,10 @@ fn task_error(error: tokio::task::JoinError) -> (StatusCode, Json<ApiError>) {
     internal_error("audio_task_failed", error)
 }
 
-fn internal_error(code: &'static str, error: impl std::fmt::Display) -> (StatusCode, Json<ApiError>) {
+fn internal_error(
+    code: &'static str,
+    error: impl std::fmt::Display,
+) -> (StatusCode, Json<ApiError>) {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(ApiError {
