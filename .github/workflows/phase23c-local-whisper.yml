@@ -74,6 +74,7 @@ jobs:
             scripts/apply-phase23c-progress-type-repair.py \
             .github/workflows/phase23c-progress-type-repair.yml \
             .github/workflows/phase23c-callback-option-repair.yml \
+            .github/workflows/phase23c-clippy-then-some-repair.yml \
             .github/workflows/phase23c-whisper-errors.yml \
             phase23c-whisper-errors.txt \
             phase23c-whisper-exit.txt
@@ -84,7 +85,7 @@ jobs:
             fi
           done
 
-      - name: Verify permanent callback and icon contracts
+      - name: Verify permanent callback, transaction, and icon contracts
         shell: bash
         run: |
           grep -F 'set_segment_callback_safe_lossy(move |data: SegmentCallbackData|' src-tauri/src/whisper.rs
@@ -93,6 +94,14 @@ jobs:
           if grep -F 'callback_safe_lossy(Some(' src-tauri/src/whisper.rs; then exit 1; fi
           if grep -F 'progress_callback_safe(Some(' src-tauri/src/whisper.rs; then exit 1; fi
           if grep -F 'abort_callback_safe(Some(' src-tauri/src/whisper.rs; then exit 1; fi
+          grep -F 'let model_backup = match install_temporary_file(&temporary, &destination).await {' src-tauri/src/whisper.rs
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path('src-tauri/src/whisper.rs').read_text(encoding='utf-8')
+          if re.search(r'\.then\(\s*\|\|\s*unique_sibling\(\s*&model_destination', text):
+              raise SystemExit('Stale lazy model-backup implementation remains')
+          PY
           grep -F 'const pngTarget' scripts/prepare-icons.mjs
           grep -F 'ICO does not contain an embedded PNG icon' scripts/prepare-icons.mjs
 
