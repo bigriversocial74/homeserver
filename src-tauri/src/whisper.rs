@@ -36,6 +36,7 @@ const COPY_BUFFER_BYTES: usize = 1024 * 1024;
 #[derive(Default)]
 pub(crate) struct WhisperRuntimeState {
     active: AsyncMutex<Option<ActiveTranscription>>,
+    model_operation: Arc<AsyncMutex<()>>,
 }
 
 struct ActiveTranscription {
@@ -415,9 +416,6 @@ pub(crate) async fn homeserver_import_whisper_model(
     expected_sha256: String,
     confirmation: String,
 ) -> Result<Option<WhisperStatus>, String> {
-    if active_id(&state).await.is_some() {
-        return Err("A local transcription is active; the model cannot be replaced.".to_owned());
-    }
     let expected_sha256 = validate_sha256(&expected_sha256)?;
     if confirmation != format!("IMPORT WHISPER MODEL {expected_sha256}") {
         return Err("Exact local Whisper model import confirmation is required.".to_owned());
@@ -430,6 +428,10 @@ pub(crate) async fn homeserver_import_whisper_model(
         return Ok(None);
     };
     let source_path = source.path().to_path_buf();
+    let _model_operation = state.model_operation.clone().lock_owned().await;
+    if active_id(&state).await.is_some() {
+        return Err("A local transcription is active; the model cannot be replaced.".to_owned());
+    }
     let metadata = fs::metadata(&source_path)
         .await
         .map_err(|error| error.to_string())?;
@@ -490,8 +492,8 @@ pub(crate) async fn homeserver_import_whisper_model(
         let _ = fs::remove_file(&temporary).await;
         return Err("Whisper model SHA-256 did not match; the copied file was removed.".to_owned());
     }
-    let model_backup = match install_temporary_file(&temporary, &destination).await {
-        Ok(backup) => backup,
+    let previous = match read_manifest(&app).await {
+        Ok(previous) => previous,
         Err(error) => {
             let _ = fs::remove_file(&temporary).await;
             return Err(error);
@@ -501,12 +503,21 @@ pub(crate) async fn homeserver_import_whisper_model(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o600))
-            .await
-            .map_err(|error| error.to_string())?;
+        if let Err(error) =
+            fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o600)).await
+        {
+            let _ = fs::remove_file(&temporary).await;
+            return Err(error.to_string());
+        }
     }
 
-    let previous = read_manifest(&app).await?;
+    let model_backup = match install_temporary_file(&temporary, &destination).await {
+        Ok(backup) => backup,
+        Err(error) => {
+            let _ = fs::remove_file(&temporary).await;
+            return Err(error);
+        }
+    };
     let imported_at_utc = now_utc();
     let manifest = WhisperModelManifest {
         schema: MANIFEST_SCHEMA.to_owned(),
@@ -544,6 +555,7 @@ pub(crate) async fn homeserver_remove_whisper_model(
     state: State<'_, WhisperRuntimeState>,
     confirmation: String,
 ) -> Result<WhisperStatus, String> {
+    let _model_operation = state.model_operation.clone().lock_owned().await;
     if active_id(&state).await.is_some() {
         return Err("A local transcription is active; the model cannot be removed.".to_owned());
     }
@@ -599,6 +611,7 @@ pub(crate) async fn homeserver_whisper_transcribe(
             cancel: cancel.clone(),
         });
     }
+    let _model_operation = state.model_operation.clone().lock_owned().await;
 
     let result = async {
         let (model_path, manifest) = verified_model(&app).await?;
@@ -824,6 +837,15 @@ mod tests {
         assert_eq!(validate_language(Some("AUTO".to_owned())).unwrap(), "auto");
         assert_eq!(validate_language(None).unwrap(), "en");
         assert!(validate_language(Some("en<script>".to_owned())).is_err());
+    }
+
+    #[tokio::test]
+    async fn model_operation_lock_serializes_mutation_and_inference() {
+        let runtime = WhisperRuntimeState::default();
+        let first = runtime.model_operation.clone().lock_owned().await;
+        assert!(runtime.model_operation.clone().try_lock_owned().is_err());
+        drop(first);
+        assert!(runtime.model_operation.clone().try_lock_owned().is_ok());
     }
 
     #[tokio::test]

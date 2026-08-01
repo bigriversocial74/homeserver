@@ -55,6 +55,11 @@ for token, label in (
     ("model_backup.as_deref()", "model replacement receipt"),
     ("partial_transcript: transcript.clone()", "non-consuming final transcript event"),
     ("atomic_replacement_commits_and_rolls_back", "native rollback test"),
+    ("model_operation: Arc<AsyncMutex<()>>", "shared model operation gate"),
+    ("state.model_operation.clone().lock_owned().await", "serialized model operations"),
+    ("fs::set_permissions(&temporary", "pre-install model permissions"),
+    ("let previous = match read_manifest(&app).await", "pre-install manifest validation"),
+    ("model_operation_lock_serializes_mutation_and_inference", "native operation lock test"),
 ):
     require(NATIVE, token, label)
 
@@ -162,6 +167,7 @@ for text, token, label in (
     (NATIVE, "worker_transcript_placeholder", "placeholder transcript receipt"),
     (NATIVE, "fs::remove_file(&destination)", "delete-before-replace model update"),
     (NATIVE, "fs::remove_file(&path)", "delete-before-replace manifest update"),
+    (NATIVE, "fs::set_permissions(&destination", "post-install permission mutation"),
 ):
     forbid(text, token, label)
 
@@ -177,6 +183,10 @@ for temporary_path in (
     ROOT / ".github/workflows/phase23c-whisper-errors.yml",
     ROOT / "phase23c-whisper-errors.txt",
     ROOT / "phase23c-whisper-exit.txt",
+    ROOT / "scripts/apply-phase23c-atomic-hardening.py",
+    ROOT / ".github/workflows/phase23c-atomic-hardening.yml",
+    ROOT / "scripts/apply-phase23c-operation-hardening.py",
+    ROOT / ".github/workflows/phase23c-operation-hardening.yml",
 ):
     if temporary_path.exists():
         raise SystemExit(
