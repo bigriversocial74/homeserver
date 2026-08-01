@@ -36,19 +36,20 @@ jobs:
       - name: Normalize the rustfmt-only manifest anchor
         run: |
           python - <<'PY'
+          import re
           from pathlib import Path
           path = Path('src-tauri/src/whisper.rs')
           text = path.read_text(encoding='utf-8')
-          old = """    if fs::try_exists(&path)
-              .await
-              .map_err(|error| error.to_string())?
-          {
-          """
-          new = """    if fs::try_exists(&path).await.map_err(|error| error.to_string())? {
-          """
-          if text.count(old) != 1:
-              raise SystemExit(f'Expected one manifest formatting anchor, found {text.count(old)}')
-          path.write_text(text.replace(old, new), encoding='utf-8')
+          pattern = re.compile(
+              r"    if fs::try_exists\(&path\)\s*"
+              r"\.await\s*"
+              r"\.map_err\(\|error\| error\.to_string\(\)\)\?\s*\{"
+          )
+          replacement = "    if fs::try_exists(&path).await.map_err(|error| error.to_string())? {"
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'Expected one manifest formatting anchor, found {count}')
+          path.write_text(text, encoding='utf-8')
           PY
 
       - name: Apply permanent atomic hardening
