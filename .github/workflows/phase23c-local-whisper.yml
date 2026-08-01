@@ -35,7 +35,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
       - name: Check out exact candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -79,6 +79,41 @@ jobs:
 
       - name: Prepare generated desktop resources
         run: npm run prepare:icons
+
+      - name: Build packaged HomeServer binaries
+        run: >-
+          cargo build
+          -p microgifter-homeserver-service
+          -p microgifter-homeserver-updater
+          -p microgifter-homeserver-mcp
+
+      - name: Stage packaged resources on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p src-tauri/resources
+          install -m 0755 target/debug/microgifter-homeserver-service src-tauri/resources/microgifter-homeserver-service.exe
+          install -m 0755 target/debug/microgifter-homeserver-updater src-tauri/resources/microgifter-homeserver-updater.exe
+          install -m 0755 target/debug/microgifter-homeserver-mcp src-tauri/resources/microgifter-homeserver-mcp.exe
+          test -s src-tauri/resources/microgifter-homeserver-service.exe
+          test -s src-tauri/resources/microgifter-homeserver-updater.exe
+          test -s src-tauri/resources/microgifter-homeserver-mcp.exe
+
+      - name: Stage packaged resources on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force src-tauri/resources | Out-Null
+          Copy-Item target/debug/microgifter-homeserver-service.exe src-tauri/resources/microgifter-homeserver-service.exe
+          Copy-Item target/debug/microgifter-homeserver-updater.exe src-tauri/resources/microgifter-homeserver-updater.exe
+          Copy-Item target/debug/microgifter-homeserver-mcp.exe src-tauri/resources/microgifter-homeserver-mcp.exe
+          foreach ($path in @(
+            'src-tauri/resources/microgifter-homeserver-service.exe',
+            'src-tauri/resources/microgifter-homeserver-updater.exe',
+            'src-tauri/resources/microgifter-homeserver-mcp.exe'
+          )) {
+            if (-not (Test-Path $path) -or (Get-Item $path).Length -le 0) { throw "Missing packaged resource: $path" }
+          }
 
       - name: Validate Rust formatting
         run: cargo fmt --all -- --check
