@@ -31,6 +31,9 @@ for token, label in (
     ("speech_end", "speech-end event"),
     ("segment_limit", "maximum-segment event"),
     ("Math.max(", "minimum sustained-speech activation"),
+    ("segmentLimitEmitted", "one-shot segment-limit latch"),
+    ('const boundary = this.snapshot(now, "speech_end")', "one-shot speech-end snapshot"),
+    ("this.speaking = false", "speech-end state reset"),
     ("timestamps must be monotonic", "monotonic frame validation"),
 ):
     require(ENGINE, token, label)
@@ -84,7 +87,8 @@ for forbidden, label in (
     forbid(CONTROLLER, forbidden, label)
 
 print(
-    "Phase 23B local VAD validates adaptive calibration, hysteresis, pre-roll, "
-    "short-burst rejection, bounded utterance segmentation, governed evidence, "
-    "ephemeral raw audio, and zero browser/cloud speech or network egress."
+    "Phase 23B local VAD validates adaptive calibration, sustained hysteresis, "
+    "edge-triggered speech boundaries, pre-roll, short-burst rejection, bounded "
+    "utterance segmentation, governed evidence, ephemeral raw audio, and zero "
+    "browser/cloud speech or network egress."
 )
