@@ -102,6 +102,15 @@ BEGIN
     SELECT RAISE(ABORT, 'invalid Phase 23 audio permission receipt');
 END;
 
+CREATE TRIGGER IF NOT EXISTS trg_audio_permission_receipts_phase23_update
+BEFORE UPDATE ON audio_permission_receipts
+WHEN NEW.microphone_authorized <> 1
+   OR NEW.recording_authorized <> 1
+   OR NEW.retention_mode NOT IN ('ephemeral','transcript')
+BEGIN
+    SELECT RAISE(ABORT, 'invalid Phase 23 audio permission receipt');
+END;
+
 CREATE TRIGGER IF NOT EXISTS trg_audio_segments_phase23_insert
 BEFORE INSERT ON audio_segments
 WHEN NEW.duration_ms <= 0
@@ -112,6 +121,18 @@ WHEN NEW.duration_ms <= 0
    OR lower(NEW.content_sha256) GLOB '*[^0-9a-f]*'
    OR length(trim(NEW.mime_type)) = 0
    OR length(NEW.mime_type) > 160
+   OR NEW.state NOT IN ('transcript_pending','final')
+   OR (NEW.state = 'transcript_pending' AND (
+        NEW.transcript IS NOT NULL
+        OR NEW.linked_message_id IS NOT NULL
+        OR NEW.finalized_at_utc IS NOT NULL
+   ))
+   OR (NEW.state = 'final' AND (
+        NEW.transcript IS NULL
+        OR trim(NEW.transcript) = ''
+        OR NEW.linked_message_id IS NOT NULL
+        OR NEW.finalized_at_utc IS NULL
+   ))
    OR NOT EXISTS (
        SELECT 1
        FROM audio_sessions
@@ -129,17 +150,20 @@ WHEN (OLD.linked_message_id IS NOT NULL AND (
         OR NEW.transcript IS NOT OLD.transcript
         OR NEW.state <> OLD.state
      ))
+   OR (NEW.linked_message_id IS NULL AND NEW.state = 'committed')
+   OR (NEW.linked_message_id IS NOT NULL AND NEW.state <> 'committed')
+   OR (NEW.state IN ('final','committed') AND (
+        NEW.transcript IS NULL OR trim(NEW.transcript) = ''
+   ))
    OR (NEW.linked_message_id IS NOT NULL AND NOT EXISTS (
         SELECT 1
-        FROM agent_messages
-        WHERE message_id = NEW.linked_message_id
-          AND role = 'user'
-          AND content = NEW.transcript
-          AND created_at_utc >= (
-              SELECT started_at_utc
-              FROM audio_sessions
-              WHERE session_id = NEW.session_id
-          )
+        FROM agent_messages m
+        JOIN audio_sessions s ON s.session_id = NEW.session_id
+        WHERE m.message_id = NEW.linked_message_id
+          AND m.role = 'user'
+          AND m.content = NEW.transcript
+          AND m.created_at_utc >= s.started_at_utc
+          AND (s.thread_id IS NULL OR s.thread_id = m.thread_id)
    ))
 BEGIN
     SELECT RAISE(ABORT, 'invalid Phase 23 transcript linkage');
