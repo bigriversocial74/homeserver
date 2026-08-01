@@ -1,0 +1,43 @@
+name: Phase 23C Utterance Queue Hardening
+
+on:
+  pull_request:
+    paths:
+      - "scripts/apply-phase23c-queue-hardening.py"
+      - ".github/workflows/phase23c-queue-hardening.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phase23c-queue-hardening-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harden:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact Phase 23C branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/phase-23c-local-whisper-transcription
+          fetch-depth: 0
+
+      - name: Apply permanent queue hardening
+        run: python scripts/apply-phase23c-queue-hardening.py
+
+      - name: Remove one-time hardening assets
+        run: |
+          git rm scripts/apply-phase23c-queue-hardening.py
+          git rm .github/workflows/phase23c-queue-hardening.yml
+
+      - name: Commit hardened candidate
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/homeserver-agent-whisper.js scripts/validate-agent-whisper.py .github/workflows
+          git diff --cached --check
+          git commit -m "Queue Phase 23C utterances without loss"
+          git push origin HEAD:feature/phase-23c-local-whisper-transcription
