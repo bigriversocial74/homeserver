@@ -2,20 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { logoMark } from "./icons.js";
 import "./shared-sidebar.css";
 
-const MENU_ITEMS = [
-  ["agent", "HomeServer Agent", "integrations"],
-  ["home", "Home", "home"],
-  ["dashboard", "Dashboard", "dashboard"],
-  ["models", "Model Center", "model"],
-  ["apps", "Apps", "apps"],
-  ["knowledge", "Knowledge Vault", "vault"],
-  ["backups", "Backups", "backup"],
-  ["integrations", "Integrations & Agents", "integrations"],
-  ["settings", "Settings", "settings"],
-  ["sync", "Sync Cloud", "cloud"],
-  ["system", "System", "system"],
-];
-
 let observer = null;
 let observedHost = null;
 let scheduled = false;
@@ -43,23 +29,12 @@ function navigate(page) {
   window.location.hash = `#${page}`;
 }
 
-function reorderPrimaryNavigation() {
-  if (isAgentPage()) return;
-  const nav = document.querySelector(".app-sidebar .primary-nav");
-  if (!nav) return;
-  const buttons = new Map([...nav.querySelectorAll("[data-page]")].map((button) => [button.dataset.page, button]));
-  for (const [key] of MENU_ITEMS) {
-    const button = buttons.get(key);
-    if (button) nav.append(button);
-  }
-}
-
 function createBrand() {
   const brand = document.createElement("button");
   brand.type = "button";
   brand.className = "brand-lockup shared-sidebar-brand";
   brand.setAttribute("aria-label", "Open HomeServer dashboard");
-  brand.innerHTML = `${logoMark(43)}<div><strong>Microgifter</strong><span>HomeServer</span></div>`;
+  brand.innerHTML = `${logoMark(43)}<div><strong>Microgifter</strong><span>HomeServer Agent</span></div>`;
   brand.addEventListener("click", () => navigate("dashboard"));
   return brand;
 }
@@ -67,7 +42,7 @@ function createBrand() {
 function createSidebarState() {
   const state = document.createElement("div");
   state.className = "sidebar-state";
-  state.innerHTML = '<span class="state-orb healthy"></span><span>online</span>';
+  state.innerHTML = '<span class="state-orb healthy"></span><span>agent online</span>';
   return state;
 }
 
@@ -131,8 +106,16 @@ function addThreadActions(history) {
   });
 }
 
+function removeUnexpectedControlCenterUi() {
+  document.querySelectorAll(
+    ".agent-chat-shell > .app-sidebar:not(.hs-chat-sidebar), .agent-chat-shell .primary-nav, .agent-chat-shell .server-card",
+  ).forEach((element) => element.remove());
+}
+
 function decorateAgentSidebar() {
   if (!isAgentPage() || decorating) return;
+  removeUnexpectedControlCenterUi();
+
   const sidebar = document.querySelector(".hs-chat-sidebar");
   if (!sidebar || sidebar.dataset.sharedSidebar === "true") return;
 
@@ -146,6 +129,7 @@ function decorateAgentSidebar() {
   decorating = true;
   try {
     sidebar.dataset.sharedSidebar = "true";
+    sidebar.dataset.agentSidebarMode = "chat-only";
     sidebar.classList.add("app-sidebar", "shared-agent-sidebar");
 
     const chatSection = document.createElement("section");
@@ -169,7 +153,7 @@ function scheduleDecorate() {
   scheduled = true;
   window.requestAnimationFrame(() => {
     scheduled = false;
-    reorderPrimaryNavigation();
+    removeUnexpectedControlCenterUi();
     decorateAgentSidebar();
     bindAgentObserver();
   });
@@ -196,6 +180,7 @@ window.addEventListener("hashchange", scheduleDecorate);
 scheduleDecorate();
 
 window.__HOMESERVER_SHARED_SIDEBAR_V1__ = {
-  menu: MENU_ITEMS.map(([key]) => key),
+  mode: "agent-chat-only",
   refresh: scheduleDecorate,
 };
+window.__HOMESERVER_AGENT_SIDEBAR_CHAT_ONLY_V2__ = true;
