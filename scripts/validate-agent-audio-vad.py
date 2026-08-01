@@ -81,8 +81,11 @@ for token, label in (
     ("windows-2025", "Windows certification job"),
     ("npm run check:frontend", "retained frontend validation"),
     ("npm run build", "production frontend build"),
-    ("cargo test -p homeserver-service", "native service tests"),
-    ("cargo clippy -p homeserver-service --all-targets -- -D warnings", "strict native lint"),
+    ("cargo test -p microgifter-homeserver-service", "native service tests"),
+    (
+        "cargo clippy -p microgifter-homeserver-service --all-targets -- -D warnings",
+        "strict native lint",
+    ),
 ):
     require(WORKFLOW, token, label)
 
