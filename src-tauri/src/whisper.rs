@@ -813,7 +813,7 @@ fn run_whisper(
     let segment_transcription_id = transcription_id.clone();
     let segment_segment_id = segment_id.clone();
     let segment_model_sha256 = model_sha256.clone();
-    params.set_segment_callback_safe_lossy(Some(move |data: SegmentCallbackData| {
+    params.set_segment_callback_safe_lossy(move |data: SegmentCallbackData| {
         if let Ok(mut values) = segment_partials.lock() {
             values.insert(data.segment, data.text);
             let combined = values.values().cloned().collect::<Vec<_>>().join(" ");
@@ -837,13 +837,13 @@ fn run_whisper(
                 },
             );
         }
-    }));
+    });
 
     let progress_app = app.clone();
     let progress_transcription_id = transcription_id.clone();
     let progress_segment_id = segment_id.clone();
     let progress_model_sha256 = model_sha256.clone();
-    params.set_progress_callback_safe(Some(move |progress: i32| {
+    params.set_progress_callback_safe(move |progress: i32| {
         let _ = progress_app.emit(
             "homeserver-whisper-progress",
             WhisperProgressEvent {
@@ -856,9 +856,9 @@ fn run_whisper(
                 model_sha256: progress_model_sha256.clone(),
             },
         );
-    }));
+    });
     let abort = cancel.clone();
-    params.set_abort_callback_safe(Some(move || abort.load(Ordering::SeqCst)));
+    params.set_abort_callback_safe(move || abort.load(Ordering::SeqCst));
 
     let run_result = whisper_state.full(params, samples.as_slice());
     if cancel.load(Ordering::SeqCst) {
