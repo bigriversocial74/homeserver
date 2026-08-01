@@ -11,6 +11,19 @@ def require(path: str, needles: list[str]) -> None:
             raise SystemExit(f"{path}: missing unified Agent contract: {needle}")
 
 
+def require_absent(paths: list[str]) -> None:
+    for path in paths:
+        if (ROOT / path).exists():
+            raise SystemExit(f"temporary Phase 22 file must not be retained: {path}")
+
+
+require_absent([
+    ".github/scripts/repair_phase22_clippy.py",
+    ".github/workflows/_repair_phase22_clippy.yml",
+    ".github/scripts/apply_phase22_unified_agent.py",
+    ".github/workflows/_stage_phase22_unified_agent.yml",
+])
+
 require("crates/homeserver-service/src/agent_integrations.rs", [
     "oauth_callback_router",
     "http://127.0.0.1:47831/oauth/microgifter/callback",
