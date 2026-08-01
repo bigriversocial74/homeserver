@@ -1,0 +1,62 @@
+name: Phase 23C Clippy Then Some Repair
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/phase23c-clippy-then-some-repair.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phase23c-clippy-then-some-repair-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: github.head_ref == 'feature/phase-23c-local-whisper-transcription'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Install Rust formatter
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Apply demonstrated Clippy repair
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("src-tauri/src/whisper.rs")
+          text = path.read_text(encoding="utf-8")
+          old = '.then(|| unique_sibling(&model_destination, "backup"));'
+          new = '.then_some(unique_sibling(&model_destination, "backup"));'
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f"Expected one then/then_some replacement, found {count}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+      - name: Format Rust workspace
+        run: cargo fmt --all
+
+      - name: Remove temporary repair workflow
+        shell: bash
+        run: rm .github/workflows/phase23c-clippy-then-some-repair.yml
+
+      - name: Commit permanent repair
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/src/whisper.rs .github/workflows/phase23c-clippy-then-some-repair.yml
+          git commit -m "Repair Phase 23C strict Clippy warning"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
