@@ -35,6 +35,16 @@ pub struct SoftwareAuthoritySnapshot {
     pub legacy_microgifter_fallback_active: bool,
 }
 
+#[derive(Debug, Default)]
+struct LegacyVp3AuthorityState {
+    device_id: Option<String>,
+    license_id: Option<String>,
+    lease_id: Option<String>,
+    lease_expires_at_utc: Option<String>,
+    last_heartbeat_at_utc: Option<String>,
+    last_error_code: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct AuthorityApiError {
     ok: bool,
@@ -124,39 +134,26 @@ pub fn status_snapshot(connection: &Connection) -> Result<SoftwareAuthoritySnaps
             )
             .context("unable to load primary HomeServer software-authority state")?;
 
-    let legacy_vp3: Option<(
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    )> = connection
+    let legacy_vp3 = connection
         .query_row(
             "SELECT vp3_device_id,vp3_license_id,vp3_lease_id,vp3_lease_expires_at_utc,last_vp3_heartbeat_at_utc,last_error_code FROM homeserver_software_authority WHERE singleton_id=1",
             [],
             |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                ))
+                Ok(LegacyVp3AuthorityState {
+                    device_id: row.get(0)?,
+                    license_id: row.get(1)?,
+                    lease_id: row.get(2)?,
+                    lease_expires_at_utc: row.get(3)?,
+                    last_heartbeat_at_utc: row.get(4)?,
+                    last_error_code: row.get(5)?,
+                })
             },
         )
-        .optional()?;
+        .optional()?
+        .unwrap_or_default();
 
     let (update_eligible, allowed_update_channels) = microgifter_update_status(connection)?;
-    let (
-        vp3_device_id,
-        vp3_license_id,
-        vp3_lease_id,
-        vp3_lease_expires_at_utc,
-        last_vp3_heartbeat_at_utc,
-        last_error_code,
-    ) = legacy_vp3.unwrap_or((None, None, None, None, None, None));
+    let vp3_optional = migrated_from.as_deref() == Some("vp3") || legacy_vp3.device_id.is_some();
 
     Ok(SoftwareAuthoritySnapshot {
         current_authority: provider_key.clone(),
@@ -165,15 +162,15 @@ pub fn status_snapshot(connection: &Connection) -> Result<SoftwareAuthoritySnaps
         primary_provider_key: provider_key.clone(),
         microgifter_primary_active: provider_key == MICROGIFTER_AUTHORITY
             && authority_state == "active",
-        vp3_optional: migrated_from.as_deref() == Some("vp3") || vp3_device_id.is_some(),
-        vp3_device_id,
-        vp3_license_id,
-        vp3_lease_id,
-        vp3_lease_expires_at_utc,
+        vp3_optional,
+        vp3_device_id: legacy_vp3.device_id,
+        vp3_license_id: legacy_vp3.license_id,
+        vp3_lease_id: legacy_vp3.lease_id,
+        vp3_lease_expires_at_utc: legacy_vp3.lease_expires_at_utc,
         update_eligible,
         allowed_update_channels,
-        last_vp3_heartbeat_at_utc,
-        last_error_code,
+        last_vp3_heartbeat_at_utc: legacy_vp3.last_heartbeat_at_utc,
+        last_error_code: legacy_vp3.last_error_code,
         legacy_microgifter_fallback_active: false,
     })
 }
