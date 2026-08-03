@@ -1,0 +1,62 @@
+name: Repair Cargo lock stability
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/repair-cargo-lock-stability.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.event.pull_request.head.ref == 'feature/microgifter-primary-authority-restoration'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out controlled branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/microgifter-primary-authority-restoration
+          fetch-depth: 0
+
+      - name: Apply exact Cargo lock regeneration result
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('Cargo.lock')
+          text = path.read_text(encoding='utf-8')
+          replacements = [
+              (
+                  '''name = "aho-corasick"\nversion = "1.1.4"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "ddd31a130427c27518df266943a5308ed92d4b226cc639f5a8f1002816174301"''',
+                  '''name = "aho-corasick"\nversion = "1.1.5"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba"''',
+              ),
+              (
+                  '''name = "ipnet"\nversion = "2.12.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"''',
+                  '''name = "ipnet"\nversion = "2.12.1"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "6a756c3fac73139e83f14c2d742155dd2b78d3ee56597b419a0579b7bdd6dd78"''',
+              ),
+              (
+                  '''name = "libredox"\nversion = "0.1.18"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "c943259e342f1e06ff2da7a83eabdfe7f92ce10262688dbf1895ff0b3e6e4652"''',
+                  '''name = "libredox"\nversion = "0.1.19"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "2026a5056764a10b2bf5d56488cba40da507f5493a6a429340e2004d9ed085fa"''',
+              ),
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'Expected one exact Cargo.lock block, found {count}')
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8', newline='\n')
+          Path('.github/workflows/repair-cargo-lock-stability.yml').unlink()
+
+      - name: Verify regenerated lock is stable
+        run: |
+          cargo generate-lockfile
+          git diff --exit-code -- Cargo.lock
+
+      - name: Commit permanent lockfile only
+        run: |
+          git config user.name "HomeServer Build Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add Cargo.lock .github/workflows/repair-cargo-lock-stability.yml
+          git commit -m "Refresh stable Cargo dependency lock"
+          git push origin HEAD:feature/microgifter-primary-authority-restoration
