@@ -1,0 +1,115 @@
+name: Apply Microgifter update installation identity
+
+on:
+  push:
+    branches:
+      - feature/microgifter-primary-authority-restoration
+    paths:
+      - .github/workflows/apply-microgifter-update-identity.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.ref_name == 'feature/microgifter-primary-authority-restoration'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out controlled branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/microgifter-primary-authority-restoration
+          fetch-depth: 0
+
+      - name: Apply exact update identity patches
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              file = Path(path)
+              text = file.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one patch anchor, found {count}')
+              file.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once(
+              'crates/homeserver-service/src/update.rs',
+              'const MAX_RELEASE_NOTES_CHARS: usize = 20_000;\n',
+              'const MAX_RELEASE_NOTES_CHARS: usize = 20_000;\nconst INSTALLATION_HEADER: &str = "X-Microgifter-HomeServer-Installation";\n'
+          )
+          replace_once(
+              'crates/homeserver-service/src/update.rs',
+              '''pub async fn fetch_and_verify_manifest(\n    config: &AppConfig,\n    current_version: &str,\n) -> Result<VerifiedUpdate> {\n    let manifest_url = secure_https_url(&config.update_manifest_url, "update manifest")?;\n''',
+              '''pub async fn fetch_and_verify_manifest(\n    config: &AppConfig,\n    current_version: &str,\n    installation_id: &str,\n) -> Result<VerifiedUpdate> {\n    let installation_id = validated_installation_id(installation_id)?;\n    let manifest_url = secure_https_url(&config.update_manifest_url, "update manifest")?;\n'''
+          )
+          replace_once(
+              'crates/homeserver-service/src/update.rs',
+              '''        .get(manifest_url)\n        .header(reqwest::header::ACCEPT, "application/json")\n        .send()\n''',
+              '''        .get(manifest_url)\n        .header(reqwest::header::ACCEPT, "application/json")\n        .header(INSTALLATION_HEADER, installation_id)\n        .send()\n'''
+          )
+          replace_once(
+              'crates/homeserver-service/src/update.rs',
+              '''pub async fn download_and_verify_installer(\n    config: &AppConfig,\n    record: &UpdateRecord,\n    manifest: &SignedUpdateManifest,\n) -> Result<PathBuf> {\n''',
+              '''pub async fn download_and_verify_installer(\n    config: &AppConfig,\n    record: &UpdateRecord,\n    manifest: &SignedUpdateManifest,\n    installation_id: &str,\n) -> Result<PathBuf> {\n    let installation_id = validated_installation_id(installation_id)?;\n'''
+          )
+          replace_once(
+              'crates/homeserver-service/src/update.rs',
+              '''        .get(url)\n        .header(reqwest::header::ACCEPT, "application/octet-stream")\n        .send()\n''',
+              '''        .get(url)\n        .header(reqwest::header::ACCEPT, "application/octet-stream")\n        .header(INSTALLATION_HEADER, installation_id)\n        .send()\n'''
+          )
+          replace_once(
+              'crates/homeserver-service/src/update.rs',
+              '''fn valid_sha256(value: &str) -> bool {\n''',
+              '''fn validated_installation_id(value: &str) -> Result<&str> {\n    ensure!(\n        uuid::Uuid::parse_str(value).is_ok(),\n        "HomeServer installation identity is invalid"\n    );\n    Ok(value)\n}\n\nfn valid_sha256(value: &str) -> bool {\n'''
+          )
+
+          replace_once(
+              'crates/homeserver-service/src/main.rs',
+              '''        update_store::begin_check(&*self.connection()?)?;\n        let verified = match update::fetch_and_verify_manifest(\n            &self.config,\n            env!("CARGO_PKG_VERSION"),\n        )\n''',
+              '''        update_store::begin_check(&*self.connection()?)?;\n        let installation_id = database::installation_id(&*self.connection()?)?;\n        let verified = match update::fetch_and_verify_manifest(\n            &self.config,\n            env!("CARGO_PKG_VERSION"),\n            &installation_id,\n        )\n'''
+          )
+          replace_once(
+              'crates/homeserver-service/src/main.rs',
+              '''        let stored = {\n            let connection = self.connection()?;\n            let available = update_store::latest_in_state(&connection, UpdateState::Available)?;\n            software_authority::ensure_update_download_allowed(\n                &connection,\n                &available.record.update_id,\n            )?;\n            update_store::mark_downloading(&connection, &available.record.update_id)?\n        };\n''',
+              '''        let (stored, installation_id) = {\n            let connection = self.connection()?;\n            let installation_id = database::installation_id(&connection)?;\n            let available = update_store::latest_in_state(&connection, UpdateState::Available)?;\n            software_authority::ensure_update_download_allowed(\n                &connection,\n                &available.record.update_id,\n            )?;\n            let stored = update_store::mark_downloading(&connection, &available.record.update_id)?;\n            (stored, installation_id)\n        };\n'''
+          )
+          replace_once(
+              'crates/homeserver-service/src/main.rs',
+              '''            &stored.record,\n            &stored.manifest,\n        )\n''',
+              '''            &stored.record,\n            &stored.manifest,\n            &installation_id,\n        )\n'''
+          )
+
+          replace_once(
+              'crates/homeserver-service/src/app.rs',
+              '''            _ = check_interval.tick() => {\n                let use_legacy_manifest = state\n                    .connection()\n                    .ok()\n                    .and_then(|connection| software_authority::status_snapshot(&connection).ok())\n                    .map_or(true, |authority| authority.current_authority != "vp3");\n                if use_legacy_manifest {\n                    if let Err(error) = state.check_for_updates().await {\n                        warn!(?error, "scheduled legacy HomeServer update check failed");\n                    }\n                }\n            }\n''',
+              '''            _ = check_interval.tick() => {\n                if let Err(error) = state.check_for_updates().await {\n                    warn!(?error, "scheduled Microgifter HomeServer update check failed");\n                }\n            }\n'''
+          )
+
+          validator = Path('scripts/validate-microgifter-primary-authority.py')
+          text = validator.read_text(encoding='utf-8')
+          anchor = '''    require(\n        "src/main.js",'''
+          addition = '''    require(\n        "crates/homeserver-service/src/update.rs",\n        [\n            'const INSTALLATION_HEADER: &str = "X-Microgifter-HomeServer-Installation";',\n            ".header(INSTALLATION_HEADER, installation_id)",\n            "validated_installation_id",\n        ],\n    )\n    require(\n        "crates/homeserver-service/src/main.rs",\n        [\n            "database::installation_id",\n            "&installation_id",\n        ],\n    )\n    require(\n        "crates/homeserver-service/src/app.rs",\n        [\n            "scheduled Microgifter HomeServer update check failed",\n        ],\n    )\n    forbid(\n        "crates/homeserver-service/src/app.rs",\n        [\n            "use_legacy_manifest",\n            'authority.current_authority != "vp3"',\n            "scheduled legacy HomeServer update check failed",\n        ],\n    )\n    require(\n        "src/main.js",'''
+          if text.count(anchor) != 1:
+              raise SystemExit('primary validator anchor is not unique')
+          validator.write_text(text.replace(anchor, addition, 1), encoding='utf-8')
+
+          workflow = Path('.github/workflows/microgifter-primary-authority.yml')
+          text = workflow.read_text(encoding='utf-8')
+          anchor = '      - "crates/homeserver-service/src/config.rs"\n'
+          addition = '''      - "crates/homeserver-service/src/app.rs"\n      - "crates/homeserver-service/src/config.rs"\n      - "crates/homeserver-service/src/main.rs"\n      - "crates/homeserver-service/src/update.rs"\n'''
+          if text.count(anchor) != 1:
+              raise SystemExit('workflow path anchor is not unique')
+          workflow.write_text(text.replace(anchor, addition, 1), encoding='utf-8')
+
+          Path('.github/workflows/apply-microgifter-update-identity.yml').unlink()
+
+      - name: Format and commit permanent changes
+        run: |
+          cargo fmt --all
+          git config user.name "HomeServer Build Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add crates/homeserver-service/src/update.rs crates/homeserver-service/src/main.rs crates/homeserver-service/src/app.rs scripts/validate-microgifter-primary-authority.py .github/workflows/microgifter-primary-authority.yml .github/workflows/apply-microgifter-update-identity.yml
+          git commit -m "Bind Microgifter update rollout to installation identity"
+          git push origin HEAD:feature/microgifter-primary-authority-restoration
