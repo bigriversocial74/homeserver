@@ -32,6 +32,13 @@ def main() -> None:
         ],
     )
     require(
+        "crates/homeserver-service/src/config.rs",
+        [
+            'https://microgifter.com/api/homeserver/update-manifest-stable.php',
+            'DEFAULT_VP3_BASE_URL',
+        ],
+    )
+    require(
         "crates/homeserver-service/src/software_authority.rs",
         [
             'const MICROGIFTER_AUTHORITY: &str = "microgifter";',
