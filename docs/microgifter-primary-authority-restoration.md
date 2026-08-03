@@ -44,11 +44,15 @@ Microgifter cannot read private HomeServer content unless the operator separatel
 
 ## Upgrade-system dependency
 
-The restoration uses the existing HomeServer updater and the existing Microgifter endpoints:
+The restoration uses the existing HomeServer updater and the Microgifter authority endpoints:
 
 - `/api/homeserver/v1/updates/authorize`
 - `/api/homeserver/v1/updates/receipts`
+- `/api/homeserver/update-manifest-stable.php`
+- `/api/homeserver/update-download.php`
 - `/api/homeserver/latest-release.php`
 - `/api/homeserver/download.php`
 
-The coordinated Microgifter PR completes the release catalog, signed-manifest publication, rollout controls and account-facing update history around those existing endpoints. A second updater is not introduced.
+The default HomeServer signed-manifest source is `https://microgifter.com/api/homeserver/update-manifest-stable.php`.
+
+The coordinated implementation is Microgifter PR #1390. It adds signed-manifest publication, public-key verification, staged rollout, pause, revocation, rollback controls and account-facing update history around the existing pairing and entitlement contract. A second updater is not introduced.
