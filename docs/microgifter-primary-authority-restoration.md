@@ -56,3 +56,7 @@ The restoration uses the existing HomeServer updater and the Microgifter authori
 The default HomeServer signed-manifest source is `https://microgifter.com/api/homeserver/update-manifest-stable.php`.
 
 The coordinated implementation is Microgifter PR #1390. It adds signed-manifest publication, public-key verification, staged rollout, pause, revocation, rollback controls and account-facing update history around the existing pairing and entitlement contract. A second updater is not introduced.
+
+## Dependency lock stability
+
+The root `Cargo.lock` is regenerated and committed with the current stable Rust toolchain before certification. Production Quality verifies that a fresh `cargo generate-lockfile` produces no diff, preventing an installer or workspace build from resolving dependency bytes that differ from the reviewed candidate.
