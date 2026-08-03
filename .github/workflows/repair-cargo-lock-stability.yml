@@ -49,9 +49,13 @@ jobs:
           Path('.github/workflows/repair-cargo-lock-stability.yml').unlink()
 
       - name: Verify regenerated lock is stable
+        shell: bash
         run: |
+          before="$(sha256sum Cargo.lock | cut -d' ' -f1)"
           cargo generate-lockfile
-          git diff --exit-code -- Cargo.lock
+          after="$(sha256sum Cargo.lock | cut -d' ' -f1)"
+          test "$before" = "$after"
+          echo "Cargo.lock regeneration is stable at $after"
 
       - name: Commit permanent lockfile only
         run: |
