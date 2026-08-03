@@ -34,11 +34,11 @@ function compact(value) {
   return `${text.slice(0, 9)}…${text.slice(-9)}`;
 }
 
-function authorityState() {
+function providerState() {
   if (!snapshot) return { label: "Loading", tone: "attention" };
-  if (snapshot.configured && snapshot.activation_state === "active") return { label: "VP3 active", tone: "active" };
-  if (snapshot.activation_state === "disconnected") return { label: "Legacy fallback", tone: "attention" };
-  return { label: humanize(snapshot.activation_state || "not activated"), tone: "attention" };
+  if (snapshot.configured && snapshot.activation_state === "active") return { label: "VP3 connected", tone: "active" };
+  if (snapshot.activation_state === "disconnected") return { label: "Not connected", tone: "attention" };
+  return { label: humanize(snapshot.activation_state || "not connected"), tone: "attention" };
 }
 
 function render() {
@@ -53,37 +53,37 @@ function render() {
     target.insertAdjacentElement("afterend", root);
   }
 
-  const state = authorityState();
+  const state = providerState();
   const active = Boolean(snapshot?.configured && snapshot?.activation_state === "active");
   const fingerprint = identity?.device_fingerprint || "Unavailable";
   root.innerHTML = `
     <article class="panel vp3-authority-card">
       <header class="vp3-authority-heading">
-        <div><span class="vp3-kicker">Software licensing and update authority</span><h2>VP3 HomeServer Activation</h2><p>Register this HomeServer with your VP3 account, verify its signed entitlement lease, and manage the update-authority connection without exposing local data.</p></div>
+        <div><span class="vp3-kicker">Optional paired provider</span><h2>VP3 Domain & POD Connection</h2><p>Microgifter remains the primary HomeServer account, pairing, entitlement, and signed-update authority. Connect VP3 only when you want optional domain, POD, or VP3 fleet services.</p></div>
         <span class="vp3-state ${escapeHtml(state.tone)}">${escapeHtml(state.label)}</span>
       </header>
       ${notice ? `<div class="vp3-notice ${escapeHtml(notice.kind)}">${escapeHtml(notice.message)}</div>` : ""}
       <div class="vp3-authority-grid">
         <div class="vp3-authority-main">
-          <div class="vp3-identity-box"><strong>Local device identity</strong><div class="vp3-identity-row"><input id="vp3-device-fingerprint" type="text" readonly value="${escapeHtml(fingerprint)}"><button id="vp3-copy-fingerprint" class="button ghost" type="button" ${identity?.device_fingerprint ? "" : "disabled"}>Copy</button></div><small>This SHA-256 value is derived locally from the persistent HomeServer installation identity. It is not a hardware serial number and cannot be replaced by the activation caller.</small></div>
+          <div class="vp3-identity-box"><strong>Local device identity</strong><div class="vp3-identity-row"><input id="vp3-device-fingerprint" type="text" readonly value="${escapeHtml(fingerprint)}"><button id="vp3-copy-fingerprint" class="button ghost" type="button" ${identity?.device_fingerprint ? "" : "disabled"}>Copy</button></div><small>This SHA-256 value is derived locally from the persistent HomeServer installation identity. It is not a hardware serial number and cannot be replaced by the connection caller.</small></div>
           <div class="vp3-metrics">
-            <div class="vp3-metric"><span>Authority</span><strong>${escapeHtml(snapshot?.authority?.authority || "microgifter_legacy")}</strong></div>
-            <div class="vp3-metric"><span>Lease</span><strong>${escapeHtml(snapshot?.lease_public_id ? humanize(snapshot?.authority?.lease_state || "active") : "Not issued")}</strong></div>
+            <div class="vp3-metric"><span>Primary authority</span><strong>Microgifter</strong></div>
+            <div class="vp3-metric"><span>VP3 lease</span><strong>${escapeHtml(snapshot?.lease_public_id ? humanize(snapshot?.authority?.lease_state || "active") : "Not issued")}</strong></div>
             <div class="vp3-metric"><span>Credential vault</span><strong>${snapshot?.credential_in_os_vault ? "Configured" : "Empty"}</strong></div>
           </div>
           ${active ? renderActiveActions() : renderActivationForm()}
         </div>
         <aside class="vp3-authority-side">
-          <div class="vp3-detail-card"><strong>Authority details</strong><dl class="vp3-detail-list">
+          <div class="vp3-detail-card"><strong>Optional provider details</strong><dl class="vp3-detail-list">
             <div><dt>VP3 account</dt><dd>${escapeHtml(snapshot?.account_id ?? "Not assigned")}</dd></div>
             <div><dt>Device ID</dt><dd title="${escapeHtml(snapshot?.device_public_id)}">${escapeHtml(compact(snapshot?.device_public_id))}</dd></div>
             <div><dt>License</dt><dd title="${escapeHtml(snapshot?.license_public_id)}">${escapeHtml(compact(snapshot?.license_public_id))}</dd></div>
             <div><dt>Lease expires</dt><dd>${escapeHtml(formatDate(snapshot?.lease_expires_at_utc))}</dd></div>
             <div><dt>Last heartbeat</dt><dd>${escapeHtml(formatDate(snapshot?.last_heartbeat_at_utc))}</dd></div>
-            <div><dt>Last release check</dt><dd>${escapeHtml(formatDate(snapshot?.last_manifest_checked_at_utc))}</dd></div>
+            <div><dt>Last VP3 check</dt><dd>${escapeHtml(formatDate(snapshot?.last_manifest_checked_at_utc))}</dd></div>
             <div><dt>Last error</dt><dd>${escapeHtml(humanize(snapshot?.last_error_code || "none"))}</dd></div>
           </dl></div>
-          <div class="vp3-privacy-card"><strong>Privacy boundary</strong><p>The one-time credential and enrollment code move directly into the Windows credential vault and are cleared from the form. SQLite stores identifiers, signed hashes, lifecycle state, and receipts only. VP3 does not receive Knowledge Vault content, prompts, conversations, models, or unrelated provider credentials.</p></div>
+          <div class="vp3-privacy-card"><strong>Privacy boundary</strong><p>The one-time credential and enrollment code move directly into the Windows credential vault and are cleared from the form. SQLite stores identifiers, signed hashes, lifecycle state, and receipts only. VP3 remains optional and does not replace Microgifter pairing or receive Knowledge Vault content, prompts, conversations, models, or unrelated provider credentials.</p></div>
         </aside>
       </div>
     </article>`;
@@ -92,18 +92,18 @@ function render() {
 
 function renderActivationForm() {
   return `<form id="vp3-activation-form" class="vp3-activation-form">
-    <div class="vp3-secret-note">First open the VP3 HomeServer fleet page, register this fingerprint to an eligible license, then paste the one-time registration bundle below.</div>
+    <div class="vp3-secret-note">Optional setup: open the VP3 HomeServer fleet page, register this fingerprint to an eligible VP3 service, then paste the one-time registration bundle below. Microgifter remains connected as the primary HomeServer authority.</div>
     <label><span>VP3 account ID</span><input id="vp3-account-id" type="number" min="1" step="1" autocomplete="off" required></label>
     <label><span>Device public ID</span><input id="vp3-device-public-id" type="text" maxlength="48" autocomplete="off" required></label>
     <label><span>License public ID (optional)</span><input id="vp3-license-public-id" type="text" maxlength="48" autocomplete="off"></label>
     <label><span>One-time device credential</span><input id="vp3-device-credential" type="password" maxlength="256" autocomplete="new-password" required></label>
     <label><span>One-time enrollment code</span><input id="vp3-enrollment-code" type="password" maxlength="256" autocomplete="new-password" required></label>
-    <div class="vp3-action-row"><button class="button primary" type="submit" ${loading ? "disabled" : ""}>Activate VP3 Authority</button><button id="vp3-refresh" class="button ghost" type="button" ${loading ? "disabled" : ""}>Refresh Status</button></div>
+    <div class="vp3-action-row"><button class="button primary" type="submit" ${loading ? "disabled" : ""}>Connect Optional VP3</button><button id="vp3-refresh" class="button ghost" type="button" ${loading ? "disabled" : ""}>Refresh Status</button></div>
   </form>`;
 }
 
 function renderActiveActions() {
-  return `<div class="vp3-detail-card"><strong>Authority operations</strong><p>Use these actions to verify the deployed VP3 service and signed-update contract from this HomeServer.</p><div class="vp3-action-row"><button class="button secondary" id="vp3-heartbeat" type="button" ${loading ? "disabled" : ""}>Send Heartbeat</button><button class="button secondary" id="vp3-refresh-lease" type="button" ${loading ? "disabled" : ""}>Refresh Lease</button><button class="button secondary" id="vp3-check-update" type="button" ${loading ? "disabled" : ""}>Check Release</button><button class="button secondary" id="vp3-submit-receipts" type="button" ${loading ? "disabled" : ""}>Submit Receipts</button><button class="button danger" id="vp3-disconnect" type="button" ${loading ? "disabled" : ""}>Disconnect VP3</button></div></div>`;
+  return `<div class="vp3-detail-card"><strong>Optional provider operations</strong><p>These actions verify the optional VP3 service connection. Microgifter continues to govern HomeServer pairing, entitlement, and signed updates.</p><div class="vp3-action-row"><button class="button secondary" id="vp3-heartbeat" type="button" ${loading ? "disabled" : ""}>Send Heartbeat</button><button class="button secondary" id="vp3-refresh-lease" type="button" ${loading ? "disabled" : ""}>Refresh VP3 Lease</button><button class="button secondary" id="vp3-check-update" type="button" ${loading ? "disabled" : ""}>Check VP3 Catalog</button><button class="button secondary" id="vp3-submit-receipts" type="button" ${loading ? "disabled" : ""}>Submit VP3 Receipts</button><button class="button danger" id="vp3-disconnect" type="button" ${loading ? "disabled" : ""}>Disconnect VP3</button></div></div>`;
 }
 
 function bind(root) {
@@ -111,9 +111,9 @@ function bind(root) {
   root.querySelector("#vp3-activation-form")?.addEventListener("submit", activate);
   root.querySelector("#vp3-refresh")?.addEventListener("click", load);
   root.querySelector("#vp3-heartbeat")?.addEventListener("click", () => runAction("homeserver_vp3_heartbeat", {}, "VP3 heartbeat completed."));
-  root.querySelector("#vp3-refresh-lease")?.addEventListener("click", () => runAction("homeserver_vp3_refresh_lease", {}, "Signed entitlement lease refreshed."));
-  root.querySelector("#vp3-check-update")?.addEventListener("click", () => runAction("homeserver_vp3_check_update", {}, "VP3 release check completed."));
-  root.querySelector("#vp3-submit-receipts")?.addEventListener("click", () => runAction("homeserver_vp3_submit_receipts", {}, "Pending VP3 update receipts submitted."));
+  root.querySelector("#vp3-refresh-lease")?.addEventListener("click", () => runAction("homeserver_vp3_refresh_lease", {}, "Optional VP3 lease refreshed."));
+  root.querySelector("#vp3-check-update")?.addEventListener("click", () => runAction("homeserver_vp3_check_update", {}, "Optional VP3 catalog check completed."));
+  root.querySelector("#vp3-submit-receipts")?.addEventListener("click", () => runAction("homeserver_vp3_submit_receipts", {}, "Pending optional VP3 receipts submitted."));
   root.querySelector("#vp3-disconnect")?.addEventListener("click", disconnect);
 }
 
@@ -131,7 +131,7 @@ async function copyFingerprint() {
 async function activate(event) {
   event.preventDefault();
   const form = event.currentTarget;
-  const confirmation = window.prompt("This moves VP3 authority credentials into Windows Credential Manager. Type ACTIVATE VP3 to continue:");
+  const confirmation = window.prompt("This moves optional VP3 credentials into Windows Credential Manager. Type ACTIVATE VP3 to continue:");
   if (confirmation !== "ACTIVATE VP3") return;
   loading = true;
   notice = null;
@@ -146,7 +146,7 @@ async function activate(event) {
       confirmation,
     });
     form.reset();
-    notice = { kind: "success", message: "VP3 software authority activated and its signed lease verified." };
+    notice = { kind: "success", message: "Optional VP3 provider connected. Microgifter remains the primary HomeServer authority." };
   } catch (error) {
     notice = { kind: "warning", message: String(error) };
   } finally {
@@ -171,9 +171,9 @@ async function runAction(command, args, successMessage) {
 }
 
 async function disconnect() {
-  const confirmation = window.prompt("Disconnecting returns software authority to the explicit legacy fallback. Type DISCONNECT VP3 to continue:");
+  const confirmation = window.prompt("Disconnect the optional VP3 provider? Microgifter remains primary. Type DISCONNECT VP3 to continue:");
   if (confirmation !== "DISCONNECT VP3") return;
-  await runAction("homeserver_disconnect_vp3_authority", { confirmation }, "VP3 software authority disconnected locally.");
+  await runAction("homeserver_disconnect_vp3_authority", { confirmation }, "Optional VP3 provider disconnected. Microgifter remains the primary HomeServer authority.");
 }
 
 async function load(clearNotice = true) {
@@ -187,7 +187,7 @@ async function load(clearNotice = true) {
       invoke("homeserver_vp3_device_identity"),
     ]);
   } catch (error) {
-    notice = { kind: "warning", message: `VP3 authority controls are unavailable: ${String(error)}` };
+    notice = { kind: "warning", message: `Optional VP3 provider controls are unavailable: ${String(error)}` };
   } finally {
     loading = false;
     render();

@@ -6,7 +6,7 @@ use url::Url;
 
 const DEFAULT_SERVER_NAME: &str = "Microgifter HomeServer";
 const DEFAULT_UPDATE_MANIFEST_URL: &str =
-    "https://updates.microgifter.com/homeserver/stable/manifest.json";
+    "https://microgifter.com/api/homeserver/update-manifest-stable.php";
 const DEFAULT_VP3_BASE_URL: &str = "https://vp3.me";
 const MAX_SERVER_NAME_CHARS: usize = 128;
 
