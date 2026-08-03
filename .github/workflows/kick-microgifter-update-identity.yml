@@ -1,0 +1,30 @@
+name: Kick Microgifter update identity repair
+
+on:
+  push:
+    branches:
+      - feature/microgifter-primary-authority-restoration
+    paths:
+      - .github/workflows/kick-microgifter-update-identity.yml
+
+permissions:
+  contents: write
+
+jobs:
+  kick:
+    if: github.ref_name == 'feature/microgifter-primary-authority-restoration'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/microgifter-primary-authority-restoration
+          fetch-depth: 0
+      - name: Trigger the scoped repair workflow
+        run: |
+          printf '\n# triggered by controlled kick workflow\n' >> .github/workflows/apply-microgifter-update-identity.yml
+          rm .github/workflows/kick-microgifter-update-identity.yml
+          git config user.name "HomeServer Build Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add .github/workflows/apply-microgifter-update-identity.yml .github/workflows/kick-microgifter-update-identity.yml
+          git commit -m "Trigger Microgifter update identity repair"
+          git push origin HEAD:feature/microgifter-primary-authority-restoration
