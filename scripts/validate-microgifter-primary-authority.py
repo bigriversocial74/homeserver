@@ -34,8 +34,8 @@ def main() -> None:
     require(
         "crates/homeserver-service/src/config.rs",
         [
-            'https://microgifter.com/api/homeserver/update-manifest-stable.php',
-            'DEFAULT_VP3_BASE_URL',
+            "https://microgifter.com/api/homeserver/update-manifest-stable.php",
+            "DEFAULT_VP3_BASE_URL",
         ],
     )
     require(
@@ -46,12 +46,13 @@ def main() -> None:
             "microgifter_connection::record_update_result_receipt(",
             "microgifter_primary_active",
             "vp3_optional",
+            "LegacyVp3AuthorityState",
         ],
     )
     forbid(
         "crates/homeserver-service/src/software_authority.rs",
         [
-            'match snapshot.current_authority.as_str()',
+            "match snapshot.current_authority.as_str()",
             '"VP3 software authority is not active"',
             '"VP3 license does not permit this update"',
             '"pending_vp3_submission"',
@@ -67,6 +68,33 @@ def main() -> None:
             '"update-receipts.v1"',
             "pub(crate) fn ensure_update_download_allowed(",
             "pub(crate) fn record_update_result_receipt(",
+        ],
+    )
+    require(
+        "src/main.js",
+        [
+            '"Microgifter Cloud", "Signed cloud pairing, heartbeat, and synchronization."',
+            "Pair this HomeServer to your Microgifter account.",
+            "Keep your HomeServer securely synchronized with Microgifter Cloud.",
+            'cloudSnapshot?.cloud_base_url || "https://microgifter.com"',
+        ],
+    )
+    require(
+        "src/vp3-authority.js",
+        [
+            "Optional paired provider",
+            "VP3 Domain & POD Connection",
+            "Microgifter remains the primary HomeServer account, pairing, entitlement, and signed-update authority",
+            "Connect Optional VP3",
+        ],
+    )
+    forbid(
+        "src/vp3-authority.js",
+        [
+            "Software licensing and update authority",
+            "VP3 HomeServer Activation",
+            "Legacy fallback",
+            "Activate VP3 Authority",
         ],
     )
     print("Microgifter primary HomeServer authority contract passed.")
