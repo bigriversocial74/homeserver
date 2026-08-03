@@ -10,11 +10,9 @@ use uuid::Uuid;
 const VP3_MIGRATION: &str =
     include_str!("../../../database/migrations/0017_vp3_software_authority.sql");
 const VP3_MIGRATION_KEY: &str = "0017_vp3_software_authority";
-const MICROGIFTER_PRIMARY_MIGRATION: &str = include_str!(
-    "../../../database/migrations/0033_microgifter_primary_software_authority.sql"
-);
-const MICROGIFTER_PRIMARY_MIGRATION_KEY: &str =
-    "0033_microgifter_primary_software_authority";
+const MICROGIFTER_PRIMARY_MIGRATION: &str =
+    include_str!("../../../database/migrations/0033_microgifter_primary_software_authority.sql");
+const MICROGIFTER_PRIMARY_MIGRATION_KEY: &str = "0033_microgifter_primary_software_authority";
 const MICROGIFTER_AUTHORITY: &str = "microgifter";
 const LEGACY_RECEIPT_AUTHORITY_KEY: &str = "microgifter_legacy";
 
@@ -151,8 +149,14 @@ pub fn status_snapshot(connection: &Connection) -> Result<SoftwareAuthoritySnaps
         .optional()?;
 
     let (update_eligible, allowed_update_channels) = microgifter_update_status(connection)?;
-    let (vp3_device_id, vp3_license_id, vp3_lease_id, vp3_lease_expires_at_utc, last_vp3_heartbeat_at_utc, last_error_code) =
-        legacy_vp3.unwrap_or((None, None, None, None, None, None));
+    let (
+        vp3_device_id,
+        vp3_license_id,
+        vp3_lease_id,
+        vp3_lease_expires_at_utc,
+        last_vp3_heartbeat_at_utc,
+        last_error_code,
+    ) = legacy_vp3.unwrap_or((None, None, None, None, None, None));
 
     Ok(SoftwareAuthoritySnapshot {
         current_authority: provider_key.clone(),
